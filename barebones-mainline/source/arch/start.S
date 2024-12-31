@@ -9,7 +9,7 @@ kernel_start:
         movl    $stack_top,     %esp
 
         ## [+] load gdt
-        call    gdt_init
+        call    init_gdt
         ## [-] load gdt
 
         ## [+] enable protected mode
@@ -31,6 +31,11 @@ kernel_start32:
         movw    %ax,            %ss
 
         movl    $stack_top,     %esp
+        call    init_idt
+        call    init_8259a
+
         call    kernel_main
+1:
+        jmp     1b
         hlt
 

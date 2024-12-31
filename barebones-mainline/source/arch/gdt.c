@@ -30,7 +30,7 @@ uint64_t get_gsel(uint64_t* ptr_gdesc, uint8_t rpl)
     return ((ptr_gdesc - gdt) | rpl); 
 }
 
-void gdt_init(void)
+void init_gdt(void)
 {
     gdt[0] = gen_gdesc(0,       0,            0);
     gdt[1] = gen_gdesc(0, 0xFFFFF, GDT_CODE_PL0);
