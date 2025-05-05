@@ -54,12 +54,28 @@ clean() {
     rm -rf build* binutils* gdb* gcc*
 }
 
+add_env() {
+    echo "Add the tool path to system..."
+
+    export TOOL_PATH=/home/$USER/i686-tools/bin
+    if [ ! -d "$TOOL_PATH" ]; then \
+	echo $TOOL_PATH not exists
+        exit 1;
+    fi
+
+    if ! grep -q "export PATH=\$PATH:$TOOL_PATH" ~/.bashrc; then \
+        echo "export PATH=\$PATH:$TOOL_PATH" >> ~/.bashrc; \
+    fi
+    source ~/.bashrc
+}
+
 main() {
     initialize_env
     install_prebuilt_packages
-    decompress_tool_packages
+    ecompress_tool_packages
     build_tool_packages
     clean
+    add_env
 }
 
 main
