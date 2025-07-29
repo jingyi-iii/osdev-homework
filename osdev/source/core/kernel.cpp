@@ -26,7 +26,7 @@ void timer_handler(void)
 
 extern "C" {
 
-void set_irq_handler(uint16_t irq, void (*handler)());
+void set_interrupt_handler(uint16_t irq, void (*handler)());
 void enable_8259a_master(uint16_t irq);
 
 void kernel_main(void) 
@@ -36,7 +36,7 @@ void kernel_main(void)
 	for (int i = 0; i < 100; i++)
 		terminal.Write("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
 
-    set_irq_handler(0x20, timer_handler);
+    set_interrupt_handler(0x20, timer_handler);
     enable_8259a_master(0x20);
 }
 }

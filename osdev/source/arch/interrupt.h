@@ -10,6 +10,10 @@
 #define	INT_VECTOR_IRQ0         (0x20)
 #define	INT_VECTOR_IRQ8         (0x28)
 
+#define IDT_ENTRIES             (256)
+#define NUM_EXCEPTIONS          (32)
+#define NUM_INTERRUPTS          (16)
+
 typedef struct {
     uint16_t isr_low;
     uint16_t sel_code;
@@ -23,11 +27,14 @@ typedef struct {
     uint32_t base;
 } __attribute__((packed)) idtmeta_t;
 
+// from asm
+void sys_isr_tbl(void);
+
 void init_8259a(void);
 void enable_8259a_master(uint16_t irq);
 void disable_8259a_master(uint16_t irq);
 void enable_8259a_slave(uint16_t irq);
 void disable_8259a_slave(uint16_t irq);
-void set_irq_handler(uint16_t irq, void (*handler)());
+void set_interrupt_handler(uint16_t irq, void (*handler)());
 #endif
 

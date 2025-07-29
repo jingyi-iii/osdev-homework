@@ -1,14 +1,19 @@
 #include "interrupt.h"
 #include "gdt.h"
 
-#define IDT_ENTRIES (256)
-
-// from asm
-void isr_table(void);
-
 static __attribute__((aligned(sizeof(idesc_t)))) idesc_t idt[IDT_ENTRIES] = { 0 };
-void (*isr_handlers[IDT_ENTRIES])(void);
-idtmeta_t idtmeta = { 0 };
+void (*user_isrs[IDT_ENTRIES])(void);
+static idtmeta_t idtmeta = { 0 };
+
+static void cli(void) { __asm__ volatile ("cli"); }
+static void sti(void) { __asm__ volatile ("sti"); }
+static void default_handler(void) { for (;;) __asm__ volatile ("hlt"); }
+
+static inline void out_byte(uint16_t port, uint8_t val)
+{
+    __asm__ __volatile__("outb %b0, %w1" : : "a"(val), "Nd"(port) : "memory");
+}
+
 
 idesc_t gen_idesc(uint32_t isr, uint16_t sel_code, uint8_t flags)
 {
@@ -21,11 +26,6 @@ idesc_t gen_idesc(uint32_t isr, uint16_t sel_code, uint8_t flags)
     desc.reserved = 0;
 
     return desc;
-}
-
-static inline void out_byte(uint16_t port, uint8_t val)
-{
-    __asm__ __volatile__("outb %b0, %w1" : : "a"(val), "Nd"(port) : "memory");
 }
 
 void init_8259a(void)
@@ -41,7 +41,6 @@ void init_8259a(void)
     out_byte(INT_MASTER_DATA, 0xff);
     out_byte(INT_SLAVE_DATA,  0xff);
 }
-
 
 void enable_8259a_master(uint16_t irq)
 {
@@ -67,7 +66,7 @@ void disable_8259a_master(uint16_t irq)
 {
     unsigned char mask = 0;
 
-    if (irq < INT_VECTOR_IRQ0 || irq > (INT_VECTOR_IRQ0 + 8))
+    if (irq < INT_VECTOR_IRQ0 || irq >= (INT_VECTOR_IRQ0 + 8))
         return;
 
     mask = (unsigned char)(1 << (irq - INT_VECTOR_IRQ0));
@@ -87,7 +86,7 @@ void enable_8259a_slave(uint16_t irq)
 {
     unsigned char mask = 0;
 
-    if (irq < INT_VECTOR_IRQ8 || irq > (INT_VECTOR_IRQ8 + 8))
+    if (irq < INT_VECTOR_IRQ8 || irq >= (INT_VECTOR_IRQ8 + 8))
         return;
 
     mask = ~((unsigned char)(1 << (irq - INT_VECTOR_IRQ8)));
@@ -123,34 +122,30 @@ void disable_8259a_slave(uint16_t irq)
     );
 }
 
-void default_handler(void)
-{
-    
-}
-
-void set_irq_handler(uint16_t irq, void (*handler)())
+void set_interrupt_handler(uint16_t irq, void (*handler)())
 {
     if (irq >= IDT_ENTRIES)
         return; 
 
-    isr_handlers[irq] = handler ? handler : default_handler;
+    user_isrs[irq] = handler ? handler : default_handler;
 }
 
 void init_idt(void)
 {
     int i = 0;
 
+    cli();
     for (i = 0; i < IDT_ENTRIES; i++) {
         idt[i] = gen_idesc((uint32_t)default_handler, SEL_KERNEL_CS, 0x8e);
     }
-    for (i = 0; i < 48; i++) {
-        idt[i] = gen_idesc((uint32_t)isr_table + 32 * i, SEL_KERNEL_CS, 0x8e);
+    for (i = 0; i < NUM_EXCEPTIONS + NUM_INTERRUPTS; i++) {
+        idt[i] = gen_idesc((uint32_t)sys_isr_tbl + 64 * i, SEL_KERNEL_CS, 0x8e);
     }
 
     idtmeta.limit = sizeof(idesc_t) * IDT_ENTRIES - 1;
     idtmeta.base = (uint32_t)idt;
 
     __asm__ volatile("lidt %0" : : "m" (idtmeta));
-    __asm__ volatile("sti":::);
+    sti();
 }
 
