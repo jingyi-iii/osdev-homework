@@ -1,11 +1,11 @@
-.global         knl_entry
+.global         arch_start
 
 .section        .bss
-.skip   16384
+.skip           16384
 stack_top:
 
 .section        .text
-knl_entry:
+arch_start:
         movl    $stack_top,     %esp
 
         ## [+] load gdt
@@ -33,8 +33,9 @@ knl32_entry:
         movl    $stack_top,     %esp
         call    init_idt
         call    init_8259a
+        call    init_serial
 
-        call    kernel_main
+        call    kernel_start
 1:
         jmp     1b
         hlt

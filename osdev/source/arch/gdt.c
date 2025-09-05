@@ -47,12 +47,12 @@ void init_gdt(void)
 
     __asm__ volatile ("lgdt %0" : : "m" (gdtmeta));
     __asm__ volatile (
-        "mov %0, %%ds\n"
-        "mov %0, %%es\n"
-        "mov %0, %%fs\n"
-        "mov %0, %%gs\n"
-        "mov %0, %%ss\n"
-        "ljmp %1, $1f\n"
+        "movl   %0,     %%ds\n"
+        "movl   %0,     %%es\n"
+        "movl   %0,     %%fs\n"
+        "movl   %0,     %%gs\n"
+        "movl   %0,     %%ss\n"
+        "ljmp   %1,     $1f\n"
         "1:"
         : : "r" (SEL_KERNEL_DS), "i" (SEL_KERNEL_CS)
     );

@@ -59,7 +59,7 @@ env:
 	(cd tools && ./setupenv.sh)
 
 run: $(TARGET_ISO)
-	qemu-system-i386 -cdrom $(TARGET_ISO) 
+	qemu-system-i386 -cdrom $(TARGET_ISO) -serial file:serial.log
 
 clean:
 	@rm -rf $(OUT_DIR) 

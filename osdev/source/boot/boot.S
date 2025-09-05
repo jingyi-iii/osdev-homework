@@ -15,7 +15,7 @@
 .type _start,   @function
 _start:
         cli
-        jmp     knl_entry
+        jmp     arch_start
 1:
         hlt
         jmp     1b

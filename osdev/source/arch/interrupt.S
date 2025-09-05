@@ -26,7 +26,6 @@
         call    esr
         RESTORE_REGS
         iret
-.align  64,     0x90
 .endm
 
 .macro DECLARE_INTERRUPT irq_no
@@ -36,7 +35,6 @@
         call    isr
         RESTORE_REGS
         iret
-.align  64,     0x90
 .endm
 
 .code32
