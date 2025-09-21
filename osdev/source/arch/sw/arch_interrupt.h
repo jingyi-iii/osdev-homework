@@ -1,5 +1,5 @@
-#ifndef INTERRUPT_H
-#define INTERRUPT_H
+#ifndef ARCH_INTERRUPT_H
+#define ARCH_INTERRUPT_H
 
 #include <stdint.h>
 
@@ -37,11 +37,11 @@ typedef struct {
 // from asm
 void sys_isr_tbl(void);
 
-void init_8259a(void);
-void enable_8259a_master(uint16_t irq_no);
-void disable_8259a_master(uint16_t irq_no);
-void enable_8259a_slave(uint16_t irq_no);
-void disable_8259a_slave(uint16_t irq_no);
-void set_isr(uint16_t irq_no, void (*handler)());
+void arch_init_8259a(void);
+void arch_enable_8259a_master(uint16_t irq_no);
+void arch_disable_8259a_master(uint16_t irq_no);
+void arch_enable_8259a_slave(uint16_t irq_no);
+void arch_disable_8259a_slave(uint16_t irq_no);
+void arch_set_isr(uint16_t irq_no, void (*handler)());
 #endif
 

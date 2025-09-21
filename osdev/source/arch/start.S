@@ -4,26 +4,36 @@
 .skip           16384
 stack_top:
 
+.equ            SYS_CODE,       1
+.equ            SYS_DATA,       2
+.equ            USER_CODE,      3
+.equ            USER_DATA,      4
+
 .section        .text
 arch_start:
         movl    $stack_top,     %esp
+        call    arch_switch_pm
 
-        ## [+] load gdt
-        call    init_gdt
-        ## [-] load gdt
+        # get syscode selector
+        movl    $SYS_CODE,      %eax
+        pushl   %eax
+        call    arch_get_selector
+        addl    $4,             %esp
 
-        ## [+] enable protected mode
-        movl    %cr0,           %eax
-        orl     $0x1,           %eax
-        movl    %eax,           %cr0
-        ## [-] enable protected mode
-
-        ljmp    $8,             $knl32_entry
+        # jump to code32
+        pushl   %eax
+        pushl   $knl32_entry
+        ljmp    *(%esp)
+        addl    $8,             %esp
         hlt
 
 .section        .text
 knl32_entry:
-        movw    $16,            %ax
+        movl    $SYS_DATA,      %eax
+        pushl   %eax
+        call    arch_get_selector
+        addl    $4,             %esp
+
         movw    %ax,            %ds
         movw    %ax,            %es
         movw    %ax,            %fs
@@ -31,9 +41,9 @@ knl32_entry:
         movw    %ax,            %ss
 
         movl    $stack_top,     %esp
-        call    init_idt
-        call    init_8259a
-        call    init_serial
+        call    arch_init_idt
+        call    arch_init_8259a
+        call    arch_init_serial
 
         call    kernel_start
 1:

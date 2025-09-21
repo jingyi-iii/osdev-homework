@@ -25,10 +25,10 @@ CXX        := $(ARCH)g++
 AS         := $(ARCH)as
 
 DEPFLAGS   := -MMD -MP
-CFLAGS     := -std=gnu99 -ffreestanding -O2 -Wall -Wextra $(INC_DIRS) $(DEPFLAGS)
-CXXFLAGS   := -ffreestanding -O2 -Wall -Wextra -fno-exceptions -fno-rtti $(INC_DIRS) $(DEPFLAGS)
+CFLAGS     := -std=gnu99 -ffreestanding -O2 -g -Wall -Wextra $(INC_DIRS) $(DEPFLAGS)
+CXXFLAGS   := -ffreestanding -O2 -Wall -Wextra -g -fno-exceptions -fno-rtti $(INC_DIRS) $(DEPFLAGS)
 ASFLAGS    :=
-LDFLAGS    := -ffreestanding -O2 -nostdlib
+LDFLAGS    := -ffreestanding -O2 -g -nostdlib
 
 $(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) | $(OUT_DIR) $(GRUB_DIR)
 	cp $(TARGET_BIN) $(OUT_DIR)iso/boot/myos.bin
@@ -60,6 +60,9 @@ env:
 
 run: $(TARGET_ISO)
 	qemu-system-i386 -cdrom $(TARGET_ISO) -serial file:serial.log
+
+run_debug: $(TARGET_BIN)
+	qemu-system-i386 -s -S -kernel $(TARGET_BIN) -serial file:serial.log
 
 clean:
 	@rm -rf $(OUT_DIR) 

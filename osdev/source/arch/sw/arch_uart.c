@@ -46,7 +46,7 @@ void write_serial_string(const char* ptr_str)
     }
 }
 
-int init_serial(void) {
+int arch_init_serial(void) {
     outb(PORT + 1, 0x00);    // Disable all interrupts
     outb(PORT + 3, 0x80);    // Enable DLAB (set baud rate divisor)
     outb(PORT + 0, 0x03);    // Set divisor to 3 (lo byte) 38400 baud

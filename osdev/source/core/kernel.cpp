@@ -26,18 +26,19 @@ void timer_handler(void)
 
 extern "C" {
 
-void set_isr(uint16_t irq, void (*handler)());
-void enable_8259a_master(uint16_t irq);
+void arch_set_isr(uint16_t irq, void (*handler)());
+void arch_enable_8259a_master(uint16_t irq);
+void arch_disable_8259a_master(uint16_t irq_no);
 
-void kernel_start(void)
+void kernel_start(void) 
 {
 	Terminal terminal;
 	terminal.Flush();
 	for (int i = 0; i < 100; i++)
 		terminal.Write("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
 
-    set_isr(0x20, timer_handler);
-    enable_8259a_master(0x20);
+    arch_set_isr(0x20, timer_handler);
+    arch_enable_8259a_master(0x20);
 }
 }
 
