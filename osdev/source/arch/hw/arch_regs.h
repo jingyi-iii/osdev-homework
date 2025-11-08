@@ -50,6 +50,10 @@
                      SEG_LONG(0)     | SEG_SIZE(1) | SEG_GRAN(1) | \
                      SEG_PRIV(3)     | SEG_DATA_RDWR
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void arch_reload_gdt(void* pgdtmeta);
 void arch_reload_idt(void* pidtmeta);
 void arch_set_cr0(uint8_t pos);
@@ -58,4 +62,8 @@ void arch_cli(void);
 void arch_sti(void);
 void outb(uint16_t port, uint8_t val);
 uint8_t inb(uint16_t port);
+
+#ifdef __cplusplus
+}
+#endif
 #endif

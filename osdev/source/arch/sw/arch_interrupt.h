@@ -34,6 +34,10 @@ typedef struct {
 } __attribute__((packed)) idtmeta_t;
 
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // from asm
 void sys_isr_tbl(void);
 
@@ -43,5 +47,9 @@ void arch_disable_8259a_master(uint16_t irq_no);
 void arch_enable_8259a_slave(uint16_t irq_no);
 void arch_disable_8259a_slave(uint16_t irq_no);
 void arch_set_isr(uint16_t irq_no, void (*handler)());
+
+#ifdef __cplusplus
+}
+#endif
 #endif
 

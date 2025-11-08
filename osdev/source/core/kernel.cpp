@@ -1,4 +1,5 @@
 #include "terminal.h"
+#include "keyboard.h"
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -39,6 +40,8 @@ void kernel_start(void)
 
     arch_set_isr(0x20, timer_handler);
     arch_enable_8259a_master(0x20);
+
+    NSKeyBoard::KeyBoardListener::GetInstance().Start();
 }
 }
 
