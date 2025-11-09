@@ -6,7 +6,7 @@
 unsigned int keymap[NR_SCAN_CODES * MAP_COLS] = {
 /* scan-code			!Shift		Shift		E0 XX	*/
 /* ==================================================================== */
-/* 0x00 - none		*/	0,		0,		0,
+/* 0x00 - none		*/	0,		    0,		    0,
 /* 0x01 - ESC		*/	ESC,		ESC,		0,
 /* 0x02 - '1'		*/	'1',		'!',		0,
 /* 0x03 - '2'		*/	'2',		'@',		0,
@@ -148,9 +148,9 @@ void keyboard_handler(void)
 }
 
 namespace NSKeyBoard {
-void KeyBoardListener::OnReceive(uint8_t chr)
+void KeyBoardListener::OnReceive(uint8_t code)
 {
-    auto key = mDecoder.Parse(chr);
+    auto key = mDecoder.Parse(code);
     if (key)
         mKbuf.Add(key);
 }
@@ -175,6 +175,110 @@ uint8_t KeyBoardListener::GetOneKey(void)
         return 0;
         
     return mKbuf.Pop();
+}
+
+uint8_t KDecoder::Parse(uint8_t code)
+{
+    static bool lshift = false;
+    static bool rshift = false;
+    static bool isCapsLocked = false;
+    bool isPressed = false;
+    uint8_t key = 0;
+    switch (code) {
+    case 0xe1:
+        break;
+    case 0xe0:
+        break;
+    default:
+        break;
+    }    
+    
+    isPressed = (code & FLAG_BREAK ? 0 : 1);
+    if (lshift || rshift) {
+        if (!isCapsLocked)
+            key = keymap[(code & 0x7f) * MAP_COLS + 1];
+        else
+            key = keymap[(code & 0x7f) * MAP_COLS];
+    } else {
+        if (!isCapsLocked)
+            key = keymap[(code & 0x7f) * MAP_COLS];
+        else
+            key = keymap[(code & 0x7f) * MAP_COLS + 1];
+    }
+    
+    switch (key) {
+    case SHIFT_L:
+        lshift = isPressed;
+        key = 0;
+        break;
+    case SHIFT_R:
+        rshift = isPressed;
+        key = 0;
+        break;
+    case CAPS_LOCK:
+        if (!isPressed)
+            return 0;
+        isCapsLocked = !isCapsLocked;
+        key = 0;
+        break;
+    default:
+        if (!isPressed)
+            key = 0;
+        break;
+    }
+    
+    return key;
+}
+
+
+void KBuf::Reset(void)
+{
+    this->memset(mBuffer, 0, sizeof(mBuffer));
+    mpHead = mBuffer;
+    mpTail = mBuffer;
+    mCount = 0;
+}
+
+void KBuf::Add(char chr)
+{
+    if (mCount >= MAX_KB_SIZE) {
+        return;
+    }
+    *mpHead = chr;
+    mpHead += 1;
+    mCount += 1;
+    if (mpHead >= mBuffer + MAX_KB_SIZE) {
+        mpHead = mBuffer;
+    }
+}
+
+char KBuf::Pop(void)
+{
+    if (!mCount)
+        return 0;
+    
+    char key = *mpTail;
+    mpTail += 1;
+    mCount -= 1;
+    if (mpTail >= mBuffer + MAX_KB_SIZE) {
+        mpTail = mBuffer;
+    }
+    return key;
+}
+
+bool KBuf::IsEmpty() const
+{
+    return mCount == 0;
+}
+
+bool KBuf::IsFull() const
+{
+    return mCount >= MAX_KB_SIZE;
+}
+
+uint32_t KBuf::GetCount() const
+{
+    return mCount;
 }
 }
 

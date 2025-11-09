@@ -9,7 +9,7 @@
 #define NR_SCAN_CODES   0x80                    /* Number of scan codes (rows in keymap) */
 
 #define FLAG_BREAK      0x0080	                /* Break Code                   */
-#define FLAG_EXT        0	                /* Normal function keys         */
+#define FLAG_EXT        0	                    /* Normal function keys         */
 #define FLAG_SHIFT_L    0x0200	                /* Shift key                    */
 #define FLAG_SHIFT_R    0x0400	                /* Shift key                    */
 #define FLAG_CTRL_L     0x0800	                /* Control key                  */
@@ -107,6 +107,43 @@
 extern unsigned int keymap[NR_SCAN_CODES * MAP_COLS];
 
 namespace NSKeyBoard {
+class KDecoder {
+public:
+    uint8_t Parse(uint8_t code);
+};
+
+class KBuf {
+private:
+    char *mpHead;
+    char *mpTail;
+    char mBuffer[MAX_KB_SIZE];
+    uint32_t mCount;
+
+    inline void memcpy(void *dest, const void *src, uint32_t size)
+    {
+        uint32_t i = 0;
+
+        for (i = 0; i < size; i++)
+            *((uint8_t *)dest + i) = *((uint8_t *)src + i);
+    }
+
+    inline void memset(void *dest, uint8_t data, uint32_t size)
+    {
+        uint32_t i = 0;
+
+        for (i = 0; i < size; i++)
+            *((uint8_t *)dest + i) = data;
+    }
+
+public:
+    void Reset(void);
+    void Add(char chr);
+    char Pop(void);
+    bool IsEmpty(void) const;
+    bool IsFull(void) const;
+    uint32_t GetCount(void) const;
+};
+
 class KeyBoardListener
 {
 public:
@@ -123,130 +160,10 @@ public:
     ~KeyBoardListener(void) = default;
 
 private:
-    class Decoder {
-    public:
-        Decoder(void) = default;
-        ~Decoder(void) = default;
-
-        char Parse(char key)
-        {
-            static bool lshift = false;
-            static bool rshift = false;
-            bool isPressed = false;
-
-            switch (key) {
-            case 0xe1:
-                break;
-            case 0xe0:
-                break;
-            default:
-                break;
-            }    
-            
-            isPressed = (key & FLAG_BREAK ? 0 : 1);
-            if (lshift || rshift) {
-                key = keymap[(key & 0x7f) * MAP_COLS + 1];
-            } else {
-                key = keymap[(key & 0x7f) * MAP_COLS];
-            }
-            
-            switch (key) {
-            case SHIFT_L:
-                lshift = isPressed;
-                key = 0;
-                break;
-            case SHIFT_R:
-                rshift = isPressed;
-                key = 0;
-                break;
-            default:
-                if (!isPressed)
-                    key = 0;
-                break;
-            }
-            
-            return key;
-        }
-    };
-
-    struct Buffer {
-        char *mpHead;
-        char *mpTail;
-        char mBuffer[MAX_KB_SIZE];
-        uint32_t mCount;
-
-        inline void memcpy(void *dest, const void *src, uint32_t size)
-        {
-            uint32_t i = 0;
-    
-            for (i = 0; i < size; i++)
-                *((uint8_t *)dest + i) = *((uint8_t *)src + i);
-        }
-
-        inline void memset(void *dest, uint8_t data, uint32_t size)
-        {
-            uint32_t i = 0;
-    
-            for (i = 0; i < size; i++)
-                *((uint8_t *)dest + i) = data;
-        }
-
-        void Reset(void)
-        {
-            this->memset(mBuffer, 0, sizeof(mBuffer));
-            mpHead = mBuffer;
-            mpTail = mBuffer;
-            mCount = 0;
-        }
-
-        void Add(char chr)
-        {
-            if (mCount >= MAX_KB_SIZE) {
-                return;
-            }
-
-            *mpHead = chr;
-            mpHead += 1;
-            mCount += 1;
-            if (mpHead >= mBuffer + MAX_KB_SIZE) {
-                mpHead = mBuffer;
-            }
-        }
-
-        char Pop(void)
-        {
-            if (!mCount)
-                return 0;
-            
-            char key = *mpTail;
-            mpTail += 1;
-            mCount -= 1;
-            if (mpTail >= mBuffer + MAX_KB_SIZE) {
-                mpTail = mBuffer;
-            }
-            return key;
-        }
-
-        bool IsEmpty() const
-        {
-            return mCount == 0;
-        }
-
-        bool IsFull() const
-        {
-            return mCount >= MAX_KB_SIZE;
-        }
-
-        uint32_t GetCount() const
-        {
-            return mCount;
-        }
-    };
-
     KeyBoardListener(void) = default;
 
-    Decoder mDecoder;
-    Buffer mKbuf;
+    KDecoder mDecoder;
+    KBuf mKbuf;
 };
 }
 
