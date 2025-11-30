@@ -1,39 +1,48 @@
 .globl  sys_isr_tbl
 
-.macro SAVE_REGS
-    pushal
-    pushl       %ds
-    pushl       %es
-    pushl       %fs
-    pushl       %gs
-    mov         $0x10,          %ax
-    mov         %ax,            %ds
-    mov         %ax,            %es
+.macro SAVE_REGS_ADD_SWITCH_KERNEL_STACK
+        pushal
+        pushl   %ds
+        pushl   %es
+        pushl   %fs
+        pushl   %gs
+
+        mov     $0x10,          %ax
+        mov     %ax,            %ds
+        mov     %ax,            %es
+        movl    $stack_top,     %esp
 .endm
 
-.macro RESTORE_REGS
-    popl        %gs
-    popl        %fs
-    popl        %es
-    popl        %ds
-    popal
+.macro RESTORE_REGS_AND_SWITCH_USER_STACK
+        movl    proc_run,       %esp
+        popl    %gs
+        popl    %fs
+        popl    %es
+        popl    %ds
+        popal
 .endm
 
 .macro DECLARE_EXCEPTION irq_no
 .align  64,     0x90
-        SAVE_REGS
+        SAVE_REGS_ADD_SWITCH_KERNEL_STACK
         movl    \irq_no,        %esi
         call    esr
-        RESTORE_REGS
+        RESTORE_REGS_AND_SWITCH_USER_STACK
         iret
 .endm
 
 .macro DECLARE_INTERRUPT irq_no
 .align  64,     0x90
-        SAVE_REGS
+        SAVE_REGS_ADD_SWITCH_KERNEL_STACK
+        movl    \irq_no,        %eax
+        call    mask_int
+
         movl    \irq_no,        %esi
         call    isr
-        RESTORE_REGS
+        
+        movl    \irq_no,        %eax
+        call    unmask_int  
+        RESTORE_REGS_AND_SWITCH_USER_STACK
         iret
 .endm
 
@@ -123,5 +132,88 @@ isr:
         outb    %al,            $0x20
         ## [-] eof signal to master
 
+        ret
+
+#
+# Diable hardware interrupt based on irq number
+#
+# Input  : eax, irq number (32~48)
+# Output : None
+#
+.align  32
+mask_int:
+        pushl   %eax
+        pushl   %ebx
+        pushl   %ecx
+        pushl   %edx
+
+        movl    %eax,           %edx
+        cmpl    $40,            %eax
+        jnb     2f
+1:
+        in      $0x21,          %al     # ignore current interrupt (master)
+        movb    %dl,            %cl
+        subb    $32,            %cl
+        movb    $1,             %bl
+        shl     %cl,            %bl
+        or      %bl,            %al
+        out     %al,            $0x21
+        jmp     3f
+2:
+        in      $0xa1,          %al     # ignore current interrupt (slave)
+        movb    %dl,            %cl
+        subb    $40,            %cl
+        movb    $1,             %bl
+        shl     %cl,            %bl
+        orb     %bl,            %al
+        out     %al,            $0xa1
+3:
+        popl    %edx
+        popl    %ecx
+        popl    %ebx
+        popl    %eax
+        ret
+
+#
+# Enable hardware interrupt based on irq number
+#
+# Input  : eax, irq number (32~48)
+# Output : None
+#
+.align  32
+unmask_int:
+        pushl   %eax
+        pushl   %ebx
+        pushl   %ecx
+        pushl   %edx
+
+        movl    %eax,           %edx
+        cmpl    $40,            %eax
+        jnb     2f
+1:                                      # master
+        in      $0x21,          %al
+        movb    %dl,            %cl
+        subb    $32,            %cl
+        movb    $1,             %bl
+        shl     %cl,            %bl
+        not     %bl
+        and     %bl,            %al
+        out     %al,            $0x21
+        jmp     3f
+
+2:                                      # slave
+        in      $0xa1,          %al
+        movb    %dl,            %cl
+        sub     $40,            %cl
+        movb    $1,             %bl
+        shl     %cl,            %bl
+        not     %bl
+        and     %bl,            %al
+        out     %al,            $0xa1
+3:
+        popl    %edx
+        popl    %ecx
+        popl    %ebx
+        popl    %eax
         ret
 

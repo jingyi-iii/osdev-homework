@@ -11,6 +11,13 @@ SECTIONS
 		*(.text)
 	}
 
+	.initcall :
+	{
+        __start_initcall = .;
+        *(.initcall)
+        __stop_initcall = .;
+    }
+
 	/* Read-only data. */
 	.rodata BLOCK(4K) : ALIGN(4K)
 	{

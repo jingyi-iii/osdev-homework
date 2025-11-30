@@ -1,4 +1,5 @@
 .global         arch_start
+.global         stack_top
 
 .section        .bss
 .skip           16384
@@ -46,7 +47,16 @@ knl32_entry:
         call    arch_init_serial
 
         call    kernel_start
-1:
-        jmp     1b
+
+        movl    proc_run,       %esp
+        popl    %gs
+        popl    %fs
+        popl    %es
+        popl    %ds
+        popa
+        
+        # here is eip
+        iret
+
         hlt
 

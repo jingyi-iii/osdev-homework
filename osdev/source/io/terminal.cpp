@@ -1,3 +1,4 @@
+#include "module.h"
 #include "terminal.h"
 
 void Terminal::Flush(void)

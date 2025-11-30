@@ -56,6 +56,8 @@ extern "C" {
 
 void arch_reload_gdt(void* pgdtmeta);
 void arch_reload_idt(void* pidtmeta);
+void arch_reload_tss(uint16_t tss_sel);
+void arch_reload_ldt(uint16_t ldt_sel);
 void arch_set_cr0(uint8_t pos);
 void arch_clr_cr0(uint8_t pos);
 void arch_cli(void);

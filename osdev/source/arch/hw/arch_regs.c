@@ -26,6 +26,21 @@ void arch_reload_idt(void* pidtmeta)
     );
 }
 
+void arch_reload_tss(uint16_t tss_sel)
+{
+    __asm__ __volatile__("ltr %0 \n\t" ::"a"(tss_sel): );
+}
+
+void arch_reload_ldt(uint16_t ldt_sel)
+{
+    __asm__ __volatile__(
+        "lldt %0                        \n\t"
+        : 
+        : "m" (ldt_sel)
+        : "memory"
+    );
+}
+
 void arch_set_cr0(uint8_t pos)
 {
     if (pos > 31)

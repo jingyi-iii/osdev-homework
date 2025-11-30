@@ -1,6 +1,7 @@
 #include "arch_interrupt.h"
 #include "arch_regs.h"
 #include "arch_uart.h"
+#include "module.h"
 #include "keyboard.h"
 
 unsigned int keymap[NR_SCAN_CODES * MAP_COLS] = {
@@ -145,6 +146,13 @@ void keyboard_handler(void)
     if (key)
         write_serial(key);
 }
+
+static void keyboard_init(void)
+{
+    NSKeyBoard::KeyBoardListener::GetInstance().Start();
+}
+
+module_init(keyboard_init);
 }
 
 namespace NSKeyBoard {
