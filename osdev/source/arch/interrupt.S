@@ -1,11 +1,70 @@
 .globl  sys_isr_tbl
 
+.macro SAVE_REGS_ADD_SWITCH_KERNEL_STACK2
+        pushal
+        pushl   %ds
+        pushl   %es
+        pushl   %fs
+        pushl   %gs
+
+        call    get_temp
+
+test4:
+
+        movl    %esp,           %esi
+        movl    %eax,           %edi
+        movl    $17,            %ecx
+        cld
+        rep     movsl
+
+        mov     $0x10,          %ax
+        mov     %ax,            %ds
+        mov     %ax,            %es
+        movl    $stack_top,     %esp
+.endm
+
+.macro RESTORE_REGS_AND_SWITCH_USER_STACK2
+
+        call    get_temp
+test5:
+        # movl    %eax,          %esp
+
+        movl    proc_run,       %eax
+        addl    stack_offset,   %eax
+        movl    (%eax),         %edi
+        subl    $68,            %edi
+        movl    proc_run,       %esi
+        movl    $17,            %ecx
+        cld
+        rep     movsl
+
+        call    get_temp
+        addl    stack_offset,   %eax
+        movl    (%eax),         %edi
+        subl    $68,            %edi
+        movl    %edi,           %esp
+
+        popl    %gs
+        popl    %fs
+        popl    %es
+        popl    %ds
+        popal
+.endm
+
 .macro SAVE_REGS_ADD_SWITCH_KERNEL_STACK
         pushal
         pushl   %ds
         pushl   %es
         pushl   %fs
         pushl   %gs
+
+        call    get_temp
+
+        movl    %esp,           %esi
+        movl    %eax,           %edi
+        movl    $17,            %ecx
+        cld
+        rep     movsl
 
         mov     $0x10,          %ax
         mov     %ax,            %ds
@@ -14,7 +73,10 @@
 .endm
 
 .macro RESTORE_REGS_AND_SWITCH_USER_STACK
-        movl    proc_run,       %esp
+        call    get_temp
+
+        movl    %eax,          %esp
+
         popl    %gs
         popl    %fs
         popl    %es
@@ -43,6 +105,21 @@
         movl    \irq_no,        %eax
         call    unmask_int  
         RESTORE_REGS_AND_SWITCH_USER_STACK
+        iret
+.endm
+
+.macro DECLARE_INTERRUPT2 irq_no
+.align  64,     0x90
+        SAVE_REGS_ADD_SWITCH_KERNEL_STACK2
+        movl    \irq_no,        %eax
+        call    mask_int
+
+        movl    \irq_no,        %esi
+        call    isr
+        
+        movl    \irq_no,        %eax
+        call    unmask_int  
+        RESTORE_REGS_AND_SWITCH_USER_STACK2
         iret
 .endm
 
@@ -82,7 +159,7 @@ sys_isr_tbl:
         DECLARE_EXCEPTION       $0x1d
         DECLARE_EXCEPTION       $0x1e
         DECLARE_EXCEPTION       $0x1f
-        DECLARE_INTERRUPT       $0x20
+        DECLARE_INTERRUPT2       $0x20
         DECLARE_INTERRUPT       $0x21
         DECLARE_INTERRUPT       $0x22
         DECLARE_INTERRUPT       $0x23

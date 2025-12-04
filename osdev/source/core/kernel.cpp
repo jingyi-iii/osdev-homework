@@ -75,8 +75,8 @@ void kernel_start(void)
 
     kernel_do_initcalls();
 
-    create_proc(3, timer_handler);
-    create_proc(1, timer_handler2);
+    create_proc(0, timer_handler);
+    create_proc(3, timer_handler2);
 }
 }
 

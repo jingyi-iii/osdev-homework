@@ -12,6 +12,22 @@ static volatile process_t proc_tbl[MAX_PROCESS] = {0};
 static volatile uint8_t avail_proc_nr = 0;
 volatile process_t *proc_run = 0;
 
+#define MEMBER_OFFSET_OF(t, m) ((long)&(((t *)0)->m))
+const uint32_t stack_offset = MEMBER_OFFSET_OF(process_t, stack);
+
+volatile process_t proc_run2 = {0};
+volatile regs_t regs = {0};
+
+void* get_temp(void)
+{
+    if (!proc_run)
+        return &regs;
+    else
+        return proc_run;
+
+    //return &regs;
+}
+
 // TSS is only used to provide ss0 and esp0 when entering ring0
 static int tss_init(void)
 {
@@ -85,7 +101,7 @@ int32_t create_proc(uint8_t ring, proc_entry_t entry)
     if (!proc_run) {    // the first process
         proc_run = proc;
         proc_run->next = proc_run;
-        tss.esp0 = (uint32_t)&proc_run->regs + sizeof(regs_t);
+        // tss.esp0 = (uint32_t)&proc_run->regs + sizeof(regs_t);
         ldt_reload();
     } else {
         prev = proc_tbl;
@@ -115,7 +131,7 @@ static void schedule(void)
     timeslice = 0;
 
     proc_run = proc_run->next;
-    tss.esp0 = (uint32_t)&proc_run->regs + sizeof(regs_t);
+    // tss.esp0 = (uint32_t)&proc_run->regs + sizeof(regs_t);
     ldt_reload();
 
     spinlock_unlock(&lock);

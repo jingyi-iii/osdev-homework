@@ -48,7 +48,25 @@ knl32_entry:
 
         call    kernel_start
 
-        movl    proc_run,       %esp
+        movl    proc_run,       %eax
+        addl    stack_offset,   %eax
+        movl    (%eax),         %edi
+        subl    $68,            %edi
+
+        movl    proc_run,       %esi
+        movl    $17,            %ecx
+        cld
+        rep     movsl
+
+test3:
+        movl    proc_run,       %eax
+        addl    stack_offset,   %eax
+        movl    (%eax),         %edi
+        subl    $68,            %edi
+        movl    %edi,           %esp
+
+        #movl    proc_run,       %esp
+
         popl    %gs
         popl    %fs
         popl    %es
