@@ -11,22 +11,7 @@ static volatile tss_t tss = {0};
 static volatile process_t proc_tbl[MAX_PROCESS] = {0};
 static volatile uint8_t avail_proc_nr = 0;
 volatile process_t *proc_run = 0;
-
-#define MEMBER_OFFSET_OF(t, m) ((long)&(((t *)0)->m))
-const uint32_t stack_offset = MEMBER_OFFSET_OF(process_t, stack);
-
-volatile process_t proc_run2 = {0};
-volatile regs_t regs = {0};
-
-void* get_temp(void)
-{
-    if (!proc_run)
-        return &regs;
-    else
-        return proc_run;
-
-    //return &regs;
-}
+volatile regs_t save_regs = {0};
 
 // TSS is only used to provide ss0 and esp0 when entering ring0
 static int tss_init(void)
@@ -87,15 +72,17 @@ int32_t create_proc(uint8_t ring, proc_entry_t entry)
     *((uint32_t *)proc->ldts + 3) = 0x00cf9200 | (ring << 13);
 
     proc->stack = kmalloc(0x1000);    // 4KB stack
-    proc->regs.cs = 0x0 | 0x4 | ring;
-    proc->regs.gs = 0x8 | 0x4 | ring;
-    proc->regs.fs = 0x8 | 0x4 | ring;
-    proc->regs.es = 0x8 | 0x4 | ring;
-    proc->regs.ds = 0x8 | 0x4 | ring;
-    proc->regs.ss = 0x8 | 0x4 | ring;
-    proc->regs.eip = (uint32_t)entry;
-    proc->regs.esp = (uint32_t)proc->stack + 0x1000;
-    proc->regs.eflags = 0x0202;
+    // proc->regs = (regs_t*)kmalloc(sizeof(regs_t));    // 4KB stack
+    proc->regs = (regs_t*)((uint8_t*)proc->stack + 0x1000 - 68);
+    proc->regs->cs = 0x0 | 0x4 | ring;
+    proc->regs->gs = 0x8 | 0x4 | ring;
+    proc->regs->fs = 0x8 | 0x4 | ring;
+    proc->regs->es = 0x8 | 0x4 | ring;
+    proc->regs->ds = 0x8 | 0x4 | ring;
+    proc->regs->ss = 0x8 | 0x4 | ring;
+    proc->regs->eip = (uint32_t)entry;
+    proc->regs->esp = (uint32_t)proc->stack + 0x1000;
+    proc->regs->eflags = 0x0202;
     proc->pid = proc - proc_tbl;
 
     if (!proc_run) {    // the first process
@@ -116,6 +103,14 @@ int32_t create_proc(uint8_t ring, proc_entry_t entry)
     return proc->pid;
 }
 
+inline void memcpy(void *dest, const void *src, uint32_t size)
+{
+    uint32_t i = 0;
+
+    for (i = 0; i < size; i++)
+        *((uint8_t *)dest + i) = *((uint8_t *)src + i);
+}
+
 static void schedule(void)
 {
     static uint32_t timeslice = 0;
@@ -130,6 +125,7 @@ static void schedule(void)
     }
     timeslice = 0;
 
+    memcpy(proc_run->regs, &save_regs, sizeof(regs_t));
     proc_run = proc_run->next;
     // tss.esp0 = (uint32_t)&proc_run->regs + sizeof(regs_t);
     ldt_reload();

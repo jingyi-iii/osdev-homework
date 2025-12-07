@@ -69,7 +69,7 @@ typedef struct tss {
 
 typedef void (*proc_entry_t)(void);
 typedef struct process {
-    regs_t          regs;
+    regs_t*         regs;
     uint64_t        ldts[2];
     void*           stack;
     proc_entry_t    entry;
