@@ -77,6 +77,7 @@ typedef struct process {
     struct process  *next;
 } process_t;
 
+void process_evn_setup(void);
 int32_t create_proc(uint8_t ring, proc_entry_t entry);
 int ldt_init(void);
 

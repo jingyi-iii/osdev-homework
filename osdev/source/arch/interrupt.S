@@ -37,6 +37,21 @@
         iret
 .endm
 
+
+.macro TIMER_INTERRUPR irq_no
+.align  64,     0x90
+        SAVE_REGS
+        movl    \irq_no,        %esi
+        call    isr
+
+        # movl    proc_run,       %esp
+        # movl    (%eax),         %esp
+        RESTORE_REGS
+        iret
+.endm
+
+
+
 .code32
 .section        .text
 .align 32
@@ -73,7 +88,7 @@ sys_isr_tbl:
         DECLARE_EXCEPTION       $0x1d
         DECLARE_EXCEPTION       $0x1e
         DECLARE_EXCEPTION       $0x1f
-        DECLARE_INTERRUPT       $0x20
+        TIMER_INTERRUPR         $0x20
         DECLARE_INTERRUPT       $0x21
         DECLARE_INTERRUPT       $0x22
         DECLARE_INTERRUPT       $0x23
