@@ -1,5 +1,6 @@
 #include "terminal.h"
 #include "keyboard.h"
+#include "process.h"
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -16,13 +17,35 @@ void timer_handler(void)
     const char* ptr_msg = "Timer interrupt triggered modification: \0";
     uint16_t* ptr_gbuf = (uint16_t*)0xb8000;
 
-    while (*ptr_msg) {
-        *ptr_gbuf = (0xe << 8) | *ptr_msg;
-        ptr_msg += 1;
-        ptr_gbuf += 1;
+    for ( ;; ) {
+        while (*ptr_msg) {
+            *ptr_gbuf = (0xe << 8) | *ptr_msg;
+            ptr_msg += 1;
+            ptr_gbuf += 1;
+        }
+
+        *ptr_gbuf = (0xe << 8) | ((*ptr_gbuf + 1) & 0xff);
     }
 
-    *ptr_gbuf = (0xe << 8) | ((*ptr_gbuf + 1) & 0xff);
+    while (1);
+}
+
+void timer_handler2(void)
+{
+    const char* ptr_msg = "Timer interrupt triggered modification:    \0";
+    uint16_t* ptr_gbuf = (uint16_t*)0xb8000;
+
+    for ( ;; ) {
+        while (*ptr_msg) {
+            *ptr_gbuf = (0xe << 8) | *ptr_msg;
+            ptr_msg += 1;
+            ptr_gbuf += 1;
+        }
+
+        *ptr_gbuf = (0xe << 8) | ((*ptr_gbuf + 1) & 0xff);
+    }
+
+    while (1);
 }
 
 extern "C" {
@@ -38,8 +61,10 @@ void kernel_start(void)
 	for (int i = 0; i < 100; i++)
 		terminal.Write("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
 
-    arch_set_isr(0x20, timer_handler);
-    arch_enable_8259a_master(0x20);
+    // arch_set_isr(0x20, timer_handler);
+    // arch_enable_8259a_master(0x20);
+
+    create_proc(0, timer_handler2);
 
     NSKeyBoard::KeyBoardListener::GetInstance().Start();
 }
