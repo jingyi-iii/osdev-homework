@@ -113,39 +113,24 @@ inline void memcpy(void *dest, const void *src, uint32_t size)
 
 static void schedule(void)
 {
-    // static uint32_t timeslice = 0;
-    // uint64_t* ldt_desc = 0;
+    static uint32_t timeslice = 0;
+    uint64_t* ldt_desc = 0;
 
-    // spinlock_lock(&lock);
-    // timeslice++;
-    // // if (timeslice < 5 || !proc_run || !proc_run->next) {
-    // if (!proc_run || !proc_run->next) {
-    //     spinlock_unlock(&lock);
-    //     return;
-    // }
-    // timeslice = 0;
+    spinlock_lock(&lock);
+    timeslice++;
+    // if (timeslice < 5 || !proc_run || !proc_run->next) {
+    if (!proc_run || !proc_run->next) {
+        spinlock_unlock(&lock);
+        return;
+    }
+    timeslice = 0;
 
-    // memcpy(proc_run->regs, &save_regs, sizeof(regs_t));
-    // proc_run = proc_run->next;
-    // // tss.esp0 = (uint32_t)&proc_run->regs + sizeof(regs_t);
-    // ldt_reload();
+    memcpy(proc_run->regs, &save_regs, sizeof(regs_t));
+    proc_run = proc_run->next;
+    // tss.esp0 = (uint32_t)&proc_run->regs + sizeof(regs_t);
+    ldt_reload();
 
-    // spinlock_unlock(&lock);
-
-
-    // static uint32_t timeslice = 0;
-    // uint64_t* ldt_desc = 0;
-
-    // spinlock_lock(&lock);
-    // timeslice++;
-    // if (!proc_run || !proc_run->next) {
-    //     spinlock_unlock(&lock);
-    //     return;
-    // }
-    // timeslice = 0;
-
-    // ldt_reload();
-    // spinlock_unlock(&lock);
+    spinlock_unlock(&lock);
 }
 
 void process_evn_setup(void)

@@ -61,11 +61,8 @@ void kernel_start(void)
 	for (int i = 0; i < 100; i++)
 		terminal.Write("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
 
-    // arch_set_isr(0x20, timer_handler);
-    // arch_enable_8259a_master(0x20);
-
     process_evn_setup();
-    create_proc(3, timer_handler);
+    create_proc(0, timer_handler);
     create_proc(3, timer_handler2);
 
     NSKeyBoard::KeyBoardListener::GetInstance().Start();

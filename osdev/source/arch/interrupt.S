@@ -1,4 +1,35 @@
-.globl  sys_isr_tbl
+.globl  timer_isr
+.globl  keyboard_isr
+
+.macro SAVE_REGS_ADD_SWITCH_KERNEL_STACK
+        pushal
+        pushl   %ds
+        pushl   %es
+        pushl   %fs
+        pushl   %gs
+
+        movl    %esp,           %esi
+        movl    $save_regs,     %edi
+        movl    $17,            %ecx
+        cld
+        rep     movsl
+
+        mov     $0x10,          %ax
+        mov     %ax,            %ds
+        mov     %ax,            %es
+        movl    $stack_top,     %esp
+.endm
+
+.macro RESTORE_REGS_AND_SWITCH_USER_STACK
+        movl    proc_run,       %eax
+        movl    (%eax),         %esp
+
+        popl    %gs
+        popl    %fs
+        popl    %es
+        popl    %ds
+        popal
+.endm
 
 .macro SAVE_REGS
     pushal
@@ -43,67 +74,32 @@
         SAVE_REGS
         movl    \irq_no,        %esi
         call    isr
-
-        # movl    proc_run,       %esp
-        # movl    (%eax),         %esp
         RESTORE_REGS
         iret
 .endm
 
 
-
 .code32
 .section        .text
 .align 32
-sys_isr_tbl:
-        DECLARE_EXCEPTION       $0x00
-        DECLARE_EXCEPTION       $0x01
-        DECLARE_EXCEPTION       $0x02
-        DECLARE_EXCEPTION       $0x03
-        DECLARE_EXCEPTION       $0x04
-        DECLARE_EXCEPTION       $0x05
-        DECLARE_EXCEPTION       $0x06
-        DECLARE_EXCEPTION       $0x07
-        DECLARE_EXCEPTION       $0x08
-        DECLARE_EXCEPTION       $0x09
-        DECLARE_EXCEPTION       $0x0a
-        DECLARE_EXCEPTION       $0x0b
-        DECLARE_EXCEPTION       $0x0c
-        DECLARE_EXCEPTION       $0x0d
-        DECLARE_EXCEPTION       $0x0e
-        DECLARE_EXCEPTION       $0x0f
-        DECLARE_EXCEPTION       $0x10
-        DECLARE_EXCEPTION       $0x11
-        DECLARE_EXCEPTION       $0x12
-        DECLARE_EXCEPTION       $0x13
-        DECLARE_EXCEPTION       $0x14
-        DECLARE_EXCEPTION       $0x15
-        DECLARE_EXCEPTION       $0x16
-        DECLARE_EXCEPTION       $0x17
-        DECLARE_EXCEPTION       $0x18
-        DECLARE_EXCEPTION       $0x19
-        DECLARE_EXCEPTION       $0x1a
-        DECLARE_EXCEPTION       $0x1b
-        DECLARE_EXCEPTION       $0x1c
-        DECLARE_EXCEPTION       $0x1d
-        DECLARE_EXCEPTION       $0x1e
-        DECLARE_EXCEPTION       $0x1f
-        TIMER_INTERRUPR         $0x20
-        DECLARE_INTERRUPT       $0x21
-        DECLARE_INTERRUPT       $0x22
-        DECLARE_INTERRUPT       $0x23
-        DECLARE_INTERRUPT       $0x24
-        DECLARE_INTERRUPT       $0x25
-        DECLARE_INTERRUPT       $0x26
-        DECLARE_INTERRUPT       $0x27
-        DECLARE_INTERRUPT       $0x28
-        DECLARE_INTERRUPT       $0x29
-        DECLARE_INTERRUPT       $0x2a
-        DECLARE_INTERRUPT       $0x2b
-        DECLARE_INTERRUPT       $0x2c
-        DECLARE_INTERRUPT       $0x2d
-        DECLARE_INTERRUPT       $0x2e
-        DECLARE_INTERRUPT       $0x2f
+timer_isr:
+.align  64,     0x90
+        SAVE_REGS_ADD_SWITCH_KERNEL_STACK
+        movl    $0x20,        %esi
+        call    *user_isrs(, %esi, 4)
+        call    eoi
+        RESTORE_REGS_AND_SWITCH_USER_STACK
+        iret
+
+keyboard_isr:
+.align  64,     0x90
+        SAVE_REGS
+        movl    $0x21,        %esi
+        call    *user_isrs(, %esi, 4)
+        call    eoi
+        RESTORE_REGS
+        iret
+
 
 #
 # Handle function for exceptions(IRQ0~IRQ31).
@@ -123,9 +119,7 @@ esr:
 # Output : None
 #
 .align  32
-isr:
-        call    *user_isrs(, %esi, 4)
-
+eoi:
         cmpl    $0x28,          %esi
         jl      .master
         ## [+] eof signal to slave

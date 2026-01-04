@@ -39,7 +39,9 @@ extern "C" {
 #endif
 
 // from asm
-void sys_isr_tbl(void);
+// void sys_isr_tbl(void);
+void timer_isr(void);
+void keyboard_isr(void);
 
 void arch_init_8259a(void);
 void arch_enable_8259a_master(uint16_t irq_no);

@@ -103,16 +103,23 @@ void arch_init_idt(void)
     int i = 0;
 
     arch_cli();
-    for (i = 0; i < IDT_ENTRIES; i++) {
-        idt[i] = gen_idesc((uint32_t)default_handler,
-                           arch_get_selector(SYS_CODE),
-                           IDT_GATE_INT32);
-    }
-    for (i = 0; i < NUM_EXCEPTIONS + NUM_INTERRUPTS; i++) {
-        idt[i] = gen_idesc((uint32_t)sys_isr_tbl + 64 * i,
-                           arch_get_selector(SYS_CODE),
-                           IDT_GATE_INT32);
-    }
+    // for (i = 0; i < IDT_ENTRIES; i++) {
+    //     idt[i] = gen_idesc((uint32_t)default_handler,
+    //                        arch_get_selector(SYS_CODE),
+    //                        IDT_GATE_INT32);
+    // }
+    // for (i = 0; i < NUM_EXCEPTIONS + NUM_INTERRUPTS; i++) {
+    //     idt[i] = gen_idesc((uint32_t)sys_isr_tbl + 64 * i,
+    //                        arch_get_selector(SYS_CODE),
+    //                        IDT_GATE_INT32);
+    // }
+
+    idt[32] = gen_idesc((uint32_t)timer_isr,
+                       arch_get_selector(SYS_CODE),
+                       IDT_GATE_INT32);
+    idt[33] = gen_idesc((uint32_t)keyboard_isr,
+                       arch_get_selector(SYS_CODE),
+                       IDT_GATE_INT32);
 
     idtmeta.limit = sizeof(idesc_t) * IDT_ENTRIES - 1;
     idtmeta.base = (uint32_t)idt;
