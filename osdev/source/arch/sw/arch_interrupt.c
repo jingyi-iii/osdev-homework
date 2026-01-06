@@ -109,7 +109,7 @@ void arch_init_idt(void)
                            IDT_GATE_INT32);
     }
     for (i = 0; i < NUM_EXCEPTIONS + NUM_INTERRUPTS; i++) {
-        idt[i] = gen_idesc((uint32_t)sys_isr_tbl + 64 * i,
+        idt[i] = gen_idesc((uint32_t)sys_isr_tbl + 256 * i,
                            arch_get_selector(SYS_CODE),
                            IDT_GATE_INT32);
     }

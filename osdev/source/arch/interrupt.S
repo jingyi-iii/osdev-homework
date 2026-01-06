@@ -1,4 +1,6 @@
 .globl  sys_isr_tbl
+.globl  timer_isr
+.globl  keyboard_isr
 
 .macro SAVE_REGS_ADD_SWITCH_KERNEL_STACK
         pushal
@@ -30,8 +32,27 @@
         popal
 .endm
 
+.macro SAVE_REGS
+        pushal
+        pushl   %ds
+        pushl   %es
+        pushl   %fs
+        pushl   %gs
+        mov     $0x10,          %ax
+        mov     %ax,            %ds
+        mov     %ax,            %es
+.endm
+
+.macro RESTORE_REGS
+        popl    %gs
+        popl    %fs
+        popl    %es
+        popl    %ds
+        popal
+.endm
+
 .macro DECLARE_EXCEPTION irq_no
-.align  64,     0x90
+.align  256,     0x90
         SAVE_REGS_ADD_SWITCH_KERNEL_STACK
         movl    \irq_no,        %esi
         call    esr
@@ -40,7 +61,22 @@
 .endm
 
 .macro DECLARE_INTERRUPT irq_no
-.align  64,     0x90
+.align  256,     0x90
+        SAVE_REGS
+        movl    \irq_no,        %eax
+        call    mask_int
+
+        movl    \irq_no,        %esi
+        call    isr
+        
+        movl    \irq_no,        %eax
+        call    unmask_int  
+        RESTORE_REGS
+        iret
+.endm
+
+.macro TIMER_INTERRUPT irq_no
+.align  256,     0x90
         SAVE_REGS_ADD_SWITCH_KERNEL_STACK
         movl    \irq_no,        %eax
         call    mask_int
@@ -56,7 +92,7 @@
 
 .code32
 .section        .text
-.align 32
+.align  256,     0x90
 sys_isr_tbl:
         DECLARE_EXCEPTION       $0x00
         DECLARE_EXCEPTION       $0x01
@@ -90,7 +126,7 @@ sys_isr_tbl:
         DECLARE_EXCEPTION       $0x1d
         DECLARE_EXCEPTION       $0x1e
         DECLARE_EXCEPTION       $0x1f
-        DECLARE_INTERRUPT       $0x20
+        TIMER_INTERRUPT         $0x20
         DECLARE_INTERRUPT       $0x21
         DECLARE_INTERRUPT       $0x22
         DECLARE_INTERRUPT       $0x23
