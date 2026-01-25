@@ -42,10 +42,10 @@ extern "C" {
 void sys_isr_tbl(void);
 
 void arch_init_8259a(void);
-void arch_enable_8259a_master(uint16_t irq_no);
-void arch_disable_8259a_master(uint16_t irq_no);
-void arch_enable_8259a_slave(uint16_t irq_no);
-void arch_disable_8259a_slave(uint16_t irq_no);
+void arch_master_unmask_irq(uint16_t irq_no);
+void arch_master_mask_irq(uint16_t irq_no);
+void arch_slave_unmask_irq(uint16_t irq_no);
+void arch_slave_mask_irq(uint16_t irq_no);
 void arch_set_isr(uint16_t irq_no, void (*handler)());
 
 #ifdef __cplusplus

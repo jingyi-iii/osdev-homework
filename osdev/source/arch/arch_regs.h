@@ -54,16 +54,78 @@
 extern "C" {
 #endif
 
-void arch_reload_gdt(void* pgdtmeta);
-void arch_reload_idt(void* pidtmeta);
-void arch_reload_tss(uint16_t tss_sel);
-void arch_reload_ldt(uint16_t ldt_sel);
-void arch_set_cr0(uint8_t pos);
-void arch_clr_cr0(uint8_t pos);
-void arch_cli(void);
-void arch_sti(void);
-void outb(uint16_t port, uint8_t val);
-uint8_t inb(uint16_t port);
+inline void arch_reload_gdt(void* gdtmeta)
+{
+    if (!gdtmeta)
+        return;
+
+    __asm__ __volatile__("lgdt (%0)" : : "r"(gdtmeta) : "memory");
+}
+
+inline void arch_reload_idt(void* idtmeta)
+{
+    if (!idtmeta)
+        return;
+
+    __asm__ __volatile__("lidt (%0)" : : "r"(idtmeta) : "memory");
+}
+
+inline void arch_reload_tss(uint16_t tss_sel)
+{
+    __asm__ __volatile__("ltr %0" : : "r"(tss_sel) : "memory");
+}
+
+inline void arch_reload_ldt(uint16_t ldt_sel)
+{
+    __asm__ __volatile__("lldt %0" : : "r"(ldt_sel) : "memory");
+}
+
+inline void arch_set_cr0(uint8_t pos)
+{
+    if (pos > 31)
+        return;
+
+    __asm__ __volatile__ (
+        "movl   %%cr0,          %%eax   \n\t"
+        "orl    %0,             %%eax   \n\t"
+        "movl   %%eax,          %%cr0   \n\t"
+        :
+        : "r"(1 << pos)
+        : "%eax", "memory"
+    );
+}
+
+inline void arch_clr_cr0(uint8_t pos)
+{
+    if (pos > 31)
+        return;
+
+    __asm__ __volatile__ (
+        "movl   %%cr0,          %%eax   \n\t"
+        "movl   %0,             %%ebx   \n\t"
+        "notl   %%ebx                   \n\t"
+        "andl   %%ebx,          %%eax   \n\t"
+        "movl   %%eax,          %%cr0   \n\t"
+        :
+        : "r"((uint32_t)1 << pos)
+        : "%eax", "memory"
+    );
+}
+
+inline void arch_cli(void) { __asm__ __volatile__ ("cli"); }
+inline void arch_sti(void) { __asm__ __volatile__ ("sti"); }
+
+inline void arch_outb(uint16_t port, uint8_t val)
+{
+    __asm__ __volatile__("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+inline uint8_t arch_inb(uint16_t port)
+{
+    unsigned char value = 0;
+    __asm__ __volatile__("inb %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
 
 #ifdef __cplusplus
 }

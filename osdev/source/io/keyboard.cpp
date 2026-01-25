@@ -1,4 +1,4 @@
-#include "arch_interrupt.h"
+#include "arch_irq.h"
 #include "arch_regs.h"
 #include "arch_uart.h"
 #include "module.h"
@@ -140,7 +140,7 @@ unsigned int keymap[NR_SCAN_CODES * MAP_COLS] = {
 extern "C" {
 void keyboard_handler(void)
 {
-    NSKeyBoard::KeyBoardListener::GetInstance().OnReceive(inb(0x60));
+    NSKeyBoard::KeyBoardListener::GetInstance().OnReceive(arch_inb(0x60));
 
     auto key = NSKeyBoard::KeyBoardListener::GetInstance().GetOneKey();
     if (key)
@@ -168,13 +168,13 @@ void KeyBoardListener::Start(void)
     mKbuf.Reset();
 
     arch_set_isr(0x21, keyboard_handler);
-    arch_enable_8259a_master(0x21);
+    arch_master_unmask_irq(0x21);
 }
 
 void KeyBoardListener::Stop(void)
 {
     arch_set_isr(0x21, 0);
-    arch_disable_8259a_master(0x21);
+    arch_master_mask_irq(0x21);
 }
 
 uint8_t KeyBoardListener::GetOneKey(void)

@@ -1,6 +1,4 @@
 .globl  sys_isr_tbl
-.globl  timer_isr
-.globl  keyboard_isr
 
 .macro SAVE_REGS_ADD_SWITCH_KERNEL_STACK
         pushal

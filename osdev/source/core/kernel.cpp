@@ -51,8 +51,8 @@ void timer_handler2(void)
 extern "C" {
 
 void arch_set_isr(uint16_t irq, void (*handler)());
-void arch_enable_8259a_master(uint16_t irq);
-void arch_disable_8259a_master(uint16_t irq_no);
+void arch_master_unmask_irq(uint16_t irq);
+void arch_master_mask_irq(uint16_t irq_no);
 
 extern init_call_t __start_initcall[];
 extern init_call_t __stop_initcall[];
