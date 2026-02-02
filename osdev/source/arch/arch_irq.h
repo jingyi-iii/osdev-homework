@@ -3,23 +3,6 @@
 
 #include <stdint.h>
 
-#define INT_MASTER_CMD          (0x20)
-#define INT_MASTER_DATA         (0x21)
-#define INT_SLAVE_CMD           (0xA0)
-#define INT_SLAVE_DATA          (0xA1)
-#define	INT_VECTOR_IRQ0         (0x20)
-#define	INT_VECTOR_IRQ8         (0x28)
-
-#define IDT_GATE_TASK32         (0x85)
-#define IDT_GATE_INT16          (0x86)
-#define IDT_GATE_TRAP16         (0x87)
-#define IDT_GATE_INT32          (0x8E)
-#define IDT_GATE_TRAP32         (0x8F)
-
-#define IDT_ENTRIES             (256)
-#define NUM_EXCEPTIONS          (32)
-#define NUM_INTERRUPTS          (16)
-
 typedef struct {
     uint16_t isr_low;
     uint16_t sel_code;
@@ -33,21 +16,34 @@ typedef struct {
     uint32_t base;
 } __attribute__((packed)) idtmeta_t;
 
+enum arch_irq_no {
+    ARCH_IRQ_BEGIN  = 0x20,
+    TIMER_IRQ_NO    = 0x20,
+    KEYBOARD_IRQ_NO = 0x21,
+    SLAVE_IRQ_NO    = 0x22,
+    COM2_IRQ_NO     = 0x23,
+    COM1_IRQ_NO     = 0x24,
+    LPT2_IRQ_NO     = 0x25,
+    FLOPPY_IRQ_NO   = 0x26,
+    LPT1_IRQ_NO     = 0x27,
+    RL_TIMER_IRQ_NO = 0x28,
+    RD_IRQ2_NO      = 0x29,
+    RESV1_IRQ_NO    = 0x30,
+    RESV2_IRQ_NO    = 0x31,
+    PS2_IRQ_NO      = 0x32,
+    FPU_IRQ_NO      = 0x33,
+    AT_IRQ_NO       = 0x34,
+    RESV3_IRQ_NO    = 0x35,
+    ARCH_IRQ_END    = 0x35,
+};
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-// from asm
-void sys_isr_tbl(void);
-
-void arch_init_8259a(void);
-void arch_master_unmask_irq(uint16_t irq_no);
-void arch_master_mask_irq(uint16_t irq_no);
-void arch_slave_unmask_irq(uint16_t irq_no);
-void arch_slave_mask_irq(uint16_t irq_no);
+void arch_init_irq(void);
+void arch_unmask_irq(uint16_t irq_no);
+void arch_mask_irq(uint16_t irq_no);
 void arch_set_isr(uint16_t irq_no, void (*handler)());
-
 #ifdef __cplusplus
 }
 #endif

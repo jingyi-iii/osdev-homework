@@ -13,12 +13,12 @@ stack_top:
 .section        .text
 arch_start:
         movl    $stack_top,     %esp
-        call    arch_om_switch_pm
+        call    arch_switch_pm
 
         # get syscode selector
         movl    $SYS_CODE,      %eax
         pushl   %eax
-        call    arch_om_get_sel
+        call    arch_get_sel
         addl    $4,             %esp
 
         # jump to code32
@@ -32,7 +32,7 @@ arch_start:
 knl32_entry:
         movl    $SYS_DATA,      %eax
         pushl   %eax
-        call    arch_om_get_sel
+        call    arch_get_sel
         addl    $4,             %esp
 
         movw    %ax,            %ds
@@ -42,8 +42,7 @@ knl32_entry:
         movw    %ax,            %ss
 
         movl    $stack_top,     %esp
-        call    arch_init_idt
-        call    arch_init_8259a
+        call    arch_init_irq
         call    arch_init_serial
         call    kernel_start
 

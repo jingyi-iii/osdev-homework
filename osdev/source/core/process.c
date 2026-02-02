@@ -1,6 +1,6 @@
 #include "process.h"
 #include "heap.h"
-#include "arch_om.h"
+#include "arch_protm.h"
 #include "arch_irq.h"
 #include "module.h"
 #include "lock.h"
@@ -16,26 +16,26 @@ volatile regs_t save_regs = {0};
 // TSS is only used to provide ss0 and esp0 when entering ring0
 static int tss_init(void)
 {
-    uint64_t* tss_desc = 0;
+    uint64_t tss_desc = 0;
     uint32_t tss_sel = 0;
     uint16_t flags = 0;
 
     spinlock_lock(&lock);
-    tss_desc = arch_om_get_desc(TSS);
-    tss_sel = arch_om_get_sel(TSS);
-    if (!tss_desc || !tss_sel) {
+    tss_sel = arch_get_sel(TSS);
+    if (!tss_sel) {
         spinlock_unlock(&lock);
         return -1;
     }
 
-    tss.ss0 = arch_om_get_sel(SYS_DATA);
+    tss.ss0 = arch_get_sel(SYS_DATA);
     tss.esp0 = (uint32_t)&stack_top;
     tss.iobase = sizeof(tss_t);
 
     flags = 0;
     flags |= 0x89;           // 32bit TSS type(0x9), present(0x80)
 
-    *tss_desc = arch_om_gen_desc((uint32_t)&tss, sizeof(tss_t), flags);
+    tss_desc = arch_gen_desc((uint32_t)&tss, sizeof(tss_t), flags);
+    arch_set_desc(TSS, tss_desc);
     arch_reload_tss(tss_sel);
     spinlock_unlock(&lock);
 
@@ -44,9 +44,9 @@ static int tss_init(void)
 
 static int ldt_reload(void)
 {
-    uint64_t* ldt_desc = arch_om_get_desc(LDT);
-    *ldt_desc = arch_om_gen_desc((uint32_t)proc_run->ldts, 2 * 8, 0x0082);
-    arch_reload_ldt(arch_om_get_sel(LDT));
+    uint64_t ldt_desc = arch_gen_desc((uint32_t)proc_run->ldts, 2 * 8, 0x0082);
+    arch_set_desc(LDT, ldt_desc);
+    arch_reload_ldt(arch_get_sel(LDT));
 }
 
 int32_t create_proc(uint8_t ring, proc_entry_t entry)
@@ -145,8 +145,8 @@ void process_evn_setup(void)
     for (i = 0; i < MAX_PROCESS; i++)
         proc_tbl[i].pid = -1;
 
-    arch_set_isr(0x20, schedule);
-    arch_master_unmask_irq(0x20);
+    arch_set_isr(TIMER_IRQ_NO, schedule);
+    arch_unmask_irq(TIMER_IRQ_NO);
 }
 
 module_init(process_evn_setup);

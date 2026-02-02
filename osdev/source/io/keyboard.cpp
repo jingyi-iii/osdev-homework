@@ -1,6 +1,6 @@
 #include "arch_irq.h"
 #include "arch_regs.h"
-#include "arch_uart.h"
+#include "arch_serial.h"
 #include "module.h"
 #include "keyboard.h"
 
@@ -144,7 +144,7 @@ void keyboard_handler(void)
 
     auto key = NSKeyBoard::KeyBoardListener::GetInstance().GetOneKey();
     if (key)
-        write_serial(key);
+        arch_serial_put(key);
 }
 
 static void keyboard_init(void)
@@ -167,14 +167,14 @@ void KeyBoardListener::Start(void)
 {
     mKbuf.Reset();
 
-    arch_set_isr(0x21, keyboard_handler);
-    arch_master_unmask_irq(0x21);
+    arch_set_isr(KEYBOARD_IRQ_NO, keyboard_handler);
+    arch_unmask_irq(KEYBOARD_IRQ_NO);
 }
 
 void KeyBoardListener::Stop(void)
 {
-    arch_set_isr(0x21, 0);
-    arch_master_mask_irq(0x21);
+    arch_set_isr(KEYBOARD_IRQ_NO, 0);
+    arch_mask_irq(KEYBOARD_IRQ_NO);
 }
 
 uint8_t KeyBoardListener::GetOneKey(void)

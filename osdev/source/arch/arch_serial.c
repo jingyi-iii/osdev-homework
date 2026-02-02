@@ -3,39 +3,40 @@
 
 #define PORT 0x3f8          // COM1
 
-int serial_received()
+static int serial_received(void)
 {
    return arch_inb(PORT + 5) & 1;
 }
 
-char read_serial()
+static int is_transmit_empty(void)
+{
+   return arch_inb(PORT + 5) & 0x20;
+}
+
+char arch_serial_get(void)
 {
    while (serial_received() == 0);
 
    return arch_inb(PORT);
 }
 
-int is_transmit_empty()
-{
-   return arch_inb(PORT + 5) & 0x20;
-}
-
-void write_serial(char a)
+void arch_serial_put(char ch)
 {
    while (is_transmit_empty() == 0);
 
-   arch_outb(PORT, a);
+   arch_outb(PORT, ch);
 }
 
-void write_serial_string(const char* ptr_str)
+void arch_serial_write(const char* str)
 {
-    while (*ptr_str != '\0') {
-        write_serial(*ptr_str);
-        ptr_str++;
+    while (*str != '\0') {
+        arch_serial_put(*str);
+        str++;
     }
 }
 
-int arch_init_serial(void) {
+int arch_init_serial(void)
+{
     arch_outb(PORT + 1, 0x00);    // Disable all interrupts
     arch_outb(PORT + 3, 0x80);    // Enable DLAB (set baud rate divisor)
     arch_outb(PORT + 0, 0x03);    // Set divisor to 3 (lo byte) 38400 baud
@@ -55,7 +56,7 @@ int arch_init_serial(void) {
     // (not-loopback with IRQs enabled and OUT#1 and OUT#2 bits enabled)
     arch_outb(PORT + 4, 0x0F);
 
-    write_serial_string("UART log enabled\n");
+    arch_serial_write("UART log enabled\n");
    
     return 0;
 }

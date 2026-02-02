@@ -1,11 +1,35 @@
 #include "arch_regs.h"
-#include "arch_om.h"
+#include "arch_protm.h"
 #include "arch_irq.h"
+#include "lock.h"
 
-static __attribute__((aligned(sizeof(idesc_t)))) idesc_t idt[IDT_ENTRIES] = { 0 };
-void (*user_isrs[IDT_ENTRIES])(void) = { 0 };
+#define INT_MASTER_CMD          (0x20)
+#define INT_MASTER_DATA         (0x21)
+#define INT_SLAVE_CMD           (0xA0)
+#define INT_SLAVE_DATA          (0xA1)
+#define	INT_VECTOR_IRQ0         (0x20)
+#define	INT_VECTOR_IRQ8         (0x28)
+
+#define IDT_GATE_TASK32         (0x85)
+#define IDT_GATE_INT16          (0x86)
+#define IDT_GATE_TRAP16         (0x87)
+#define IDT_GATE_INT32          (0x8E)
+#define IDT_GATE_TRAP32         (0x8F)
+
+#define IDT_ENTRIES             (256)
+#define NUM_EXCEPTIONS          (32)
+#define NUM_INTERRUPTS          (16)
+
+#define ATTR_ALIGINED(T)    \
+    __attribute__((aligned(sizeof(T))))
+typedef void (*isr_t)(void);
+
+static void hlt_handler(void) { for (;;) __asm__ volatile ("hlt"); }
+
+isr_t user_isrs[IDT_ENTRIES]= { 0 };
 static idtmeta_t idtmeta = { 0 };
-static void default_handler(void) { for (;;) __asm__ volatile ("hlt"); }
+static spinlock_t irq_lock;
+static ATTR_ALIGINED(idesc_t) idesc_t idt[IDT_ENTRIES] = { 0 };
 
 static idesc_t gen_idesc(uint32_t isr, uint16_t sel_code, uint8_t flags)
 {
@@ -20,7 +44,7 @@ static idesc_t gen_idesc(uint32_t isr, uint16_t sel_code, uint8_t flags)
     return desc;
 }
 
-void arch_init_8259a(void)
+static void arch_init_8259a(void)
 {
     arch_outb(INT_MASTER_CMD,  0x11);
     arch_outb(INT_SLAVE_CMD,   0x11);
@@ -34,60 +58,46 @@ void arch_init_8259a(void)
     arch_outb(INT_SLAVE_DATA,  0xff);
 }
 
-void arch_master_unmask_irq(uint16_t irq_no)
+void arch_unmask_irq(uint16_t irq_no)
 {
     unsigned char mask = 0;
     uint8_t port_val = 0;
 
-    if (irq_no < INT_VECTOR_IRQ0 || irq_no >= (INT_VECTOR_IRQ0 + 8))
+    if (irq_no < ARCH_IRQ_BEGIN || irq_no > ARCH_IRQ_END)
         return;
 
-    mask = ~((unsigned char)(1 << (irq_no - INT_VECTOR_IRQ0)));
-    port_val = arch_inb(0x21);
-    port_val &= mask;
-    arch_outb(0x21, port_val);
+    spinlock_lock(&irq_lock);
+    if (irq_no >= RL_TIMER_IRQ_NO) {
+        mask = ~((unsigned char)(1 << (irq_no - INT_VECTOR_IRQ8)));
+        port_val = arch_inb(0xa1) & mask;
+        arch_outb(0xa1, port_val);
+    } else {
+        mask = ~((unsigned char)(1 << (irq_no - INT_VECTOR_IRQ0)));
+        port_val = arch_inb(0x21) & mask;
+        arch_outb(0x21, port_val);
+    }
+    spinlock_unlock(&irq_lock);
 }
 
-void arch_master_mask_irq(uint16_t irq_no)
+void arch_mask_irq(uint16_t irq_no)
 {
     unsigned char mask = 0;
     uint8_t port_val = 0;
 
-    if (irq_no < INT_VECTOR_IRQ0 || irq_no >= (INT_VECTOR_IRQ0 + 8))
+    if (irq_no < ARCH_IRQ_BEGIN || irq_no > ARCH_IRQ_END)
         return;
 
-    mask = (unsigned char)(1 << (irq_no - INT_VECTOR_IRQ0));
-    port_val = arch_inb(0x21);
-    port_val |= mask;
-    arch_outb(0x21, port_val);
-}
-
-void arch_slave_unmask_irq(uint16_t irq_no)
-{
-    unsigned char mask = 0;
-    uint8_t port_val = 0;
-
-    if (irq_no < INT_VECTOR_IRQ8 || irq_no >= (INT_VECTOR_IRQ8 + 8))
-        return;
-
-    mask = ~((unsigned char)(1 << (irq_no - INT_VECTOR_IRQ8)));
-    port_val = arch_inb(0xa1);
-    port_val &= mask;
-    arch_outb(0xa1, port_val);
-}
-
-void arch_slave_mask_irq(uint16_t irq_no)
-{
-    unsigned char mask = 0;
-    uint8_t port_val = 0;
-
-    if (irq_no < INT_VECTOR_IRQ8 || irq_no > (INT_VECTOR_IRQ8 + 8))
-        return;
-
-    mask = (unsigned char)(1 << (irq_no - INT_VECTOR_IRQ8));
-    port_val = arch_inb(0xa1);
-    port_val |= mask;
-    arch_outb(0xa1, port_val);
+    spinlock_lock(&irq_lock);
+    if (irq_no >= RL_TIMER_IRQ_NO) {
+        mask = (unsigned char)(1 << (irq_no - INT_VECTOR_IRQ8));
+        port_val = arch_inb(0xa1) | mask;
+        arch_outb(0xa1, port_val);
+    } else {
+        mask = (unsigned char)(1 << (irq_no - INT_VECTOR_IRQ0));
+        port_val = arch_inb(0x21) | mask;
+        arch_outb(0x21, port_val);
+    }
+    spinlock_unlock(&irq_lock);
 }
 
 void arch_set_isr(uint16_t irq_no, void (*handler)())
@@ -95,22 +105,26 @@ void arch_set_isr(uint16_t irq_no, void (*handler)())
     if (irq_no >= IDT_ENTRIES)
         return; 
 
-    user_isrs[irq_no] = handler ? handler : default_handler;
+    spinlock_lock(&irq_lock);
+    user_isrs[irq_no] = handler ? handler : hlt_handler;
+    spinlock_unlock(&irq_lock);
 }
 
-void arch_init_idt(void)
+void arch_isr_tbl(void);
+void arch_init_irq(void)
 {
     int i = 0;
 
+    spinlock_init(&irq_lock);
     arch_cli();
     for (i = 0; i < IDT_ENTRIES; i++) {
-        idt[i] = gen_idesc((uint32_t)default_handler,
-                           arch_om_get_sel(SYS_CODE),
+        idt[i] = gen_idesc((uint32_t)hlt_handler,
+                           arch_get_sel(SYS_CODE),
                            IDT_GATE_INT32);
     }
     for (i = 0; i < NUM_EXCEPTIONS + NUM_INTERRUPTS; i++) {
-        idt[i] = gen_idesc((uint32_t)sys_isr_tbl + 256 * i,
-                           arch_om_get_sel(SYS_CODE),
+        idt[i] = gen_idesc((uint32_t)arch_isr_tbl + 256 * i,
+                           arch_get_sel(SYS_CODE),
                            IDT_GATE_INT32);
     }
 
@@ -118,5 +132,7 @@ void arch_init_idt(void)
     idtmeta.base = (uint32_t)idt;
     arch_reload_idt(&idtmeta);
     arch_sti();
+
+    arch_init_8259a();
 }
 

@@ -1,4 +1,4 @@
-.globl  sys_isr_tbl
+.globl  arch_isr_tbl
 
 .macro SAVE_REGS_ADD_SWITCH_KERNEL_STACK
         pushal
@@ -49,7 +49,7 @@
         popal
 .endm
 
-.macro DECLARE_EXCEPTION irq_no
+.macro DEFAULT_EXCEPTION irq_no
 .align  256,     0x90
         SAVE_REGS_ADD_SWITCH_KERNEL_STACK
         movl    \irq_no,        %esi
@@ -58,7 +58,7 @@
         iret
 .endm
 
-.macro DECLARE_INTERRUPT irq_no
+.macro DEFAULT_INTERRUPT irq_no
 .align  256,     0x90
         SAVE_REGS
         movl    \irq_no,        %eax
@@ -91,55 +91,55 @@
 .code32
 .section        .text
 .align  256,     0x90
-sys_isr_tbl:
-        DECLARE_EXCEPTION       $0x00
-        DECLARE_EXCEPTION       $0x01
-        DECLARE_EXCEPTION       $0x02
-        DECLARE_EXCEPTION       $0x03
-        DECLARE_EXCEPTION       $0x04
-        DECLARE_EXCEPTION       $0x05
-        DECLARE_EXCEPTION       $0x06
-        DECLARE_EXCEPTION       $0x07
-        DECLARE_EXCEPTION       $0x08
-        DECLARE_EXCEPTION       $0x09
-        DECLARE_EXCEPTION       $0x0a
-        DECLARE_EXCEPTION       $0x0b
-        DECLARE_EXCEPTION       $0x0c
-        DECLARE_EXCEPTION       $0x0d
-        DECLARE_EXCEPTION       $0x0e
-        DECLARE_EXCEPTION       $0x0f
-        DECLARE_EXCEPTION       $0x10
-        DECLARE_EXCEPTION       $0x11
-        DECLARE_EXCEPTION       $0x12
-        DECLARE_EXCEPTION       $0x13
-        DECLARE_EXCEPTION       $0x14
-        DECLARE_EXCEPTION       $0x15
-        DECLARE_EXCEPTION       $0x16
-        DECLARE_EXCEPTION       $0x17
-        DECLARE_EXCEPTION       $0x18
-        DECLARE_EXCEPTION       $0x19
-        DECLARE_EXCEPTION       $0x1a
-        DECLARE_EXCEPTION       $0x1b
-        DECLARE_EXCEPTION       $0x1c
-        DECLARE_EXCEPTION       $0x1d
-        DECLARE_EXCEPTION       $0x1e
-        DECLARE_EXCEPTION       $0x1f
+arch_isr_tbl:
+        DEFAULT_EXCEPTION       $0x00
+        DEFAULT_EXCEPTION       $0x01
+        DEFAULT_EXCEPTION       $0x02
+        DEFAULT_EXCEPTION       $0x03
+        DEFAULT_EXCEPTION       $0x04
+        DEFAULT_EXCEPTION       $0x05
+        DEFAULT_EXCEPTION       $0x06
+        DEFAULT_EXCEPTION       $0x07
+        DEFAULT_EXCEPTION       $0x08
+        DEFAULT_EXCEPTION       $0x09
+        DEFAULT_EXCEPTION       $0x0a
+        DEFAULT_EXCEPTION       $0x0b
+        DEFAULT_EXCEPTION       $0x0c
+        DEFAULT_EXCEPTION       $0x0d
+        DEFAULT_EXCEPTION       $0x0e
+        DEFAULT_EXCEPTION       $0x0f
+        DEFAULT_EXCEPTION       $0x10
+        DEFAULT_EXCEPTION       $0x11
+        DEFAULT_EXCEPTION       $0x12
+        DEFAULT_EXCEPTION       $0x13
+        DEFAULT_EXCEPTION       $0x14
+        DEFAULT_EXCEPTION       $0x15
+        DEFAULT_EXCEPTION       $0x16
+        DEFAULT_EXCEPTION       $0x17
+        DEFAULT_EXCEPTION       $0x18
+        DEFAULT_EXCEPTION       $0x19
+        DEFAULT_EXCEPTION       $0x1a
+        DEFAULT_EXCEPTION       $0x1b
+        DEFAULT_EXCEPTION       $0x1c
+        DEFAULT_EXCEPTION       $0x1d
+        DEFAULT_EXCEPTION       $0x1e
+        DEFAULT_EXCEPTION       $0x1f
         TIMER_INTERRUPT         $0x20
-        DECLARE_INTERRUPT       $0x21
-        DECLARE_INTERRUPT       $0x22
-        DECLARE_INTERRUPT       $0x23
-        DECLARE_INTERRUPT       $0x24
-        DECLARE_INTERRUPT       $0x25
-        DECLARE_INTERRUPT       $0x26
-        DECLARE_INTERRUPT       $0x27
-        DECLARE_INTERRUPT       $0x28
-        DECLARE_INTERRUPT       $0x29
-        DECLARE_INTERRUPT       $0x2a
-        DECLARE_INTERRUPT       $0x2b
-        DECLARE_INTERRUPT       $0x2c
-        DECLARE_INTERRUPT       $0x2d
-        DECLARE_INTERRUPT       $0x2e
-        DECLARE_INTERRUPT       $0x2f
+        DEFAULT_INTERRUPT       $0x21
+        DEFAULT_INTERRUPT       $0x22
+        DEFAULT_INTERRUPT       $0x23
+        DEFAULT_INTERRUPT       $0x24
+        DEFAULT_INTERRUPT       $0x25
+        DEFAULT_INTERRUPT       $0x26
+        DEFAULT_INTERRUPT       $0x27
+        DEFAULT_INTERRUPT       $0x28
+        DEFAULT_INTERRUPT       $0x29
+        DEFAULT_INTERRUPT       $0x2a
+        DEFAULT_INTERRUPT       $0x2b
+        DEFAULT_INTERRUPT       $0x2c
+        DEFAULT_INTERRUPT       $0x2d
+        DEFAULT_INTERRUPT       $0x2e
+        DEFAULT_INTERRUPT       $0x2f
 
 #
 # Handle function for exceptions(IRQ0~IRQ31).
