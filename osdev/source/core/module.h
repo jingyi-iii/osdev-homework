@@ -1,5 +1,5 @@
-#ifndef MODULE_H
-#define MODULE_H
+#ifndef __MODULE_H__
+#define __MODULE_H__
 
 typedef void (*init_call_t)(void);
 #define module_init(fn) \

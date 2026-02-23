@@ -28,7 +28,7 @@ static void hlt_handler(void) { for (;;) __asm__ volatile ("hlt"); }
 
 isr_t user_isrs[IDT_ENTRIES]= { 0 };
 static idtmeta_t idtmeta = { 0 };
-static spinlock_t irq_lock;
+static spinlock_dev* irq_lock;
 static ATTR_ALIGINED(idesc_t) idesc_t idt[IDT_ENTRIES] = { 0 };
 
 static idesc_t gen_idesc(uint32_t isr, uint16_t sel_code, uint8_t flags)
@@ -66,7 +66,7 @@ void arch_unmask_irq(uint16_t irq_no)
     if (irq_no < ARCH_IRQ_BEGIN || irq_no > ARCH_IRQ_END)
         return;
 
-    spinlock_lock(&irq_lock);
+    irq_lock->lock(irq_lock);
     if (irq_no >= RL_TIMER_IRQ_NO) {
         mask = ~((unsigned char)(1 << (irq_no - INT_VECTOR_IRQ8)));
         port_val = arch_inb(0xa1) & mask;
@@ -76,7 +76,7 @@ void arch_unmask_irq(uint16_t irq_no)
         port_val = arch_inb(0x21) & mask;
         arch_outb(0x21, port_val);
     }
-    spinlock_unlock(&irq_lock);
+    irq_lock->unlock(irq_lock);
 }
 
 void arch_mask_irq(uint16_t irq_no)
@@ -87,7 +87,7 @@ void arch_mask_irq(uint16_t irq_no)
     if (irq_no < ARCH_IRQ_BEGIN || irq_no > ARCH_IRQ_END)
         return;
 
-    spinlock_lock(&irq_lock);
+    irq_lock->lock(irq_lock);
     if (irq_no >= RL_TIMER_IRQ_NO) {
         mask = (unsigned char)(1 << (irq_no - INT_VECTOR_IRQ8));
         port_val = arch_inb(0xa1) | mask;
@@ -97,7 +97,7 @@ void arch_mask_irq(uint16_t irq_no)
         port_val = arch_inb(0x21) | mask;
         arch_outb(0x21, port_val);
     }
-    spinlock_unlock(&irq_lock);
+    irq_lock->unlock(irq_lock);
 }
 
 void arch_set_isr(uint16_t irq_no, void (*handler)())
@@ -105,9 +105,9 @@ void arch_set_isr(uint16_t irq_no, void (*handler)())
     if (irq_no >= IDT_ENTRIES)
         return; 
 
-    spinlock_lock(&irq_lock);
+    irq_lock->lock(irq_lock);
     user_isrs[irq_no] = handler ? handler : hlt_handler;
-    spinlock_unlock(&irq_lock);
+    irq_lock->unlock(irq_lock);
 }
 
 void arch_isr_tbl(void);
@@ -115,7 +115,7 @@ void arch_init_irq(void)
 {
     int i = 0;
 
-    spinlock_init(&irq_lock);
+    spinlock_alloc_dev(&irq_lock);
     arch_cli();
     for (i = 0; i < IDT_ENTRIES; i++) {
         idt[i] = gen_idesc((uint32_t)hlt_handler,

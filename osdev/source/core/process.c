@@ -6,7 +6,7 @@
 #include "lock.h"
 
 extern uint8_t stack_top;
-static spinlock_t lock;
+static spinlock_dev* lock_dev;
 static volatile tss_t tss = {0};
 static volatile process_t proc_tbl[MAX_PROCESS] = {0};
 static volatile uint8_t avail_proc_nr = 0;
@@ -20,10 +20,10 @@ static int tss_init(void)
     uint32_t tss_sel = 0;
     uint16_t flags = 0;
 
-    spinlock_lock(&lock);
+    lock_dev->lock(lock_dev);
     tss_sel = arch_get_sel(TSS);
     if (!tss_sel) {
-        spinlock_unlock(&lock);
+        lock_dev->unlock(lock_dev);
         return -1;
     }
 
@@ -37,7 +37,7 @@ static int tss_init(void)
     tss_desc = arch_gen_desc((uint32_t)&tss, sizeof(tss_t), flags);
     arch_set_desc(TSS, tss_desc);
     arch_reload_tss(tss_sel);
-    spinlock_unlock(&lock);
+    lock_dev->unlock(lock_dev);
 
     return 0;
 }
@@ -57,9 +57,9 @@ int32_t create_proc(uint8_t ring, proc_entry_t entry)
     if (ring > 3)
         return -1;
 
-    spinlock_lock(&lock);
+    lock_dev->lock(lock_dev);
     if ((avail_proc_nr + 1) >= MAX_PROCESS) {
-        spinlock_unlock(&lock);
+        lock_dev->unlock(lock_dev);
         return -1;
     }
 
@@ -99,7 +99,7 @@ int32_t create_proc(uint8_t ring, proc_entry_t entry)
         proc->next = proc_tbl;
     }
 
-    spinlock_unlock(&lock);
+    lock_dev->unlock(lock_dev);
     return proc->pid;
 }
 
@@ -116,11 +116,11 @@ static void schedule(void)
     static uint32_t timeslice = 0;
     uint64_t* ldt_desc = 0;
 
-    spinlock_lock(&lock);
+    lock_dev->lock(lock_dev);
     timeslice++;
     // if (timeslice < 5 || !proc_run || !proc_run->next) {
     if (!proc_run || !proc_run->next) {
-        spinlock_unlock(&lock);
+        lock_dev->unlock(lock_dev);
         return;
     }
     timeslice = 0;
@@ -130,15 +130,15 @@ static void schedule(void)
     // tss.esp0 = (uint32_t)&proc_run->regs + sizeof(regs_t);
     ldt_reload();
 
-    spinlock_unlock(&lock);
+    lock_dev->unlock(lock_dev);
 }
 
 void process_evn_setup(void)
 {
     int32_t i = 0;
 
+    spinlock_alloc_dev(&lock_dev);
     tss_init();
-    spinlock_init(&lock);
     
     for (i = 0; i < MAX_PROCESS * sizeof(process_t); i++)
         *((uint8_t *)proc_tbl + i) = 0;
