@@ -150,12 +150,12 @@ int test_trylock() {
 
     // Trylock when unlocked
     int result = lock->trylock(lock);
-    TEST_ASSERT(result != 0); // Should return non-zero (true)
+    TEST_ASSERT(result == 0); // Should return zero (success)
     TEST_ASSERT(lock->state == 1);
 
     // Trylock when locked
     result = lock->trylock(lock);
-    TEST_ASSERT(result == 0); // Should return 0 (false)
+    TEST_ASSERT(result != 0); // Should return non-zero (fail)
     TEST_ASSERT(lock->state == 1);
 
     // Unlock
@@ -224,7 +224,7 @@ void* thread_trylock_test(void *arg) {
     int local_count = 0;
 
     for (int i = 0; i < data->iterations; i++) {
-        if (data->lock->trylock(data->lock)) {
+        if (!data->lock->trylock(data->lock)) {
             (*data->counter)++;
             local_count++;
             data->lock->unlock(data->lock);
@@ -296,7 +296,7 @@ int test_null_handling() {
 
     // Test function pointers with NULL
     TEST_ASSERT(lock->lock(NULL) == -1); // Should return error
-    TEST_ASSERT(lock->trylock(NULL) == 0); // Should return false
+    TEST_ASSERT(lock->trylock(NULL) == -1); // Should return error
     TEST_ASSERT(lock->unlock(NULL) == -1); // Should return error
 
     TEST_ASSERT(spinlock_free_dev(lock) == 0);

@@ -8,6 +8,9 @@ static spinlock_dev spinlocks[SPIN_LOCK_MAX_COUNT] = {0};
 
 static int lock(spinlock_dev* dev)
 {
+    if (!dev)
+        return -1;
+
     while (__atomic_exchange_n(&dev->state, SPIN_LOCK_LOCKED,
                                __ATOMIC_ACQUIRE) == SPIN_LOCK_LOCKED) {
         __asm__ __volatile__("pause" ::: "memory");
@@ -17,13 +20,19 @@ static int lock(spinlock_dev* dev)
 
 static int trylock(spinlock_dev *dev)
 {
+    if (!dev)
+        return -1;
+
     int expected = SPIN_LOCK_UNLOCKED;
-    return __atomic_compare_exchange_n(&dev->state, &expected, SPIN_LOCK_LOCKED, 
+    return !__atomic_compare_exchange_n(&dev->state, &expected, SPIN_LOCK_LOCKED,
                                        0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
 }
 
 static int unlock(spinlock_dev *dev)
 {
+    if (!dev)
+        return -1;
+
     __atomic_store_n(&dev->state, SPIN_LOCK_UNLOCKED, __ATOMIC_RELEASE);
     return 0;
 }
