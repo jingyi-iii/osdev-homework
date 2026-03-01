@@ -1,7 +1,7 @@
 #include "arch_regs.h"
 #include "arch_protm.h"
 #include "arch_irq.h"
-#include "lock.h"
+#include "lockmgr.h"
 
 #define INT_MASTER_CMD          (0x20)
 #define INT_MASTER_DATA         (0x21)
@@ -115,7 +115,9 @@ void arch_init_irq(void)
 {
     int i = 0;
 
-    spinlock_alloc_dev(&irq_lock);
+    if (SPIN_LOCK_INIT(irq_lock))
+        return;
+        
     arch_cli();
     for (i = 0; i < IDT_ENTRIES; i++) {
         idt[i] = gen_idesc((uint32_t)hlt_handler,

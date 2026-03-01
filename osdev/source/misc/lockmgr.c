@@ -1,4 +1,4 @@
-#include "lock.h"
+#include "lockmgr.h"
 
 #define SPIN_LOCK_UNLOCKED  (0)
 #define SPIN_LOCK_LOCKED    (1)
@@ -65,29 +65,33 @@ static int destroy(spinlock_dev* dev)
     return 0;
 }
 
-int spinlock_alloc_dev(spinlock_dev **out_dev)
+int lockmgr_alloc_dev(lock_type type, void **out_dev)
 {
     int i = 0;
 
     if (!out_dev)
         return -1;
 
-    for (i = 0; i < SPIN_LOCK_MAX_COUNT; i++) {
+    switch (type) {
+    case SPIN_LOCK:
+        for (i = 0; i < SPIN_LOCK_MAX_COUNT; i++) {
         if (spinlocks[i].allocated == 0) {
-            spinlocks[i].allocated = 1;
-            *out_dev = &spinlocks[i];
-            return init(*out_dev);
+            if (!init(&spinlocks[i])) {
+                *out_dev = &spinlocks[i];
+                return 0;
+            }
         }
     }
-
-    *out_dev = 0;
-    return -1;
+    
+    default:
+        return -1;
+    }
 }
 
-int spinlock_free_dev(spinlock_dev *dev)
+void lockmgr_free_dev(lock_type type, void *dev)
 {
     if (!dev)
-        return -1;
-
-    return destroy(dev);
+        return;
+ 
+    destroy((spinlock_dev*)dev);
 }

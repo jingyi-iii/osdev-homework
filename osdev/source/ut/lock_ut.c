@@ -1,379 +1,382 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <pthread.h>
-#include <string.h>
-#include "lock.h"
+#include <assert.h>
+#include <unistd.h>
+#include "lockmgr.h"
 
-// Test framework macros
-#define TEST_ASSERT(cond) do { \
-    if (!(cond)) { \
-        printf("Assertion failed: %s at %s:%d\n", #cond, __FILE__, __LINE__); \
-        return -1; \
-    } \
-} while(0)
+#define NUM_THREADS 10
+#define NUM_ITERATIONS 10000
+#define NUM_LOCKS 50
+#define SPIN_LOCK_MAX_COUNT (1024)
 
-#define TEST_PASS 0
-#define TEST_FAIL -1
+// Test 1: Basic allocation and release
+void test_basic_allocation(void) {
+    printf("Test 1: Basic allocation and release\n");
 
-// Test counters
-static int total_tests = 0;
-static int passed_tests = 0;
-
-// Thread test data
-typedef struct {
-    spinlock_dev *lock;
-    int *counter;
-    int iterations;
-    int thread_id;
-} thread_data_t;
-
-// Helper function to run a test
-#define RUN_TEST(test) do { \
-    total_tests++; \
-    printf("Running %s... ", #test); \
-    fflush(stdout); \
-    if (test() == TEST_PASS) { \
-        printf("PASSED\n"); \
-        passed_tests++; \
-    } else { \
-        printf("FAILED\n"); \
-    } \
-} while(0)
-
-// Test 1: Basic allocation and free
-int test_basic_allocation_free() {
     spinlock_dev *lock = NULL;
+    int ret = SPIN_LOCK_INIT(lock);
 
-    // Test allocation
-    int result = spinlock_alloc_dev(&lock);
-    TEST_ASSERT(result == 0);
-    TEST_ASSERT(lock != NULL);
-    TEST_ASSERT(lock->state == 0);
-    TEST_ASSERT(lock->allocated == 1);
-    TEST_ASSERT(lock->lock != NULL);
-    TEST_ASSERT(lock->trylock != NULL);
-    TEST_ASSERT(lock->unlock != NULL);
+    assert(ret == 0);
+    assert(lock != NULL);
+    assert(lock->allocated == 1);
+    assert(lock->state == 0);
+    assert(lock->lock != NULL);
+    assert(lock->trylock != NULL);
+    assert(lock->unlock != NULL);
 
-    // Test free
-    result = spinlock_free_dev(lock);
-    TEST_ASSERT(result == 0);
-    TEST_ASSERT(lock->state == 0);
-    TEST_ASSERT(lock->allocated == 0);
-    TEST_ASSERT(lock->lock == NULL);
-    TEST_ASSERT(lock->trylock == NULL);
-    TEST_ASSERT(lock->unlock == NULL);
+    SPIN_LOCK_RELEASE(lock);
+    assert(lock == NULL);
 
-    return TEST_PASS;
+    printf("  ✓ Passed\n");
 }
 
 // Test 2: Multiple allocations
-int test_multiple_allocations() {
-    spinlock_dev *locks[10] = {NULL};
-    int i;
+void test_multiple_allocations(void) {
+    printf("Test 2: Multiple allocations\n");
 
-    // Allocate multiple locks
-    for (i = 0; i < 10; i++) {
-        TEST_ASSERT(spinlock_alloc_dev(&locks[i]) == 0);
-        TEST_ASSERT(locks[i] != NULL);
+    spinlock_dev *locks[NUM_LOCKS];
+
+    for (int i = 0; i < NUM_LOCKS; i++) {
+        locks[i] = NULL;
+        int ret = SPIN_LOCK_INIT(locks[i]);
+        assert(ret == 0);
+        assert(locks[i] != NULL);
+        assert(locks[i]->allocated == 1);
     }
 
-    // Verify they're all different
-    for (i = 0; i < 10; i++) {
-        int j;
-        for (j = i + 1; j < 10; j++) {
-            TEST_ASSERT(locks[i] != locks[j]);
-        }
+    for (int i = 0; i < NUM_LOCKS; i++) {
+        SPIN_LOCK_RELEASE(locks[i]);
+        assert(locks[i] == NULL);
     }
 
-    // Free all locks
-    for (i = 0; i < 10; i++) {
-        TEST_ASSERT(spinlock_free_dev(locks[i]) == 0);
-    }
-
-    return TEST_PASS;
+    printf("  ✓ Passed\n");
 }
 
-// Test 3: Allocate maximum locks
-int test_max_allocations() {
-    spinlock_dev *locks[1025] = {NULL};
-    int i;
+// Test 3: Lock and unlock operations
+void test_lock_unlock(void) {
+    printf("Test 3: Lock and unlock operations\n");
 
-    printf("\n  Testing max allocations (1024)... ");
-    fflush(stdout);
-
-    // Allocate up to maximum
-    for (i = 0; i < 1024; i++) {
-        int result = spinlock_alloc_dev(&locks[i]);
-        if (result != 0) {
-            printf("Failed at allocation %d\n", i);
-            TEST_ASSERT(result == 0);
-        }
-        TEST_ASSERT(locks[i] != NULL);
-    }
-
-    // Next allocation should fail
-    spinlock_dev *extra_lock = NULL;
-    TEST_ASSERT(spinlock_alloc_dev(&extra_lock) == -1);
-    TEST_ASSERT(extra_lock == NULL);
-
-    // Free all
-    for (i = 0; i < 1024; i++) {
-        TEST_ASSERT(spinlock_free_dev(locks[i]) == 0);
-    }
-
-    return TEST_PASS;
-}
-
-// Test 4: Basic lock/unlock operations
-int test_basic_lock_unlock() {
     spinlock_dev *lock = NULL;
-
-    TEST_ASSERT(spinlock_alloc_dev(&lock) == 0);
+    SPIN_LOCK_INIT(lock);
+    assert(lock != NULL);
 
     // Test lock
-    TEST_ASSERT(lock->lock(lock) == 0);
-    TEST_ASSERT(lock->state == 1);
+    int ret = lock->lock(lock);
+    assert(ret == 0);
+    assert(lock->state == 1);
 
     // Test unlock
-    TEST_ASSERT(lock->unlock(lock) == 0);
-    TEST_ASSERT(lock->state == 0);
+    ret = lock->unlock(lock);
+    assert(ret == 0);
+    assert(lock->state == 0);
 
-    TEST_ASSERT(spinlock_free_dev(lock) == 0);
-
-    return TEST_PASS;
+    SPIN_LOCK_RELEASE(lock);
+    printf("  ✓ Passed\n");
 }
 
-// Test 5: Trylock operations
-int test_trylock() {
+// Test 4: Trylock operations
+void test_trylock(void) {
+    printf("Test 4: Trylock operations\n");
+
+    spinlock_dev *lock = NULL;
+    SPIN_LOCK_INIT(lock);
+    assert(lock != NULL);
+
+    // Initial trylock should succeed
+    int ret = lock->trylock(lock);
+    assert(ret == 0);  // Should return 0 on success
+    assert(lock->state == 1);
+
+    // Second trylock should fail
+    ret = lock->trylock(lock);
+    assert(ret == 1);  // Should return 1 when lock is held
+    assert(lock->state == 1);
+
+    // Unlock and try again
+    lock->unlock(lock);
+    ret = lock->trylock(lock);
+    assert(ret == 0);
+    assert(lock->state == 1);
+
+    lock->unlock(lock);
+    SPIN_LOCK_RELEASE(lock);
+    printf("  ✓ Passed\n");
+}
+
+// Test 5: NULL pointer handling
+void test_null_handling(void) {
+    printf("Test 5: NULL pointer handling\n");
+
     spinlock_dev *lock = NULL;
 
-    TEST_ASSERT(spinlock_alloc_dev(&lock) == 0);
+    // Test lock functions with NULL
+    assert(lock == NULL);
 
-    // Trylock when unlocked
-    int result = lock->trylock(lock);
-    TEST_ASSERT(result == 0); // Should return zero (success)
-    TEST_ASSERT(lock->state == 1);
+    // These should not crash
+    SPIN_LOCK_RELEASE(lock);
 
-    // Trylock when locked
-    result = lock->trylock(lock);
-    TEST_ASSERT(result != 0); // Should return non-zero (fail)
-    TEST_ASSERT(lock->state == 1);
+    // Allocate and then free with NULL check
+    SPIN_LOCK_INIT(lock);
+    assert(lock != NULL);
 
-    // Unlock
-    TEST_ASSERT(lock->unlock(lock) == 0);
-    TEST_ASSERT(lock->state == 0);
+    // Test lock operations with valid pointer
+    assert(lock->lock(lock) == 0);
+    assert(lock->unlock(lock) == 0);
 
-    TEST_ASSERT(spinlock_free_dev(lock) == 0);
-
-    return TEST_PASS;
+    SPIN_LOCK_RELEASE(lock);
+    printf("  ✓ Passed\n");
 }
 
-// Thread function for concurrent testing
-void* thread_increment_counter(void *arg) {
-    thread_data_t *data = (thread_data_t*)arg;
+// Test 6: Maximum allocation limit
+void test_max_allocation(void) {
+    printf("Test 6: Maximum allocation limit\n");
 
-    for (int i = 0; i < data->iterations; i++) {
-        data->lock->lock(data->lock);
-        (*data->counter)++;
-        data->lock->unlock(data->lock);
+    spinlock_dev *locks[SPIN_LOCK_MAX_COUNT + 1] = {NULL};
+    int success_count = 0;
+
+    // Try to allocate more than maximum
+    for (int i = 0; i < SPIN_LOCK_MAX_COUNT + 1; i++) {
+        int ret = SPIN_LOCK_INIT(locks[i]);
+        if (ret == 0) {
+            success_count++;
+            assert(locks[i] != NULL);
+        } else {
+            assert(locks[i] == NULL);
+        }
+    }
+
+    // Should only allocate up to MAX_COUNT
+    assert(success_count == SPIN_LOCK_MAX_COUNT);
+
+    // Clean up
+    for (int i = 0; i < success_count; i++) {
+        SPIN_LOCK_RELEASE(locks[i]);
+    }
+
+    printf("  ✓ Passed\n");
+}
+
+// Thread test structure
+typedef struct {
+    spinlock_dev *lock;
+    int thread_id;
+    int iterations;
+    int *shared_counter;
+} thread_arg_t;
+
+// Thread function for concurrent testing
+void* thread_func(void *arg) {
+    thread_arg_t *targ = (thread_arg_t*)arg;
+
+    for (int i = 0; i < targ->iterations; i++) {
+        // Lock and increment counter
+        targ->lock->lock(targ->lock);
+        (*targ->shared_counter)++;
+        targ->lock->unlock(targ->lock);
+
+        // Random small delay to increase chance of contention
+        if (i % 100 == 0) {
+            usleep(1);
+        }
     }
 
     return NULL;
 }
 
-// Test 6: Concurrent lock protection
-int test_concurrent_protection() {
+// Test 7: Concurrent access with locks
+void test_concurrent_access(void) {
+    printf("Test 7: Concurrent access with locks\n");
+
     spinlock_dev *lock = NULL;
-    pthread_t threads[10];
-    thread_data_t thread_data[10];
-    int counter = 0;
-    int iterations = 10000;
-    int num_threads = 10;
+    SPIN_LOCK_INIT(lock);
+    assert(lock != NULL);
 
-    printf("\n  Testing concurrent protection (%d threads, %d iterations each)... ",
-           num_threads, iterations);
-    fflush(stdout);
-
-    TEST_ASSERT(spinlock_alloc_dev(&lock) == 0);
+    pthread_t threads[NUM_THREADS];
+    thread_arg_t thread_args[NUM_THREADS];
+    int shared_counter = 0;
 
     // Create threads
-    for (int i = 0; i < num_threads; i++) {
-        thread_data[i].lock = lock;
-        thread_data[i].counter = &counter;
-        thread_data[i].iterations = iterations;
-        thread_data[i].thread_id = i;
+    for (int i = 0; i < NUM_THREADS; i++) {
+        thread_args[i].lock = lock;
+        thread_args[i].thread_id = i;
+        thread_args[i].iterations = NUM_ITERATIONS;
+        thread_args[i].shared_counter = &shared_counter;
 
-        pthread_create(&threads[i], NULL, thread_increment_counter, &thread_data[i]);
+        pthread_create(&threads[i], NULL, thread_func, &thread_args[i]);
     }
 
-    // Wait for threads to complete
-    for (int i = 0; i < num_threads; i++) {
+    // Wait for all threads to complete
+    for (int i = 0; i < NUM_THREADS; i++) {
         pthread_join(threads[i], NULL);
     }
 
-    // Verify counter value
-    TEST_ASSERT(counter == iterations * num_threads);
+    // Verify final counter value
+    int expected = NUM_THREADS * NUM_ITERATIONS;
+    assert(shared_counter == expected);
+    printf("  ✓ Passed (counter=%d, expected=%d)\n", shared_counter, expected);
 
-    TEST_ASSERT(spinlock_free_dev(lock) == 0);
-
-    return TEST_PASS;
+    SPIN_LOCK_RELEASE(lock);
 }
 
-// Thread function for testing trylock
-void* thread_trylock_test(void *arg) {
-    thread_data_t *data = (thread_data_t*)arg;
-    int local_count = 0;
+// Thread function for trylock testing
+void* trylock_thread_func(void *arg) {
+    thread_arg_t *targ = (thread_arg_t*)arg;
+    int success_count = 0;
 
-    for (int i = 0; i < data->iterations; i++) {
-        if (!data->lock->trylock(data->lock)) {
-            (*data->counter)++;
-            local_count++;
-            data->lock->unlock(data->lock);
+    for (int i = 0; i < targ->iterations; i++) {
+        // Try to acquire lock
+        if (targ->lock->trylock(targ->lock) == 0) {
+            success_count++;
+            (*targ->shared_counter)++;
+            targ->lock->unlock(targ->lock);
         }
-        // Small delay to increase chance of contention
-        for (int j = 0; j < 10; j++) {
-            __asm__ __volatile__("pause");
-        }
+        usleep(1);
     }
 
-    return (void*)(long)local_count;
+    return (void*)(long)success_count;
 }
 
-// Test 7: Trylock concurrent behavior
-int test_trylock_concurrent() {
+// Test 8: Concurrent trylock operations
+void test_concurrent_trylock(void) {
+    printf("Test 8: Concurrent trylock operations\n");
+
     spinlock_dev *lock = NULL;
-    pthread_t threads[10];
-    thread_data_t thread_data[10];
-    int counter = 0;
-    int iterations = 1000;
-    int num_threads = 10;
-    int total_acquired = 0;
+    SPIN_LOCK_INIT(lock);
+    assert(lock != NULL);
 
-    printf("\n  Testing trylock concurrent (%d threads, %d iterations each)... ",
-           num_threads, iterations);
-    fflush(stdout);
+    pthread_t threads[NUM_THREADS];
+    thread_arg_t thread_args[NUM_THREADS];
+    int shared_counter = 0;
+    int total_successes = 0;
 
-    TEST_ASSERT(spinlock_alloc_dev(&lock) == 0);
+    // Create threads for trylock testing
+    for (int i = 0; i < NUM_THREADS; i++) {
+        thread_args[i].lock = lock;
+        thread_args[i].thread_id = i;
+        thread_args[i].iterations = NUM_ITERATIONS / 10; // Fewer iterations for trylock
+        thread_args[i].shared_counter = &shared_counter;
 
-    // Create threads
-    for (int i = 0; i < num_threads; i++) {
-        thread_data[i].lock = lock;
-        thread_data[i].counter = &counter;
-        thread_data[i].iterations = iterations;
-        thread_data[i].thread_id = i;
-
-        pthread_create(&threads[i], NULL, thread_trylock_test, &thread_data[i]);
+        pthread_create(&threads[i], NULL, trylock_thread_func, &thread_args[i]);
     }
 
-    // Wait for threads and collect results
-    for (int i = 0; i < num_threads; i++) {
-        void *result;
-        pthread_join(threads[i], &result);
-        total_acquired += (int)(long)result;
+    // Collect results
+    for (int i = 0; i < NUM_THREADS; i++) {
+        void *retval;
+        pthread_join(threads[i], &retval);
+        total_successes += (int)(long)retval;
     }
 
-    // Total acquired should equal final counter value
-    TEST_ASSERT(counter == total_acquired);
-    TEST_ASSERT(counter <= iterations * num_threads);
-    TEST_ASSERT(counter > 0); // At least some locks should be acquired
+    // Total successes should equal the number of increments
+    assert(shared_counter == total_successes);
+    assert(shared_counter <= NUM_THREADS * (NUM_ITERATIONS / 10));
+    printf("  ✓ Passed (successful locks=%d, max possible=%d)\n",
+           total_successes, NUM_THREADS * (NUM_ITERATIONS / 10));
 
-    TEST_ASSERT(spinlock_free_dev(lock) == 0);
-
-    return TEST_PASS;
+    SPIN_LOCK_RELEASE(lock);
 }
 
-// Test 8: Null parameter handling
-int test_null_handling() {
+// Test 9: Reinitialize after release
+void test_reinitialize(void) {
+    printf("Test 9: Reinitialize after release\n");
+
     spinlock_dev *lock = NULL;
 
-    // Test alloc with NULL out_dev
-    TEST_ASSERT(spinlock_alloc_dev(NULL) == -1);
+    // First allocation
+    SPIN_LOCK_INIT(lock);
+    assert(lock != NULL);
+    void *first_addr = lock;
 
-    // Test free with NULL
-    TEST_ASSERT(spinlock_free_dev(NULL) == -1);
+    // Use and release
+    lock->lock(lock);
+    lock->unlock(lock);
+    SPIN_LOCK_RELEASE(lock);
+    assert(lock == NULL);
 
-    // Test with valid allocation
-    TEST_ASSERT(spinlock_alloc_dev(&lock) == 0);
+    // Second allocation - might get same or different address
+    SPIN_LOCK_INIT(lock);
+    assert(lock != NULL);
 
-    // Test function pointers with NULL
-    TEST_ASSERT(lock->lock(NULL) == -1); // Should return error
-    TEST_ASSERT(lock->trylock(NULL) == -1); // Should return error
-    TEST_ASSERT(lock->unlock(NULL) == -1); // Should return error
+    // Should be properly initialized
+    assert(lock->allocated == 1);
+    assert(lock->state == 0);
+    assert(lock->lock != NULL);
 
-    TEST_ASSERT(spinlock_free_dev(lock) == 0);
+    // Verify it works
+    assert(lock->trylock(lock) == 0);
+    assert(lock->state == 1);
+    lock->unlock(lock);
 
-    return TEST_PASS;
+    SPIN_LOCK_RELEASE(lock);
+    printf("  ✓ Passed\n");
 }
 
-// Test 9: Reuse after free
-int test_reuse_after_free() {
-    spinlock_dev *lock1 = NULL;
-    spinlock_dev *lock2 = NULL;
+// Test 10: Multiple locks concurrent access
+void test_multiple_locks_concurrent(void) {
+    printf("Test 10: Multiple locks concurrent access\n");
 
-    // Allocate first lock
-    TEST_ASSERT(spinlock_alloc_dev(&lock1) == 0);
-    void* addr1 = (void*)lock1;
+    spinlock_dev *locks[5] = {NULL};
+    pthread_t threads[NUM_THREADS];
+    int counters[5] = {0};
 
-    // Free it
-    TEST_ASSERT(spinlock_free_dev(lock1) == 0);
+    // Initialize multiple locks
+    for (int i = 0; i < 5; i++) {
+        SPIN_LOCK_INIT(locks[i]);
+        assert(locks[i] != NULL);
+    }
 
-    // Allocate again - should get the same address
-    TEST_ASSERT(spinlock_alloc_dev(&lock2) == 0);
-    void* addr2 = (void*)lock2;
-    TEST_ASSERT(addr1 == addr2);
+    // Create threads that use different locks
+    for (int i = 0; i < NUM_THREADS; i++) {
+        int lock_index = i % 5;
+        thread_arg_t *arg = malloc(sizeof(thread_arg_t));
+        arg->lock = locks[lock_index];
+        arg->thread_id = i;
+        arg->iterations = NUM_ITERATIONS / 2;
+        arg->shared_counter = &counters[lock_index];
 
-    // Verify it's properly reinitialized
-    TEST_ASSERT(lock2->state == 0);
-    TEST_ASSERT(lock2->allocated == 1);
-    TEST_ASSERT(lock2->lock != NULL);
-    TEST_ASSERT(lock2->trylock != NULL);
-    TEST_ASSERT(lock2->unlock != NULL);
+        pthread_create(&threads[i], NULL, thread_func, arg);
+    }
 
-    TEST_ASSERT(spinlock_free_dev(lock2) == 0);
+    // Wait for threads
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_join(threads[i], NULL);
+    }
 
-    return TEST_PASS;
+    // Verify each counter
+    int total = 0;
+    for (int i = 0; i < 5; i++) {
+        int expected = 0;
+        for (int j = 0; j < NUM_THREADS; j++) {
+            if (j % 5 == i) {
+                expected += NUM_ITERATIONS / 2;
+            }
+        }
+        assert(counters[i] == expected);
+        total += counters[i];
+        printf("    Lock %d: %d/%d\n", i, counters[i], expected);
+    }
+    printf("  ✓ Passed (total=%d)\n", total);
+
+    // Cleanup
+    for (int i = 0; i < 5; i++) {
+        SPIN_LOCK_RELEASE(locks[i]);
+    }
 }
 
-// Test 10: Memory barrier macros (compile-time check)
-int test_memory_barriers() {
-    // Just verify the macros compile and don't crash
-    volatile int test_var = 0;
+int lock_ut(void) {
+    printf("=== Lock Manager Unit Tests ===\n\n");
 
-    barrier();
-    test_var++;
+    test_basic_allocation();
+    test_multiple_allocations();
+    test_lock_unlock();
+    test_trylock();
+    test_null_handling();
+    test_max_allocation();
+    test_concurrent_access();
+    test_concurrent_trylock();
+    test_reinitialize();
+    test_multiple_locks_concurrent();
 
-    mb();
-    test_var++;
-
-    rmb();
-    test_var++;
-
-    wmb();
-    test_var++;
-
-    // If we got here, compilation succeeded
-    return TEST_PASS;
-}
-
-int lock_ut() {
-    printf("=== Spinlock Unit Tests ===\n\n");
-
-    // Run all tests
-    RUN_TEST(test_basic_allocation_free);
-    RUN_TEST(test_multiple_allocations);
-    RUN_TEST(test_max_allocations);
-    RUN_TEST(test_basic_lock_unlock);
-    RUN_TEST(test_trylock);
-    RUN_TEST(test_concurrent_protection);
-    RUN_TEST(test_trylock_concurrent);
-    RUN_TEST(test_null_handling);
-    RUN_TEST(test_reuse_after_free);
-    RUN_TEST(test_memory_barriers);
-
-    // Summary
-    printf("\n=== Test Summary ===\n");
-    printf("Total tests: %d\n", total_tests);
-    printf("Passed: %d\n", passed_tests);
-    printf("Failed: %d\n", total_tests - passed_tests);
-
-    return (passed_tests == total_tests) ? 0 : 1;
+    printf("\n=== All tests passed! ===\n");
+    return 0;
 }

@@ -1,5 +1,5 @@
 #include "heap.h"
-#include "lock.h"
+#include "lockmgr.h"
 #include "module.h"
 
 #define HEAP_TOTAL_SIZE         (1024 * 1024 * 10)
@@ -31,7 +31,7 @@ static inline void memset(void *dest, uint8_t data, uint32_t size)
 
 static void kheap_init(void)
 {
-    if (spinlock_alloc_dev(&heappool.lock_dev))
+    if (SPIN_LOCK_INIT(heappool.lock_dev))
         return;
 
     heappool.lock_dev->lock(heappool.lock_dev);

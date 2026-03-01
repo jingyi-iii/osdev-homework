@@ -3,7 +3,7 @@
 #include "arch_protm.h"
 #include "arch_irq.h"
 #include "module.h"
-#include "lock.h"
+#include "lockmgr.h"
 
 extern uint8_t stack_top;
 static spinlock_dev* lock_dev;
@@ -137,7 +137,8 @@ void process_evn_setup(void)
 {
     int32_t i = 0;
 
-    spinlock_alloc_dev(&lock_dev);
+    if (SPIN_LOCK_INIT(lock_dev))
+        return;
     tss_init();
     
     for (i = 0; i < MAX_PROCESS * sizeof(process_t); i++)
