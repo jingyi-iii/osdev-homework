@@ -1,10 +1,10 @@
+#include "kbmgr.h"
 #include "arch_irq.h"
 #include "arch_regs.h"
 #include "arch_serial.h"
 #include "module.h"
-#include "keyboard.h"
 
-unsigned int keymap[NR_SCAN_CODES * MAP_COLS] = {
+const unsigned int keymap[NR_SCAN_CODES * MAP_COLS] = {
 /* scan-code			!Shift		Shift		E0 XX	*/
 /* ==================================================================== */
 /* 0x00 - none		*/	0,		    0,		    0,
@@ -138,51 +138,23 @@ unsigned int keymap[NR_SCAN_CODES * MAP_COLS] = {
 };
 
 extern "C" {
-void keyboard_handler(void)
-{
-    NSKeyBoard::KeyBoardListener::GetInstance().OnReceive(arch_inb(0x60));
 
-    auto key = NSKeyBoard::KeyBoardListener::GetInstance().GetOneKey();
-    if (key)
-        arch_serial_put(key);
+static void keyboard_handler(void)
+{
+    KBMgr::GetInstance()->OnReceive(arch_inb(0x60));
+
+    // auto key = KBMgr::GetInstance()->GetOneKey();
+    // if (key) {
+    //     arch_serial_put(key);
+    // }
 }
 
 static void keyboard_init(void)
 {
-    NSKeyBoard::KeyBoardListener::GetInstance().Start();
+    KBMgr::GetInstance()->Start();
 }
 
 module_init(keyboard_init);
-}
-
-namespace NSKeyBoard {
-void KeyBoardListener::OnReceive(uint8_t code)
-{
-    auto key = mDecoder.Parse(code);
-    if (key)
-        mKbuf.Add(key);
-}
-
-void KeyBoardListener::Start(void)
-{
-    mKbuf.Reset();
-
-    arch_set_isr(KEYBOARD_IRQ_NO, keyboard_handler);
-    arch_unmask_irq(KEYBOARD_IRQ_NO);
-}
-
-void KeyBoardListener::Stop(void)
-{
-    arch_set_isr(KEYBOARD_IRQ_NO, 0);
-    arch_mask_irq(KEYBOARD_IRQ_NO);
-}
-
-uint8_t KeyBoardListener::GetOneKey(void)
-{
-    if (mKbuf.IsEmpty())
-        return 0;
-        
-    return mKbuf.Pop();
 }
 
 uint8_t KDecoder::Parse(uint8_t code)
@@ -238,7 +210,6 @@ uint8_t KDecoder::Parse(uint8_t code)
     return key;
 }
 
-
 void KBuf::Reset(void)
 {
     this->memset(mBuffer, 0, sizeof(mBuffer));
@@ -288,5 +259,113 @@ uint32_t KBuf::GetCount() const
 {
     return mCount;
 }
+
+KBMgr::KBMgr(void)
+{
+    SPIN_LOCK_INIT(mLock);
+    mIoDevs = 0;
 }
 
+void KBMgr::OnReceive(uint8_t code)
+{
+    auto key = mDecoder.Parse(code);
+    if (key)
+        mKbuf.Add(key);
+
+    auto key2 = GetOneKey();
+    if (key2) {
+        iodev* dev = mIoDevs;
+        arch_serial_put('1');
+        while (dev) {
+            arch_serial_put('2');
+            if (dev->data_cb) {
+                arch_serial_put('3');
+                dev->data_cb(dev, &key2, 1);
+            }
+            dev = dev->next;
+        }
+
+        arch_serial_put(key2);
+    }
+}
+
+void KBMgr::Start(void)
+{
+    mKbuf.Reset();
+
+    arch_set_isr(KEYBOARD_IRQ_NO, keyboard_handler);
+    arch_unmask_irq(KEYBOARD_IRQ_NO);
+}
+
+void KBMgr::Stop(void)
+{
+    arch_set_isr(KEYBOARD_IRQ_NO, 0);
+    arch_mask_irq(KEYBOARD_IRQ_NO);
+}
+
+uint8_t KBMgr::GetOneKey(void)
+{
+    if (mKbuf.IsEmpty())
+        return 0;
+        
+    return mKbuf.Pop();
+}
+
+int KBMgr::AddDevice(iodev* dev)
+{
+    if (!dev)
+        return -1;
+
+    mLock->lock(mLock);
+
+    if (!mIoDevs) {
+        mIoDevs = dev;
+    } else {
+        iodev* tail = mIoDevs;
+        while (tail->next)
+            tail = tail->next;
+        tail->next = dev;
+        dev->next = 0;
+    }
+
+    mLock->unlock(mLock);
+    return 0;
+}
+
+int KBMgr::Initialize(void){ return 0; }
+int KBMgr::Read(char* buf, size_t size){ return 0; }
+int KBMgr::Write(const char* buf, size_t size){ return 0; }
+int KBMgr::Shutdown(void){ return 0; }
+
+extern "C" {
+
+static int dev_init(struct iodev* dev) { return 0; }
+static int dev_read(struct iodev* dev, char* buf, size_t size) { return 0; }
+static int dev_write(struct iodev* dev, const char* buf, size_t size) { return 0; }
+static int dev_shutdown(struct iodev* dev) { return 0; }
+
+int kbdev_init(iodev **out_dev, iodev_cb cb)
+{
+    if (!out_dev)
+        return -1;
+
+    iodev* dev = 0;
+    int ret = 0;
+
+    ret = io_alloc_dev("temp_dev", KBMgr::GetInstance(), out_dev);
+    if (ret != 0)
+        return ret;
+    
+    dev = *out_dev;
+    dev->init = dev_init;
+    dev->read = dev_read;
+    dev->write = dev_write;
+    dev->shutdown = dev_shutdown;
+    dev->data_cb = cb;
+
+    KBMgr::GetInstance()->AddDevice(dev);
+    
+    return 0;
+}
+
+}

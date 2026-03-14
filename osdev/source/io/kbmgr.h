@@ -1,5 +1,18 @@
-#ifndef KEYBOARD_H
-#define KEYBOARD_H
+#ifndef __KBMGR_H__
+#define __KBMGR_H__
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include "iodev.h"
+#include "lockmgr.h"
+
+int kbdev_init(iodev **out_dev, iodev_cb cb);
+
+#ifdef __cplusplus
+}
+#endif
 
 /************************************************************************/
 /*                          Macros Declaration                          */
@@ -104,9 +117,6 @@
 #define PAD_MID         PAD_5                   /* Middle key   */
 #define PAD_DEL         PAD_DOT                 /* Del          */
 
-extern unsigned int keymap[NR_SCAN_CODES * MAP_COLS];
-
-namespace NSKeyBoard {
 class KDecoder {
 public:
     uint8_t Parse(uint8_t code);
@@ -144,27 +154,33 @@ public:
     uint32_t GetCount(void) const;
 };
 
-class KeyBoardListener
-{
+class KBMgr {
+private:
+    KBMgr(void);
+    ~KBMgr(void) = default;
+
+    KDecoder mDecoder;
+    KBuf mKbuf;
+    iodev* mIoDevs;
+    spinlock_dev* mLock;
+    
 public:
-    static KeyBoardListener& GetInstance(void)
+    static KBMgr* GetInstance(void)
     {
-        static KeyBoardListener inst;
-        return inst;
+        static KBMgr inst;
+        return &inst;
     }
+
+    int Initialize(void);
+    int Read(char* buf, size_t size);
+    int Write(const char* buf, size_t size);
+    int Shutdown(void);
+    int AddDevice(iodev* dev);
 
     void Start(void);
     void Stop(void);
     uint8_t GetOneKey(void);
     void OnReceive(uint8_t chr);
-    ~KeyBoardListener(void) = default;
-
-private:
-    KeyBoardListener(void) = default;
-
-    KDecoder mDecoder;
-    KBuf mKbuf;
 };
-}
 
 #endif

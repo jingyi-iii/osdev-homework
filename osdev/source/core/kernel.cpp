@@ -1,6 +1,9 @@
 #include "terminal.h"
 #include "module.h"
 #include "process.h"
+#include "logmgr.h"
+#include "kbmgr.h"
+#include "arch_serial.h"
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -12,10 +15,28 @@
 #error "This tutorial needs to be compiled with a ix86-elf compiler"
 #endif
 
+
+iodev* gdev = 0;
+int kb_read(struct iodev *dev, void* data, size_t size)
+{
+    arch_serial_put(*((char*)data));
+    return 0;
+}
+
 void timer_handler(void)
 {
     const char* ptr_msg = "Timer interrupt triggered modification: \0";
     uint16_t* ptr_gbuf = (uint16_t*)0xb8000;
+
+    iodev* dev = 0;
+    logdev_init(&dev);
+
+    dev->write(dev, "log_dev ok\n", 11);
+    gdev = dev;
+
+    iodev* kbdev = 0;
+    kbdev_init(&kbdev, kb_read);
+    kbdev->data_cb = kb_read;
 
     for ( ;; ) {
         while (*ptr_msg) {

@@ -1,102 +1,35 @@
-// #include "temp_iodev.h"
+#include "temp_iodev.h"
 
-// class KeyboardDevice {
-// private:
-//     const char* name;
+int TempDevice::Initialize(void){ return 0; }
+int TempDevice::Read(char* buf, size_t size){ return 0; }
+int TempDevice::Write(const char* buf, size_t size){ return 0; }
+int TempDevice::Shutdown(void){ return 0; }
 
-// public:
-//     KeyboardDevice(const char* devname) : name(devname)
-//     {
+extern "C" {
 
-//     }
+static int dev_init(struct iodev* dev) { return 0; }
+static int dev_read(struct iodev* dev, char* buf, size_t size) { return 0; }
+static int dev_write(struct iodev* dev, const char* buf, size_t size) { return 0; }
+static int dev_shutdown(struct iodev* dev) { return 0; }
 
-//     ~KeyboardDevice()
-//     {
+int tmpdev_init(iodev **out_dev)
+{
+    if (!out_dev)
+        return -1;
 
-//     }
+    iodev* dev = *out_dev;
+    int ret = 0;
+
+    ret = io_alloc_dev("temp_dev", TempDevice::GetInstance(), out_dev);
+    if (ret != 0)
+        return ret;
     
-//     int init(void)
-//     {
-//         return 0;
-//     }
+    dev->init = dev_init;
+    dev->read = dev_read;
+    dev->write = dev_write;
+    dev->shutdown = dev_shutdown;
     
-//     int read(uint8_t* buf, size_t size)
-//     {
-//         return 0;
-//     }
-    
-//     int write(const uint8_t* buf, size_t size)
-//     {
-//         return 0;
-//     }
-    
-//     int shutdown()
-//     {
-//         return 0;
-//     }
-// };
+    return 0;
+}
 
-// // C-style function implementations
-// extern "C" {
-
-// static int keyboard_init(struct iodev* dev) {
-//     if (!dev || !dev->context)
-//         return -1;
-
-//     KeyboardDevice* kbd = static_cast<KeyboardDevice*>(dev->context);
-//     return kbd->init();
-// }
-
-// static int keyboard_read(struct iodev* dev, uint8_t* buf, size_t size) {
-//     if (!dev || !dev->context)
-//         return -1;
-
-//     KeyboardDevice* kbd = static_cast<KeyboardDevice*>(dev->context);
-//     return kbd->read(buf, size);
-// }
-
-// static int keyboard_write(struct iodev* dev, const uint8_t* buf, size_t size) {
-//     if (!dev || !dev->context)
-//         return -1;
-
-//     KeyboardDevice* kbd = static_cast<KeyboardDevice*>(dev->context);
-//     return kbd->write(buf, size);
-// }
-
-// static int keyboard_shutdown(struct iodev* dev) {
-//     if (!dev || !dev->context)
-//         return -1;
-
-//     KeyboardDevice* kbd = static_cast<KeyboardDevice*>(dev->context);
-//     int ret = kbd->shutdown();
-//     delete kbd;  // Clean up C++ object
-//     dev->context = nullptr;
-
-//     return ret;
-// }
-
-// int keyboard_init(iodev **out_dev)
-// {
-//     if (!out_dev) return -1;
-    
-//     // Create C++ device object
-//     KeyboardDevice* kbd = new KeyboardDevice("keyboard0");
-    
-//     // Allocate C iodev structure
-//     int ret = io_alloc_dev("keyboard", kbd, out_dev);
-//     if (ret != 0) {
-//         delete kbd;
-//         return ret;
-//     }
-    
-//     // Set function pointers
-//     iodev* dev = *out_dev;
-//     dev->init = keyboard_init;
-//     dev->read = keyboard_read;
-//     dev->write = keyboard_write;
-//     dev->shutdown = keyboard_shutdown;
-    
-//     return 0;
-// }
-
-// } // extern "C"
+}

@@ -1,17 +1,35 @@
-// #ifndef __TEMP_IODEV_H__
-// #define __TEMP_IODEV_H__
+#ifndef __TEMP_IODEV_H__
+#define __TEMP_IODEV_H__
 
-// #include "iodev.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-// #ifdef __cplusplus
-// extern "C" {
-// #endif
+#include "iodev.h"
 
-// // Factory function for creating keyboard device
-// int keyboard_init(iodev **out_dev);
+int tmpdev_init(iodev **out_dev);
 
-// #ifdef __cplusplus
-// }
-// #endif
+#ifdef __cplusplus
+}
+#endif
 
-// #endif
+class TempDevice {
+private:
+    TempDevice(void) = default;
+    ~TempDevice(void) = default;
+    
+public:
+    static TempDevice* GetInstance(void)
+    {
+        static TempDevice inst;
+        return &inst;
+    }
+
+    int Initialize(void);
+    int Read(char* buf, size_t size);
+    int Write(const char* buf, size_t size);
+    int Shutdown(void);
+};
+
+
+#endif
