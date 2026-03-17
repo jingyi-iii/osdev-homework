@@ -275,17 +275,12 @@ void KBMgr::OnReceive(uint8_t code)
     auto key2 = GetOneKey();
     if (key2) {
         iodev* dev = mIoDevs;
-        arch_serial_put('1');
         while (dev) {
-            arch_serial_put('2');
             if (dev->data_cb) {
-                arch_serial_put('3');
                 dev->data_cb(dev, &key2, 1);
             }
             dev = dev->next;
         }
-
-        arch_serial_put(key2);
     }
 }
 
@@ -318,6 +313,7 @@ int KBMgr::AddDevice(iodev* dev)
 
     mLock->lock(mLock);
 
+    dev->name = "keyboard_dev";
     if (!mIoDevs) {
         mIoDevs = dev;
     } else {

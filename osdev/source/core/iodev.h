@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-typedef int (*iodev_cb)(struct iodev *dev, void* data, size_t size);
+typedef void (*iodev_cb)(struct iodev *dev, void* data, size_t size);
 
 typedef struct iodev {
     const char *name;
@@ -20,7 +20,7 @@ typedef struct iodev {
     int (*shutdown)(struct iodev *dev);
 
     // Callback for data reception (if implemeted by user)
-    int (*data_cb)(struct iodev *dev, void* data, size_t size);
+    iodev_cb data_cb;
 } iodev;
 
 int io_alloc_dev(const char *name, void *context, iodev **out_dev);

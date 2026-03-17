@@ -65,7 +65,8 @@ run_debug: $(TARGET_BIN)
 	qemu-system-i386 -s -S -kernel $(TARGET_BIN) -serial file:serial.log
 
 clean:
-	@rm -rf $(OUT_DIR) 
+	@rm -rf $(OUT_DIR)
+	@rm -rf *.log
 
 .PHONY: all env run clean
 

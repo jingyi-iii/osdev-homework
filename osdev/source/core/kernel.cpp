@@ -15,12 +15,9 @@
 #error "This tutorial needs to be compiled with a ix86-elf compiler"
 #endif
 
-
-iodev* gdev = 0;
-int kb_read(struct iodev *dev, void* data, size_t size)
+void kb_read(struct iodev *dev, void* data, size_t size)
 {
     arch_serial_put(*((char*)data));
-    return 0;
 }
 
 void timer_handler(void)
@@ -32,11 +29,11 @@ void timer_handler(void)
     logdev_init(&dev);
 
     dev->write(dev, "log_dev ok\n", 11);
-    gdev = dev;
 
     iodev* kbdev = 0;
     kbdev_init(&kbdev, kb_read);
-    kbdev->data_cb = kb_read;
+
+    dev->write(dev, kbdev->name, 11);
 
     for ( ;; ) {
         while (*ptr_msg) {
