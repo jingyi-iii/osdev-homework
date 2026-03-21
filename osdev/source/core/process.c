@@ -111,7 +111,7 @@ inline void memcpy(void *dest, const void *src, uint32_t size)
         *((uint8_t *)dest + i) = *((uint8_t *)src + i);
 }
 
-static void schedule(void)
+static void schedule(struct irqdev* dev)
 {
     static uint32_t timeslice = 0;
     uint64_t* ldt_desc = 0;
@@ -147,7 +147,7 @@ void process_evn_setup(void)
     for (i = 0; i < MAX_PROCESS; i++)
         proc_tbl[i].pid = -1;
 
-    irqdev_init(&pcb_irqdev, TIMER_IRQ_NO, schedule);
+    irqdev_init(&pcb_irqdev, "tmr", TIMER_IRQ_NO, schedule);
     if (pcb_irqdev) {
         pcb_irqdev->unmask(pcb_irqdev);
     }

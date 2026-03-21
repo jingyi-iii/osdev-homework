@@ -160,7 +160,13 @@ esr:
 #
 .align  32
 isr:
+        pushl   %esi
+        call    get_dev_by_irq_no
+        addl    $4, %esp
+
+        pushl   %eax
         call    *user_isrs(, %esi, 4)
+        addl    $4, %esp
 
         cmpl    $0x28,          %esi
         jl      .master

@@ -43,7 +43,9 @@ enum arch_irq_no {
 extern "C" {
 #endif
 void arch_init_irq(void);
-int irqdev_init(irqdev **out_dev, uint32_t irq_nr, irq_handler handler);
+struct irqdev* get_dev_by_irq_no(uint32_t irq_nr);
+int irqdev_init(irqdev **out_dev, const char* name,
+    uint32_t irq_nr, irq_handler handler);
 #ifdef __cplusplus
 }
 #endif

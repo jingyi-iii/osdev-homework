@@ -25,6 +25,7 @@
 static void hlt_handler(void) { for (;;) __asm__ volatile ("hlt"); }
 
 irq_handler user_isrs[IDT_ENTRIES]= { 0 };
+irqdev* irqdevs[IDT_ENTRIES] = {0};
 static idtmeta_t idtmeta = { 0 };
 static spinlock_dev* irq_lock;
 static ATTR_ALIGINED(idesc_t) idesc_t idt[IDT_ENTRIES] = { 0 };
@@ -156,21 +157,28 @@ static int irq_dev_unmask(struct irqdev* dev)
     return 0;
 }
 
-int irqdev_init(irqdev **out_dev, uint32_t irq_nr, irq_handler handler)
+struct irqdev* get_dev_by_irq_no(uint32_t irq_nr)
 {
-    if (!out_dev)
+    return irqdevs[irq_nr];
+}
+
+int irqdev_init(irqdev **out_dev, const char* name, uint32_t irq_nr, irq_handler handler)
+{
+    if (!out_dev || irq_nr >= IDT_ENTRIES)
         return -1;
 
     irqdev* dev = 0;
     int ret = 0;
 
-    ret = irq_alloc_dev(irq_nr, "irq_dev", 0, handler, out_dev);
+    ret = irq_alloc_dev(irq_nr, name, 0, handler, out_dev);
     if (ret != 0)
         return ret;
     
     dev = *out_dev;
     dev->mask = irq_dev_mask;
     dev->unmask = irq_dev_unmask;
+
+    irqdevs[irq_nr] = dev;
 
     return 0;
 }

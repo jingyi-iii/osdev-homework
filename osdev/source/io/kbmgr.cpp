@@ -138,14 +138,19 @@ const unsigned int keymap[NR_SCAN_CODES * MAP_COLS] = {
 
 extern "C" {
 
-static void keyboard_handler(void)
+static void keyboard_handler(struct irqdev* dev)
 {
-    KBMgr::GetInstance()->OnReceive(arch_inb(0x60));
+    if (KBMgr::GetInstance()->mLogDev) {
+        KBMgr::GetInstance()->mLogDev->write(
+            KBMgr::GetInstance()->mLogDev, "\nhello\n", 7);
 
-    // auto key = KBMgr::GetInstance()->GetOneKey();
-    // if (key) {
-    //     arch_serial_put(key);
-    // }
+        if (dev)
+            KBMgr::GetInstance()->mLogDev->write(
+                KBMgr::GetInstance()->mLogDev, dev->name, 3);
+    }
+
+
+    KBMgr::GetInstance()->OnReceive(arch_inb(0x60));
 }
 
 static void keyboard_init(void)
@@ -265,7 +270,8 @@ KBMgr::KBMgr(void)
     mIoDevs = 0;
     mIrqDev = 0;
 
-    irqdev_init(&mIrqDev, KEYBOARD_IRQ_NO, keyboard_handler);
+    irqdev_init(&mIrqDev, "kbd", KEYBOARD_IRQ_NO, keyboard_handler);
+    logdev_init(&mLogDev);
 }
 
 void KBMgr::OnReceive(uint8_t code)
@@ -290,18 +296,12 @@ void KBMgr::Start(void)
 {
     mKbuf.Reset();
 
-    // arch_set_isr(KEYBOARD_IRQ_NO, keyboard_handler);
-    // arch_unmask_irq(KEYBOARD_IRQ_NO);
-
     if (mIrqDev)
         mIrqDev->unmask(mIrqDev);
 }
 
 void KBMgr::Stop(void)
 {
-    // arch_set_isr(KEYBOARD_IRQ_NO, 0);
-    // arch_mask_irq(KEYBOARD_IRQ_NO);
-
     if (mIrqDev)
         mIrqDev->mask(mIrqDev);
 }

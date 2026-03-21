@@ -9,14 +9,14 @@ typedef struct irqdev {
     void *context;
     uint32_t irq_no;
     int enabled;
-    void (*handler)(void);
+    void (*handler)(struct irqdev* dev);
     struct irqdev *next;
 
     int (*mask)(struct irqdev* dev);
     int (*unmask)(struct irqdev* dev);
 } irqdev;
 
-typedef void (*irq_handler)(void);
+typedef void (*irq_handler)(struct irqdev* dev);
 
 typedef struct irqline {
     irqdev *devs;
