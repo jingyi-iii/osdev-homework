@@ -2,6 +2,7 @@
 #define ARCH_PROTECT_MODE
 
 #include "arch_regs.h"
+#include "compiler.h"
 
 enum arch_seltype {
     SELTYPE_START = 1,

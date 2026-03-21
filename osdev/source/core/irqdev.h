@@ -4,29 +4,31 @@
 #include <stdint.h>
 #include <stddef.h>
 
-typedef void (*irq_handler)(struct irqdev *dev);
-
 typedef struct irqdev {
     const char *name;
     void *context;
     uint32_t irq_no;
     int enabled;
-    irq_handler handler;
+    void (*handler)(void);
     struct irqdev *next;
+
+    int (*mask)(struct irqdev* dev);
+    int (*unmask)(struct irqdev* dev);
 } irqdev;
+
+typedef void (*irq_handler)(void);
 
 typedef struct irqline {
     irqdev *devs;
-    uint32_t dev_count;
+    uint32_t dev_cnt;
     int enabled;
+
+    int (*mask)(struct irqline* dev);
+    int (*unmask)(struct irqline* dev);
 } irqline;
 
 int irq_alloc_dev(uint32_t irq_no, const char *name,
     void *context, irq_handler handler, irqdev **out_dev);
 int irq_free_dev(irqdev *dev);
-int irq_mask_dev(irqdev *dev);
-int irq_unmask_dev(irqdev *dev);
-int irq_mask_line(uint32_t irq_no);
-int irq_unmask_line(uint32_t irq_no);
 
 #endif

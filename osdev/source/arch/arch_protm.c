@@ -6,7 +6,7 @@ static uint16_t segsels[GDT_MAX_COUNT] = { 0 };
 static struct {
     uint16_t limit;
     uint32_t base;
-} __attribute__((packed)) gdtmeta = { 0 };
+} ATTR_PACKED gdtmeta = { 0 };
 
 #define GENMASK32(l, h) (((uint32_t)~0U >> (31 - (h))) & ((uint32_t)~0U << (l)))
 #define GENMASK64(l, h) (((uint64_t)~0ULL >> (63 - (h))) & ((uint64_t)~0ULL << (l)))

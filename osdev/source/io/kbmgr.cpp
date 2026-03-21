@@ -1,7 +1,6 @@
 #include "kbmgr.h"
 #include "arch_irq.h"
 #include "arch_regs.h"
-#include "arch_serial.h"
 #include "module.h"
 
 const unsigned int keymap[NR_SCAN_CODES * MAP_COLS] = {
@@ -264,6 +263,9 @@ KBMgr::KBMgr(void)
 {
     SPIN_LOCK_INIT(mLock);
     mIoDevs = 0;
+    mIrqDev = 0;
+
+    irqdev_init(&mIrqDev, KEYBOARD_IRQ_NO, keyboard_handler);
 }
 
 void KBMgr::OnReceive(uint8_t code)
@@ -288,14 +290,20 @@ void KBMgr::Start(void)
 {
     mKbuf.Reset();
 
-    arch_set_isr(KEYBOARD_IRQ_NO, keyboard_handler);
-    arch_unmask_irq(KEYBOARD_IRQ_NO);
+    // arch_set_isr(KEYBOARD_IRQ_NO, keyboard_handler);
+    // arch_unmask_irq(KEYBOARD_IRQ_NO);
+
+    if (mIrqDev)
+        mIrqDev->unmask(mIrqDev);
 }
 
 void KBMgr::Stop(void)
 {
-    arch_set_isr(KEYBOARD_IRQ_NO, 0);
-    arch_mask_irq(KEYBOARD_IRQ_NO);
+    // arch_set_isr(KEYBOARD_IRQ_NO, 0);
+    // arch_mask_irq(KEYBOARD_IRQ_NO);
+
+    if (mIrqDev)
+        mIrqDev->mask(mIrqDev);
 }
 
 uint8_t KBMgr::GetOneKey(void)

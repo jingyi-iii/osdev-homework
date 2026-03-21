@@ -133,6 +133,7 @@ static void schedule(void)
     lock_dev->unlock(lock_dev);
 }
 
+static irqdev* pcb_irqdev = 0;
 void process_evn_setup(void)
 {
     int32_t i = 0;
@@ -146,8 +147,10 @@ void process_evn_setup(void)
     for (i = 0; i < MAX_PROCESS; i++)
         proc_tbl[i].pid = -1;
 
-    arch_set_isr(TIMER_IRQ_NO, schedule);
-    arch_unmask_irq(TIMER_IRQ_NO);
+    irqdev_init(&pcb_irqdev, TIMER_IRQ_NO, schedule);
+    if (pcb_irqdev) {
+        pcb_irqdev->unmask(pcb_irqdev);
+    }
 }
 
 module_init(process_evn_setup);

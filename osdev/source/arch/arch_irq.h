@@ -2,6 +2,8 @@
 #define ARCH_INTERRUPT_H
 
 #include <stdint.h>
+#include "compiler.h"
+#include "irqdev.h"
 
 typedef struct {
     uint16_t isr_low;
@@ -9,12 +11,12 @@ typedef struct {
     uint8_t  reserved;
     uint8_t  attrs;
     uint16_t isr_high;
-} __attribute__((packed)) idesc_t;
+} ATTR_PACKED idesc_t;
 
 typedef struct {
     uint16_t limit;
     uint32_t base;
-} __attribute__((packed)) idtmeta_t;
+} ATTR_PACKED idtmeta_t;
 
 enum arch_irq_no {
     ARCH_IRQ_BEGIN  = 0x20,
@@ -41,9 +43,7 @@ enum arch_irq_no {
 extern "C" {
 #endif
 void arch_init_irq(void);
-void arch_unmask_irq(uint16_t irq_no);
-void arch_mask_irq(uint16_t irq_no);
-void arch_set_isr(uint16_t irq_no, void (*handler)());
+int irqdev_init(irqdev **out_dev, uint32_t irq_nr, irq_handler handler);
 #ifdef __cplusplus
 }
 #endif

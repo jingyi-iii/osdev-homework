@@ -3,7 +3,6 @@
 #include "process.h"
 #include "logmgr.h"
 #include "kbmgr.h"
-#include "arch_serial.h"
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -15,9 +14,12 @@
 #error "This tutorial needs to be compiled with a ix86-elf compiler"
 #endif
 
+iodev* gdev = 0;
 void kb_read(struct iodev *dev, void* data, size_t size)
 {
-    arch_serial_put(*((char*)data));
+    if (gdev) {
+        gdev->write(gdev, (const char*)data, size);
+    }
 }
 
 void timer_handler(void)
@@ -27,6 +29,7 @@ void timer_handler(void)
 
     iodev* dev = 0;
     logdev_init(&dev);
+    gdev = dev;
 
     dev->write(dev, "log_dev ok\n", 11);
 

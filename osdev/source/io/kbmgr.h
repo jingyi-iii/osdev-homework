@@ -7,6 +7,7 @@ extern "C" {
 
 #include "iodev.h"
 #include "lockmgr.h"
+#include "irqdev.h"
 
 int kbdev_init(iodev **out_dev, iodev_cb cb);
 
@@ -163,6 +164,7 @@ private:
     KBuf mKbuf;
     iodev* mIoDevs;
     spinlock_dev* mLock;
+    irqdev* mIrqDev;
     
 public:
     static KBMgr* GetInstance(void)

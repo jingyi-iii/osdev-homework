@@ -2,6 +2,7 @@
 #include "arch_protm.h"
 #include "arch_irq.h"
 #include "lockmgr.h"
+#include "privilege.h"
 
 #define INT_MASTER_CMD          (0x20)
 #define INT_MASTER_DATA         (0x21)
@@ -20,13 +21,10 @@
 #define NUM_EXCEPTIONS          (32)
 #define NUM_INTERRUPTS          (16)
 
-#define ATTR_ALIGINED(T)    \
-    __attribute__((aligned(sizeof(T))))
-typedef void (*isr_t)(void);
 
 static void hlt_handler(void) { for (;;) __asm__ volatile ("hlt"); }
 
-isr_t user_isrs[IDT_ENTRIES]= { 0 };
+irq_handler user_isrs[IDT_ENTRIES]= { 0 };
 static idtmeta_t idtmeta = { 0 };
 static spinlock_dev* irq_lock;
 static ATTR_ALIGINED(idesc_t) idesc_t idt[IDT_ENTRIES] = { 0 };
@@ -58,7 +56,7 @@ static void arch_init_8259a(void)
     arch_outb(INT_SLAVE_DATA,  0xff);
 }
 
-void arch_unmask_irq(uint16_t irq_no)
+static void arch_unmask_irq(uint16_t irq_no)
 {
     unsigned char mask = 0;
     uint8_t port_val = 0;
@@ -79,7 +77,7 @@ void arch_unmask_irq(uint16_t irq_no)
     irq_lock->unlock(irq_lock);
 }
 
-void arch_mask_irq(uint16_t irq_no)
+static void arch_mask_irq(uint16_t irq_no)
 {
     unsigned char mask = 0;
     uint8_t port_val = 0;
@@ -100,13 +98,13 @@ void arch_mask_irq(uint16_t irq_no)
     irq_lock->unlock(irq_lock);
 }
 
-void arch_set_isr(uint16_t irq_no, void (*handler)())
+static void arch_set_isr(uint16_t irq_no, irq_handler handler)
 {
     if (irq_no >= IDT_ENTRIES)
         return; 
 
     irq_lock->lock(irq_lock);
-    user_isrs[irq_no] = handler ? handler : hlt_handler;
+    user_isrs[irq_no] = handler;
     irq_lock->unlock(irq_lock);
 }
 
@@ -138,3 +136,41 @@ void arch_init_irq(void)
     arch_init_8259a();
 }
 
+static int irq_dev_mask(struct irqdev* dev)
+{
+    if (!dev)
+        return -1;
+
+    arch_mask_irq(dev->irq_no);
+    return 0;
+}
+
+static int irq_dev_unmask(struct irqdev* dev)
+{
+    if (!dev)
+        return -1;
+
+    arch_set_isr(dev->irq_no, dev->handler);
+    arch_unmask_irq(dev->irq_no);
+
+    return 0;
+}
+
+int irqdev_init(irqdev **out_dev, uint32_t irq_nr, irq_handler handler)
+{
+    if (!out_dev)
+        return -1;
+
+    irqdev* dev = 0;
+    int ret = 0;
+
+    ret = irq_alloc_dev(irq_nr, "irq_dev", 0, handler, out_dev);
+    if (ret != 0)
+        return ret;
+    
+    dev = *out_dev;
+    dev->mask = irq_dev_mask;
+    dev->unmask = irq_dev_unmask;
+
+    return 0;
+}
