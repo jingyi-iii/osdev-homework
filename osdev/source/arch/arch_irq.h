@@ -46,6 +46,8 @@ void arch_init_irq(void);
 struct irqdev* get_dev_by_irq_no(uint32_t irq_nr);
 int irqdev_init(irqdev **out_dev, const char* name,
     uint32_t irq_nr, irq_handler handler);
+int irqline_init(irqline** out_line, uint32_t irq_nr);
+void irqline_handler(uint32_t irq_nr);
 #ifdef __cplusplus
 }
 #endif

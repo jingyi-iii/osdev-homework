@@ -149,7 +149,7 @@ arch_isr_tbl:
 #
 .align  32
 esr:
-        call    *user_isrs(, %esi, 4)
+        # call    *user_isrs(, %esi, 4)
         ret
 
 #
@@ -160,12 +160,16 @@ esr:
 #
 .align  32
 isr:
-        pushl   %esi
-        call    get_dev_by_irq_no
-        addl    $4, %esp
+        # pushl   %esi
+        # call    get_dev_by_irq_nr
+        # addl    $4, %esp
 
-        pushl   %eax
-        call    *user_isrs(, %esi, 4)
+        # pushl   %eax
+        # call    *user_isrs(, %esi, 4)
+        # addl    $4, %esp
+
+        pushl   %esi
+        call    irqline_handler
         addl    $4, %esp
 
         cmpl    $0x28,          %esi

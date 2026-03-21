@@ -24,8 +24,11 @@
 
 static void hlt_handler(void) { for (;;) __asm__ volatile ("hlt"); }
 
-irq_handler user_isrs[IDT_ENTRIES]= { 0 };
+// irq_handler user_isrs[IDT_ENTRIES]= { 0 };
+
 irqdev* irqdevs[IDT_ENTRIES] = {0};
+irqline* irqlines[IDT_ENTRIES] = {0};
+
 static idtmeta_t idtmeta = { 0 };
 static spinlock_dev* irq_lock;
 static ATTR_ALIGINED(idesc_t) idesc_t idt[IDT_ENTRIES] = { 0 };
@@ -57,57 +60,57 @@ static void arch_init_8259a(void)
     arch_outb(INT_SLAVE_DATA,  0xff);
 }
 
-static void arch_unmask_irq(uint16_t irq_no)
+static void arch_unmask_irq(uint16_t irq_nr)
 {
     unsigned char mask = 0;
     uint8_t port_val = 0;
 
-    if (irq_no < ARCH_IRQ_BEGIN || irq_no > ARCH_IRQ_END)
+    if (irq_nr < ARCH_IRQ_BEGIN || irq_nr > ARCH_IRQ_END)
         return;
 
     irq_lock->lock(irq_lock);
-    if (irq_no >= RL_TIMER_IRQ_NO) {
-        mask = ~((unsigned char)(1 << (irq_no - INT_VECTOR_IRQ8)));
+    if (irq_nr >= RL_TIMER_IRQ_NO) {
+        mask = ~((unsigned char)(1 << (irq_nr - INT_VECTOR_IRQ8)));
         port_val = arch_inb(0xa1) & mask;
         arch_outb(0xa1, port_val);
     } else {
-        mask = ~((unsigned char)(1 << (irq_no - INT_VECTOR_IRQ0)));
+        mask = ~((unsigned char)(1 << (irq_nr - INT_VECTOR_IRQ0)));
         port_val = arch_inb(0x21) & mask;
         arch_outb(0x21, port_val);
     }
     irq_lock->unlock(irq_lock);
 }
 
-static void arch_mask_irq(uint16_t irq_no)
+static void arch_mask_irq(uint16_t irq_nr)
 {
     unsigned char mask = 0;
     uint8_t port_val = 0;
 
-    if (irq_no < ARCH_IRQ_BEGIN || irq_no > ARCH_IRQ_END)
+    if (irq_nr < ARCH_IRQ_BEGIN || irq_nr > ARCH_IRQ_END)
         return;
 
     irq_lock->lock(irq_lock);
-    if (irq_no >= RL_TIMER_IRQ_NO) {
-        mask = (unsigned char)(1 << (irq_no - INT_VECTOR_IRQ8));
+    if (irq_nr >= RL_TIMER_IRQ_NO) {
+        mask = (unsigned char)(1 << (irq_nr - INT_VECTOR_IRQ8));
         port_val = arch_inb(0xa1) | mask;
         arch_outb(0xa1, port_val);
     } else {
-        mask = (unsigned char)(1 << (irq_no - INT_VECTOR_IRQ0));
+        mask = (unsigned char)(1 << (irq_nr - INT_VECTOR_IRQ0));
         port_val = arch_inb(0x21) | mask;
         arch_outb(0x21, port_val);
     }
     irq_lock->unlock(irq_lock);
 }
 
-static void arch_set_isr(uint16_t irq_no, irq_handler handler)
-{
-    if (irq_no >= IDT_ENTRIES)
-        return; 
+// static void arch_set_isr(uint16_t irq_nr, irq_handler handler)
+// {
+//     if (irq_nr >= IDT_ENTRIES)
+//         return; 
 
-    irq_lock->lock(irq_lock);
-    user_isrs[irq_no] = handler;
-    irq_lock->unlock(irq_lock);
-}
+//     irq_lock->lock(irq_lock);
+//     user_isrs[irq_nr] = handler;
+//     irq_lock->unlock(irq_lock);
+// }
 
 void arch_isr_tbl(void);
 void arch_init_irq(void)
@@ -142,7 +145,13 @@ static int irq_dev_mask(struct irqdev* dev)
     if (!dev)
         return -1;
 
-    arch_mask_irq(dev->irq_no);
+    dev->enabled = 0;
+    if (irqlines[dev->irq_nr]) {
+        irqlines[dev->irq_nr]->mask(irqlines[dev->irq_nr]);
+    }
+
+    // arch_mask_irq(dev->irq_nr);
+
     return 0;
 }
 
@@ -151,16 +160,21 @@ static int irq_dev_unmask(struct irqdev* dev)
     if (!dev)
         return -1;
 
-    arch_set_isr(dev->irq_no, dev->handler);
-    arch_unmask_irq(dev->irq_no);
+    dev->enabled = 1;
+    if (irqlines[dev->irq_nr]) {
+        irqlines[dev->irq_nr]->unmask(irqlines[dev->irq_nr]);
+    }
+
+    // arch_set_isr(dev->irq_nr, dev->handler);
+    // arch_unmask_irq(dev->irq_nr);
 
     return 0;
 }
 
-struct irqdev* get_dev_by_irq_no(uint32_t irq_nr)
-{
-    return irqdevs[irq_nr];
-}
+// struct irqdev* get_dev_by_irq_nr(uint32_t irq_nr)
+// {
+//     return irqdevs[irq_nr];
+// }
 
 int irqdev_init(irqdev **out_dev, const char* name, uint32_t irq_nr, irq_handler handler)
 {
@@ -178,7 +192,123 @@ int irqdev_init(irqdev **out_dev, const char* name, uint32_t irq_nr, irq_handler
     dev->mask = irq_dev_mask;
     dev->unmask = irq_dev_unmask;
 
-    irqdevs[irq_nr] = dev;
+    if (!irqlines[irq_nr]) {
+        if (!irqline_init(&irqlines[irq_nr], irq_nr) && irqlines[irq_nr])
+            irqlines[irq_nr]->add(irqlines[irq_nr], dev);
+    }
 
     return 0;
+}
+
+static int irqline_mask(struct irqline* line)
+{
+    if (!line)
+        return -1;
+    if (!line->devs)
+        return 0;
+
+    int enable = 1;
+
+    irqdev* dev = line->devs;
+    while (dev) {
+        if (!dev->enabled) {
+            enable = 0;
+            break;
+        }
+        dev = dev->next;
+    }
+
+    if (!enable)
+        arch_mask_irq(line->irq_nr);
+
+    return 0;
+}
+
+static int irqline_unmask(struct irqline* line)
+{
+    if (!line)
+        return -1;
+    if (!line->devs)
+        return 0;
+
+    irqdev* dev = line->devs;
+    while (dev) {
+        if (dev->enabled) {
+            arch_unmask_irq(line->irq_nr);
+            break;
+        }
+        dev = dev->next;
+    }
+
+    return 0;
+}
+
+static int irqline_add(struct irqline* line, struct irqdev* dev)
+{
+    if (!line || !dev)
+        return -1;
+
+    line->sp_lock->lock(line->sp_lock);
+
+    if (!line->devs) {
+        line->devs = dev;
+    } else {
+        irqdev* tail = line->devs;
+        while (tail->next)
+            tail = tail->next;
+        tail->next = dev;
+        dev->next = 0;
+    }
+
+    line->sp_lock->unlock(line->sp_lock);
+
+    return 0;
+}
+
+static int irqline_remove(struct irqline* line, struct irqdev* dev)
+{
+    return 0;
+}
+
+static int irqline_remove_all(struct irqline* line)
+{
+    return 0;
+}
+
+int irqline_init(irqline** out_line, uint32_t irq_nr)
+{
+    if (!out_line || irq_nr >= IDT_ENTRIES)
+        return -1;
+
+    irqline* line = 0;
+    int ret = 0;
+
+    ret = irq_alloc_line(irq_nr, out_line);
+    if (ret != 0)
+        return ret;
+    
+    line = *out_line;
+    line->mask = irqline_mask;
+    line->unmask = irqline_unmask;
+    line->add = irqline_add;
+    line->remove = irqline_remove;
+    line->remove_all = irqline_remove_all;
+
+    SPIN_LOCK_INIT(line->sp_lock);
+
+    return 0;   
+}
+
+void irqline_handler(uint32_t irq_nr)
+{
+    if (!irqlines[irq_nr])
+        return;
+
+    irqdev* dev = irqlines[irq_nr]->devs;
+    while (dev) {
+        if (dev->enabled) {
+            dev->handler(dev);
+        }
+        dev = dev->next;
+    }
 }

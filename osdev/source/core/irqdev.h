@@ -3,11 +3,12 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "lockmgr.h"
 
 typedef struct irqdev {
     const char *name;
     void *context;
-    uint32_t irq_no;
+    uint32_t irq_nr;
     int enabled;
     void (*handler)(struct irqdev* dev);
     struct irqdev *next;
@@ -20,15 +21,23 @@ typedef void (*irq_handler)(struct irqdev* dev);
 
 typedef struct irqline {
     irqdev *devs;
+    uint32_t irq_nr;
     uint32_t dev_cnt;
     int enabled;
+    spinlock_dev* sp_lock;
 
-    int (*mask)(struct irqline* dev);
-    int (*unmask)(struct irqline* dev);
+    int (*mask)(struct irqline* line);
+    int (*unmask)(struct irqline* line);
+    int (*add)(struct irqline* line, struct irqdev* dev);
+    int (*remove)(struct irqline* line, struct irqdev* dev);
+    int (*remove_all)(struct irqline* line);
 } irqline;
 
-int irq_alloc_dev(uint32_t irq_no, const char *name,
+int irq_alloc_dev(uint32_t irq_nr, const char *name,
     void *context, irq_handler handler, irqdev **out_dev);
 int irq_free_dev(irqdev *dev);
+
+int irq_alloc_line(uint32_t irq_nr, irqline **out_line);
+int irq_free_line(irqline *line);
 
 #endif
