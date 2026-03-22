@@ -23,10 +23,6 @@
 
 
 static void hlt_handler(void) { for (;;) __asm__ volatile ("hlt"); }
-
-// irq_handler user_isrs[IDT_ENTRIES]= { 0 };
-
-irqdev* irqdevs[IDT_ENTRIES] = {0};
 irqline* irqlines[IDT_ENTRIES] = {0};
 
 static idtmeta_t idtmeta = { 0 };
@@ -205,15 +201,6 @@ static int irqline_unmask(struct irqline* line)
     if (!line)
         return -1;
 
-    // irqdev* dev = line->devs;
-    // while (dev) {
-    //     if (dev->enabled) {
-    //         arch_unmask_irq(line->irq_nr);
-    //         break;
-    //     }
-    //     dev = dev->next;
-    // }
-
     list_for_each(node, &line->dev_list) {
         irqdev* dev = list_entry(node, irqdev, dev_node);
         if (dev->enabled) {
@@ -239,6 +226,13 @@ static int irqline_add(struct irqline* line, struct irqdev* dev)
 
 static int irqline_remove(struct irqline* line, struct irqdev* dev)
 {
+    if (!line || !dev)
+        return -1;
+
+    spinlock_lock(line->sp_lock);
+    list_del(&dev->dev_node);
+    spinlock_unlock(line->sp_lock);
+
     return 0;
 }
 

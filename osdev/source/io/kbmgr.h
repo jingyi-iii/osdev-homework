@@ -163,7 +163,7 @@ private:
 
     KDecoder mDecoder;
     KBuf mKbuf;
-    iodev* mIoDevs;
+    list_node mDevList;
     spinlock* mLock;
     irqdev* mIrqDev;
 

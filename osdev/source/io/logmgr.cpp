@@ -1,10 +1,11 @@
 #include "logmgr.h"
+#include "list.h"
 
 class LogMgr {
 private:
     const uint32_t mComPort = 0x3f8;
     spinlock* mLock;
-    iodev* mIoDevs;
+    list_node mDevList;
 
     LogMgr(void) { Initialize(); }
     ~LogMgr(void) { Uninitialize(); }
@@ -19,7 +20,7 @@ public:
     int Initialize(void)
     {
         mLock = spinlock_alloc();
-        mIoDevs = 0;
+        list_init(&mDevList);
 
         arch_outb(mComPort + 1, 0x00);    // Disable all interrupts
         arch_outb(mComPort + 3, 0x80);    // Enable DLAB (set baud rate divisor)
@@ -45,12 +46,11 @@ public:
     void Uninitialize(void)
     {
         spinlock_lock(mLock);
-        iodev* curr = mIoDevs;
-        while (curr) {
-            iodev* next = curr->next;
-            io_free_dev(curr);
-            curr = next;
+        list_for_each(pos, &mDevList) {
+            iodev* dev = list_entry(pos, iodev, dev_node);
+            io_free_dev(dev);
         }
+
         spinlock_unlock(mLock);
 
         if (mLock) {
@@ -76,17 +76,7 @@ public:
         if (!dev)
             return -1;
         spinlock_lock(mLock);
-
-        if (!mIoDevs) {
-            mIoDevs = dev;
-        } else {
-            iodev* tail = mIoDevs;
-            while (tail->next)
-                tail = tail->next;
-            tail->next = dev;
-            dev->next = 0;
-        }
-
+        list_add(&dev->dev_node, &mDevList);
         spinlock_unlock(mLock);
         return 0;
     }

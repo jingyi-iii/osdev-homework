@@ -2,6 +2,7 @@
 #include "arch_irq.h"
 #include "arch_regs.h"
 #include "module.h"
+#include "list.h"
 
 const unsigned int keymap[NR_SCAN_CODES * MAP_COLS] = {
 /* scan-code			!Shift		Shift		E0 XX	*/
@@ -267,7 +268,7 @@ uint32_t KBuf::GetCount() const
 KBMgr::KBMgr(void)
 {
     mLock = spinlock_alloc();
-    mIoDevs = 0;
+    list_init(&mDevList);
     mIrqDev = 0;
 
     irqdev_init(&mIrqDev, "kbd", KEYBOARD_IRQ_NO, keyboard_handler);
@@ -282,12 +283,11 @@ void KBMgr::OnReceive(uint8_t code)
 
     auto key2 = GetOneKey();
     if (key2) {
-        iodev* dev = mIoDevs;
-        while (dev) {
+        list_for_each(pos, &mDevList) {
+            iodev* dev = list_entry(pos, iodev, dev_node);
             if (dev->data_cb) {
                 dev->data_cb(dev, &key2, 1);
             }
-            dev = dev->next;
         }
     }
 }
@@ -320,18 +320,8 @@ int KBMgr::AddDevice(iodev* dev)
         return -1;
 
     spinlock_lock(mLock);
-
     dev->name = "keyboard_dev";
-    if (!mIoDevs) {
-        mIoDevs = dev;
-    } else {
-        iodev* tail = mIoDevs;
-        while (tail->next)
-            tail = tail->next;
-        tail->next = dev;
-        dev->next = 0;
-    }
-
+    list_add(&dev->dev_node, &mDevList);
     spinlock_unlock(mLock);
     return 0;
 }

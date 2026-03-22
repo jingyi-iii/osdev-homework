@@ -12,7 +12,7 @@ int io_alloc_dev(const char *name, void *context, iodev **out_dev)
 
     dev->name = name;
     dev->context = context;
-    dev->next = NULL;
+    list_init(&dev->dev_node);
 
     *out_dev = dev;
     return 0;
