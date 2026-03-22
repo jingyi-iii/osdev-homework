@@ -1,5 +1,5 @@
 #include "heap.h"
-#include "lockmgr.h"
+#include "spinlock.h"
 #include "module.h"
 
 #define HEAP_TOTAL_SIZE         (1024 * 1024 * 10)
@@ -15,7 +15,7 @@ typedef struct heappool {
     heapchunk_t ckstart;
     heapchunk_t ckend;
     uint32_t avail_size;
-    spinlock_dev* lock_dev;
+    spinlock* lock_dev;
     int8_t init;
 } heappool_t;
 
@@ -31,10 +31,11 @@ static inline void memset(void *dest, uint8_t data, uint32_t size)
 
 static void kheap_init(void)
 {
-    if (SPIN_LOCK_INIT(heappool.lock_dev))
+    heappool.lock_dev = spinlock_alloc();
+    if (!heappool.lock_dev)
         return;
 
-    heappool.lock_dev->lock(heappool.lock_dev);
+    spinlock_lock(heappool.lock_dev);
     heappool.ckstart.next = (heapchunk_t *)heappool.pool;
     heappool.ckstart.size = 0;
     heappool.ckstart.prev = 0;
@@ -49,7 +50,7 @@ static void kheap_init(void)
 
     heappool.avail_size = HEAP_TOTAL_SIZE;
     heappool.init = 1;
-    heappool.lock_dev->unlock(heappool.lock_dev);
+    spinlock_unlock(heappool.lock_dev);
 }
 
 int8_t* kmalloc(unsigned int alloc_size)
@@ -59,11 +60,11 @@ int8_t* kmalloc(unsigned int alloc_size)
     uint8_t* ret_addr = 0;
     unsigned int req_size = sizeof(heapchunk_t) + alloc_size;
 
-    heappool.lock_dev->lock(heappool.lock_dev);
+    spinlock_lock(heappool.lock_dev);
     if (!heappool.init) {
-        heappool.lock_dev->unlock(heappool.lock_dev);
+        spinlock_unlock(heappool.lock_dev);
         kheap_init();
-        heappool.lock_dev->lock(heappool.lock_dev);
+        spinlock_lock(heappool.lock_dev);
     }
 
     if (req_size < alloc_size)         // overflow
@@ -101,12 +102,12 @@ int8_t* kmalloc(unsigned int alloc_size)
         pck->next = new_pck;
     }
     heappool.avail_size -= req_size;
-    heappool.lock_dev->unlock(heappool.lock_dev);
+    spinlock_unlock(heappool.lock_dev);
 
     return (int8_t*)ret_addr;
 
 ALLOC_FAIL:
-    heappool.lock_dev->unlock(heappool.lock_dev);
+    spinlock_unlock(heappool.lock_dev);
     return 0;
 }
 
@@ -114,11 +115,11 @@ void kfree(void* pointer)
 {
     heapchunk_t* pck = 0;
     heapchunk_t* free_pck = 0;
-    
+
     if (!pointer)
         return;
 
-    heappool.lock_dev->lock(heappool.lock_dev);
+    spinlock_lock(heappool.lock_dev);
     free_pck = (heapchunk_t *)((uint8_t*)pointer - sizeof(heapchunk_t));
 
     pck = &heappool.ckstart;
@@ -131,7 +132,7 @@ void kfree(void* pointer)
     pck->next = free_pck;
 
     heappool.avail_size += free_pck->size;
-    heappool.lock_dev->unlock(heappool.lock_dev);
+    spinlock_unlock(heappool.lock_dev);
 }
 
 module_init(kheap_init);

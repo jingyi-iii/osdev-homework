@@ -3,7 +3,7 @@
 class LogMgr {
 private:
     const uint32_t mComPort = 0x3f8;
-    spinlock_dev* mLock;
+    spinlock* mLock;
     iodev* mIoDevs;
 
     LogMgr(void) { Initialize(); }
@@ -18,7 +18,7 @@ public:
 
     int Initialize(void)
     {
-        SPIN_LOCK_INIT(mLock);
+        mLock = spinlock_alloc();
         mIoDevs = 0;
 
         arch_outb(mComPort + 1, 0x00);    // Disable all interrupts
@@ -44,26 +44,29 @@ public:
 
     void Uninitialize(void)
     {
-        mLock->lock(mLock);
+        spinlock_lock(mLock);
         iodev* curr = mIoDevs;
         while (curr) {
             iodev* next = curr->next;
             io_free_dev(curr);
             curr = next;
         }
-        mLock->unlock(mLock);
+        spinlock_unlock(mLock);
 
-        SPIN_LOCK_RELEASE(mLock);
+        if (mLock) {
+            spinlock_free(mLock);
+            mLock = 0;
+        }
     }
 
     int Write(const char* buf, size_t size)
     {
-        mLock->lock(mLock);
+        spinlock_lock(mLock);
         for (size_t i = 0; i < size; i++) {
             while ((arch_inb(mComPort + 5) & 0x20) == 0);
             arch_outb(mComPort, (uint8_t)buf[i]);
         }
-        mLock->unlock(mLock);
+        spinlock_unlock(mLock);
 
         return 0;
     }
@@ -72,7 +75,7 @@ public:
     {
         if (!dev)
             return -1;
-        mLock->lock(mLock);
+        spinlock_lock(mLock);
 
         if (!mIoDevs) {
             mIoDevs = dev;
@@ -84,7 +87,7 @@ public:
             dev->next = 0;
         }
 
-        mLock->unlock(mLock);
+        spinlock_unlock(mLock);
         return 0;
     }
 };

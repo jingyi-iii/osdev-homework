@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "lockmgr.h"
+#include "spinlock.h"
 
 typedef struct irqdev {
     const char *name;
@@ -24,7 +24,7 @@ typedef struct irqline {
     uint32_t irq_nr;
     uint32_t dev_cnt;
     int enabled;
-    spinlock_dev* sp_lock;
+    spinlock* sp_lock;
 
     int (*mask)(struct irqline* line);
     int (*unmask)(struct irqline* line);

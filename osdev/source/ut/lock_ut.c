@@ -3,7 +3,7 @@
 #include <pthread.h>
 #include <assert.h>
 #include <unistd.h>
-#include "lockmgr.h"
+#include "spinlock.h"
 
 #define NUM_THREADS 10
 #define NUM_ITERATIONS 10000
@@ -14,19 +14,12 @@
 void test_basic_allocation(void) {
     printf("Test 1: Basic allocation and release\n");
 
-    spinlock_dev *lock = NULL;
-    int ret = SPIN_LOCK_INIT(lock);
+    spinlock *lock = spinlock_alloc();
 
-    assert(ret == 0);
     assert(lock != NULL);
-    assert(lock->allocated == 1);
-    assert(lock->state == 0);
-    assert(lock->lock != NULL);
-    assert(lock->trylock != NULL);
-    assert(lock->unlock != NULL);
+    assert(lock->state == LOCK_UNLOCKED);
 
-    SPIN_LOCK_RELEASE(lock);
-    assert(lock == NULL);
+    spinlock_free(lock);
 
     printf("  ✓ Passed\n");
 }
@@ -35,19 +28,16 @@ void test_basic_allocation(void) {
 void test_multiple_allocations(void) {
     printf("Test 2: Multiple allocations\n");
 
-    spinlock_dev *locks[NUM_LOCKS];
+    spinlock *locks[NUM_LOCKS];
 
     for (int i = 0; i < NUM_LOCKS; i++) {
-        locks[i] = NULL;
-        int ret = SPIN_LOCK_INIT(locks[i]);
-        assert(ret == 0);
+        locks[i] = spinlock_alloc();
         assert(locks[i] != NULL);
-        assert(locks[i]->allocated == 1);
+        assert(locks[i]->state == LOCK_UNLOCKED);
     }
 
     for (int i = 0; i < NUM_LOCKS; i++) {
-        SPIN_LOCK_RELEASE(locks[i]);
-        assert(locks[i] == NULL);
+        spinlock_free(locks[i]);
     }
 
     printf("  ✓ Passed\n");
@@ -57,21 +47,20 @@ void test_multiple_allocations(void) {
 void test_lock_unlock(void) {
     printf("Test 3: Lock and unlock operations\n");
 
-    spinlock_dev *lock = NULL;
-    SPIN_LOCK_INIT(lock);
+    spinlock *lock = spinlock_alloc();
     assert(lock != NULL);
 
     // Test lock
-    int ret = lock->lock(lock);
+    int ret = spinlock_lock(lock);
     assert(ret == 0);
-    assert(lock->state == 1);
+    assert(lock->state == LOCK_LOCKED);
 
     // Test unlock
-    ret = lock->unlock(lock);
+    ret = spinlock_unlock(lock);
     assert(ret == 0);
-    assert(lock->state == 0);
+    assert(lock->state == LOCK_UNLOCKED);
 
-    SPIN_LOCK_RELEASE(lock);
+    spinlock_free(lock);
     printf("  ✓ Passed\n");
 }
 
@@ -79,28 +68,27 @@ void test_lock_unlock(void) {
 void test_trylock(void) {
     printf("Test 4: Trylock operations\n");
 
-    spinlock_dev *lock = NULL;
-    SPIN_LOCK_INIT(lock);
+    spinlock *lock = spinlock_alloc();
     assert(lock != NULL);
 
     // Initial trylock should succeed
-    int ret = lock->trylock(lock);
+    int ret = spinlock_trylock(lock);
     assert(ret == 0);  // Should return 0 on success
-    assert(lock->state == 1);
+    assert(lock->state == LOCK_LOCKED);
 
     // Second trylock should fail
-    ret = lock->trylock(lock);
+    ret = spinlock_trylock(lock);
     assert(ret == 1);  // Should return 1 when lock is held
-    assert(lock->state == 1);
+    assert(lock->state == LOCK_LOCKED);
 
     // Unlock and try again
-    lock->unlock(lock);
-    ret = lock->trylock(lock);
+    spinlock_unlock(lock);
+    ret = spinlock_trylock(lock);
     assert(ret == 0);
-    assert(lock->state == 1);
+    assert(lock->state == LOCK_LOCKED);
 
-    lock->unlock(lock);
-    SPIN_LOCK_RELEASE(lock);
+    spinlock_unlock(lock);
+    spinlock_free(lock);
     printf("  ✓ Passed\n");
 }
 
@@ -108,23 +96,25 @@ void test_trylock(void) {
 void test_null_handling(void) {
     printf("Test 5: NULL pointer handling\n");
 
-    spinlock_dev *lock = NULL;
+    spinlock *lock = NULL;
 
     // Test lock functions with NULL
-    assert(lock == NULL);
+    assert(spinlock_lock(lock) == -1);
+    assert(spinlock_unlock(lock) == -1);
+    assert(spinlock_trylock(lock) == -1);
 
     // These should not crash
-    SPIN_LOCK_RELEASE(lock);
+    spinlock_free(lock);
 
-    // Allocate and then free with NULL check
-    SPIN_LOCK_INIT(lock);
+    // Allocate and then free
+    lock = spinlock_alloc();
     assert(lock != NULL);
 
     // Test lock operations with valid pointer
-    assert(lock->lock(lock) == 0);
-    assert(lock->unlock(lock) == 0);
+    assert(spinlock_lock(lock) == 0);
+    assert(spinlock_unlock(lock) == 0);
 
-    SPIN_LOCK_RELEASE(lock);
+    spinlock_free(lock);
     printf("  ✓ Passed\n");
 }
 
@@ -132,17 +122,15 @@ void test_null_handling(void) {
 void test_max_allocation(void) {
     printf("Test 6: Maximum allocation limit\n");
 
-    spinlock_dev *locks[SPIN_LOCK_MAX_COUNT + 1] = {NULL};
+    spinlock *locks[SPIN_LOCK_MAX_COUNT + 1] = {NULL};
     int success_count = 0;
 
     // Try to allocate more than maximum
     for (int i = 0; i < SPIN_LOCK_MAX_COUNT + 1; i++) {
-        int ret = SPIN_LOCK_INIT(locks[i]);
-        if (ret == 0) {
+        locks[i] = spinlock_alloc();
+        if (locks[i]) {
             success_count++;
-            assert(locks[i] != NULL);
-        } else {
-            assert(locks[i] == NULL);
+            assert(locks[i]->state == LOCK_UNLOCKED);
         }
     }
 
@@ -151,7 +139,7 @@ void test_max_allocation(void) {
 
     // Clean up
     for (int i = 0; i < success_count; i++) {
-        SPIN_LOCK_RELEASE(locks[i]);
+        spinlock_free(locks[i]);
     }
 
     printf("  ✓ Passed\n");
@@ -159,7 +147,7 @@ void test_max_allocation(void) {
 
 // Thread test structure
 typedef struct {
-    spinlock_dev *lock;
+    spinlock *lock;
     int thread_id;
     int iterations;
     int *shared_counter;
@@ -171,9 +159,9 @@ void* thread_func(void *arg) {
 
     for (int i = 0; i < targ->iterations; i++) {
         // Lock and increment counter
-        targ->lock->lock(targ->lock);
+        spinlock_lock(targ->lock);
         (*targ->shared_counter)++;
-        targ->lock->unlock(targ->lock);
+        spinlock_unlock(targ->lock);
 
         // Random small delay to increase chance of contention
         if (i % 100 == 0) {
@@ -188,8 +176,7 @@ void* thread_func(void *arg) {
 void test_concurrent_access(void) {
     printf("Test 7: Concurrent access with locks\n");
 
-    spinlock_dev *lock = NULL;
-    SPIN_LOCK_INIT(lock);
+    spinlock *lock = spinlock_alloc();
     assert(lock != NULL);
 
     pthread_t threads[NUM_THREADS];
@@ -216,7 +203,7 @@ void test_concurrent_access(void) {
     assert(shared_counter == expected);
     printf("  ✓ Passed (counter=%d, expected=%d)\n", shared_counter, expected);
 
-    SPIN_LOCK_RELEASE(lock);
+    spinlock_free(lock);
 }
 
 // Thread function for trylock testing
@@ -226,10 +213,10 @@ void* trylock_thread_func(void *arg) {
 
     for (int i = 0; i < targ->iterations; i++) {
         // Try to acquire lock
-        if (targ->lock->trylock(targ->lock) == 0) {
+        if (spinlock_trylock(targ->lock) == 0) {
             success_count++;
             (*targ->shared_counter)++;
-            targ->lock->unlock(targ->lock);
+            spinlock_unlock(targ->lock);
         }
         usleep(1);
     }
@@ -241,8 +228,7 @@ void* trylock_thread_func(void *arg) {
 void test_concurrent_trylock(void) {
     printf("Test 8: Concurrent trylock operations\n");
 
-    spinlock_dev *lock = NULL;
-    SPIN_LOCK_INIT(lock);
+    spinlock *lock = spinlock_alloc();
     assert(lock != NULL);
 
     pthread_t threads[NUM_THREADS];
@@ -273,41 +259,34 @@ void test_concurrent_trylock(void) {
     printf("  ✓ Passed (successful locks=%d, max possible=%d)\n",
            total_successes, NUM_THREADS * (NUM_ITERATIONS / 10));
 
-    SPIN_LOCK_RELEASE(lock);
+    spinlock_free(lock);
 }
 
 // Test 9: Reinitialize after release
 void test_reinitialize(void) {
     printf("Test 9: Reinitialize after release\n");
 
-    spinlock_dev *lock = NULL;
-
-    // First allocation
-    SPIN_LOCK_INIT(lock);
+    spinlock *lock = spinlock_alloc();
     assert(lock != NULL);
-    void *first_addr = lock;
 
-    // Use and release
-    lock->lock(lock);
-    lock->unlock(lock);
-    SPIN_LOCK_RELEASE(lock);
-    assert(lock == NULL);
+    // Use and free
+    spinlock_lock(lock);
+    spinlock_unlock(lock);
+    spinlock_free(lock);
 
     // Second allocation - might get same or different address
-    SPIN_LOCK_INIT(lock);
+    lock = spinlock_alloc();
     assert(lock != NULL);
 
     // Should be properly initialized
-    assert(lock->allocated == 1);
-    assert(lock->state == 0);
-    assert(lock->lock != NULL);
+    assert(lock->state == LOCK_UNLOCKED);
 
     // Verify it works
-    assert(lock->trylock(lock) == 0);
-    assert(lock->state == 1);
-    lock->unlock(lock);
+    assert(spinlock_trylock(lock) == 0);
+    assert(lock->state == LOCK_LOCKED);
+    spinlock_unlock(lock);
 
-    SPIN_LOCK_RELEASE(lock);
+    spinlock_free(lock);
     printf("  ✓ Passed\n");
 }
 
@@ -315,13 +294,13 @@ void test_reinitialize(void) {
 void test_multiple_locks_concurrent(void) {
     printf("Test 10: Multiple locks concurrent access\n");
 
-    spinlock_dev *locks[5] = {NULL};
+    spinlock *locks[5] = {NULL};
     pthread_t threads[NUM_THREADS];
     int counters[5] = {0};
 
     // Initialize multiple locks
     for (int i = 0; i < 5; i++) {
-        SPIN_LOCK_INIT(locks[i]);
+        locks[i] = spinlock_alloc();
         assert(locks[i] != NULL);
     }
 
@@ -359,12 +338,12 @@ void test_multiple_locks_concurrent(void) {
 
     // Cleanup
     for (int i = 0; i < 5; i++) {
-        SPIN_LOCK_RELEASE(locks[i]);
+        spinlock_free(locks[i]);
     }
 }
 
 int lock_ut(void) {
-    printf("=== Lock Manager Unit Tests ===\n\n");
+    printf("=== Spinlock Unit Tests ===\n\n");
 
     test_basic_allocation();
     test_multiple_allocations();

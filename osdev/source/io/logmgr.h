@@ -7,7 +7,7 @@ extern "C" {
 
 #include "iodev.h"
 #include "arch_regs.h"
-#include "lockmgr.h"
+#include "spinlock.h"
 
 int logdev_init(iodev **out_dev);
 

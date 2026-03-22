@@ -6,6 +6,6 @@ set(CMAKE_C_STANDARD 11)
 include_directories("../misc")
 
 add_executable(ut main.c
-        lock_ut.c "../misc/lockmgr.c"
+        lock_ut.c "../misc/spinlock.c"
         main.c
         main.c)

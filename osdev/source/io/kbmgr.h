@@ -6,7 +6,7 @@ extern "C" {
 #endif
 
 #include "iodev.h"
-#include "lockmgr.h"
+#include "spinlock.h"
 #include "irqdev.h"
 #include "logmgr.h"
 
@@ -164,7 +164,7 @@ private:
     KDecoder mDecoder;
     KBuf mKbuf;
     iodev* mIoDevs;
-    spinlock_dev* mLock;
+    spinlock* mLock;
     irqdev* mIrqDev;
 
     

@@ -266,7 +266,7 @@ uint32_t KBuf::GetCount() const
 
 KBMgr::KBMgr(void)
 {
-    SPIN_LOCK_INIT(mLock);
+    mLock = spinlock_alloc();
     mIoDevs = 0;
     mIrqDev = 0;
 
@@ -319,7 +319,7 @@ int KBMgr::AddDevice(iodev* dev)
     if (!dev)
         return -1;
 
-    mLock->lock(mLock);
+    spinlock_lock(mLock);
 
     dev->name = "keyboard_dev";
     if (!mIoDevs) {
@@ -332,7 +332,7 @@ int KBMgr::AddDevice(iodev* dev)
         dev->next = 0;
     }
 
-    mLock->unlock(mLock);
+    spinlock_unlock(mLock);
     return 0;
 }
 
