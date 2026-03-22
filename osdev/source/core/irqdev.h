@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "spinlock.h"
+#include "list.h"
 
 typedef struct irqdev {
     const char *name;
@@ -12,6 +13,7 @@ typedef struct irqdev {
     int enabled;
     void (*handler)(struct irqdev* dev);
     struct irqdev *next;
+    list_node dev_node;
 
     int (*mask)(struct irqdev* dev);
     int (*unmask)(struct irqdev* dev);
@@ -20,11 +22,11 @@ typedef struct irqdev {
 typedef void (*irq_handler)(struct irqdev* dev);
 
 typedef struct irqline {
-    irqdev *devs;
     uint32_t irq_nr;
     uint32_t dev_cnt;
     int enabled;
     spinlock* sp_lock;
+    list_node dev_list;
 
     int (*mask)(struct irqline* line);
     int (*unmask)(struct irqline* line);

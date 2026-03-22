@@ -17,6 +17,7 @@ int irq_alloc_dev(uint32_t irq_nr, const char *name,
     dev->handler = handler;
     dev->enabled = 0;
     dev->next = NULL;
+    list_init(&dev->dev_node);
 
     *out_dev = dev;
     return 0;
@@ -40,10 +41,10 @@ int irq_alloc_line(uint32_t irq_nr, irqline **out_line)
     if (!line)
         return -1;
 
-    line->devs = 0;
     line->irq_nr = irq_nr;
     line->dev_cnt = 0;
     line->enabled = 0;
+    list_init(&line->dev_list);
 
     *out_line = line;
 

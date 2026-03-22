@@ -102,16 +102,6 @@ static void arch_mask_irq(uint16_t irq_nr)
     spinlock_unlock(irq_lock);
 }
 
-// static void arch_set_isr(uint16_t irq_nr, irq_handler handler)
-// {
-//     if (irq_nr >= IDT_ENTRIES)
-//         return; 
-
-//     irq_lock->lock(irq_lock);
-//     user_isrs[irq_nr] = handler;
-//     irq_lock->unlock(irq_lock);
-// }
-
 void arch_isr_tbl(void);
 void arch_init_irq(void)
 {
@@ -149,8 +139,6 @@ static int irq_dev_mask(struct irqdev* dev)
         irqlines[dev->irq_nr]->mask(irqlines[dev->irq_nr]);
     }
 
-    // arch_mask_irq(dev->irq_nr);
-
     return 0;
 }
 
@@ -164,16 +152,8 @@ static int irq_dev_unmask(struct irqdev* dev)
         irqlines[dev->irq_nr]->unmask(irqlines[dev->irq_nr]);
     }
 
-    // arch_set_isr(dev->irq_nr, dev->handler);
-    // arch_unmask_irq(dev->irq_nr);
-
     return 0;
 }
-
-// struct irqdev* get_dev_by_irq_nr(uint32_t irq_nr)
-// {
-//     return irqdevs[irq_nr];
-// }
 
 int irqdev_init(irqdev **out_dev, const char* name, uint32_t irq_nr, irq_handler handler)
 {
@@ -203,21 +183,18 @@ static int irqline_mask(struct irqline* line)
 {
     if (!line)
         return -1;
-    if (!line->devs)
-        return 0;
 
-    int enable = 1;
+    int disable = 1;
 
-    irqdev* dev = line->devs;
-    while (dev) {
-        if (!dev->enabled) {
-            enable = 0;
+    list_for_each(node, &line->dev_list) {
+        irqdev* dev = list_entry(node, irqdev, dev_node);
+        if (dev->enabled) {
+            disable = 0;
             break;
         }
-        dev = dev->next;
     }
 
-    if (!enable)
+    if (disable)
         arch_mask_irq(line->irq_nr);
 
     return 0;
@@ -227,16 +204,22 @@ static int irqline_unmask(struct irqline* line)
 {
     if (!line)
         return -1;
-    if (!line->devs)
-        return 0;
 
-    irqdev* dev = line->devs;
-    while (dev) {
+    // irqdev* dev = line->devs;
+    // while (dev) {
+    //     if (dev->enabled) {
+    //         arch_unmask_irq(line->irq_nr);
+    //         break;
+    //     }
+    //     dev = dev->next;
+    // }
+
+    list_for_each(node, &line->dev_list) {
+        irqdev* dev = list_entry(node, irqdev, dev_node);
         if (dev->enabled) {
             arch_unmask_irq(line->irq_nr);
             break;
         }
-        dev = dev->next;
     }
 
     return 0;
@@ -248,17 +231,7 @@ static int irqline_add(struct irqline* line, struct irqdev* dev)
         return -1;
 
     spinlock_lock(line->sp_lock);
-
-    if (!line->devs) {
-        line->devs = dev;
-    } else {
-        irqdev* tail = line->devs;
-        while (tail->next)
-            tail = tail->next;
-        tail->next = dev;
-        dev->next = 0;
-    }
-
+    list_add(&dev->dev_node, &line->dev_list);
     spinlock_unlock(line->sp_lock);
 
     return 0;
@@ -303,11 +276,10 @@ void irqline_handler(uint32_t irq_nr)
     if (!irqlines[irq_nr])
         return;
 
-    irqdev* dev = irqlines[irq_nr]->devs;
-    while (dev) {
+    list_for_each(node, &irqlines[irq_nr]->dev_list) {
+        irqdev* dev = list_entry(node, irqdev, dev_node);
         if (dev->enabled) {
             dev->handler(dev);
         }
-        dev = dev->next;
     }
 }
