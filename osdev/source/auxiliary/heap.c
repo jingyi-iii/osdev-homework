@@ -134,5 +134,3 @@ void kfree(void* pointer)
     heappool.avail_size += free_pck->size;
     spinlock_unlock(heappool.lock_dev);
 }
-
-module_init(kheap_init);

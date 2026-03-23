@@ -53,6 +53,7 @@ void __cxa_guard_abort(char* guard)
     spinlock_unlock(guard_spinlock);
 }
 
+#ifndef UNIT_TEST_BUILD
 void* __dso_handle = (void*)&__dso_handle;
 
 int __cxa_atexit(void (*destructor)(void*), void* arg, void* dso_handle)
@@ -67,3 +68,4 @@ void __cxa_finalize(void* dso_handle)
 {
     (void)dso_handle;
 }
+#endif
