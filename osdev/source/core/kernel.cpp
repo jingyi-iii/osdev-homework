@@ -28,10 +28,12 @@ void timer_handler(void)
     uint16_t* ptr_gbuf = (uint16_t*)0xb8000;
 
     iodev* dev = 0;
-    logdev_init(&dev);
+    logdev_init(&dev, "timer_handler");
     gdev = dev;
 
     dev->write(dev, "log_dev ok\n", 11);
+
+    LOG_DBG(dev, "test LOG macro\n");
 
     iodev* kbdev = 0;
     kbdev_init(&kbdev, kb_read);

@@ -21,13 +21,11 @@
 #define NUM_EXCEPTIONS          (32)
 #define NUM_INTERRUPTS          (16)
 
-
-static void hlt_handler(void) { for (;;) __asm__ volatile ("hlt"); }
-irqline* irqlines[IDT_ENTRIES] = {0};
-
 static idtmeta_t idtmeta = { 0 };
-static spinlock* irq_lock;
 static ATTR_ALIGINED(idesc_t) idesc_t idt[IDT_ENTRIES] = { 0 };
+irqline* irqlines[IDT_ENTRIES] = {0};
+void arch_isr_tbl(void);
+static void hlt_handler(void) { for (;;) __asm__ volatile ("hlt"); }
 
 static idesc_t gen_idesc(uint32_t isr, uint16_t sel_code, uint8_t flags)
 {
@@ -64,7 +62,6 @@ static void arch_unmask_irq(uint16_t irq_nr)
     if (irq_nr < ARCH_IRQ_BEGIN || irq_nr > ARCH_IRQ_END)
         return;
 
-    spinlock_lock(irq_lock);
     if (irq_nr >= RL_TIMER_IRQ_NO) {
         mask = ~((unsigned char)(1 << (irq_nr - INT_VECTOR_IRQ8)));
         port_val = arch_inb(0xa1) & mask;
@@ -74,7 +71,6 @@ static void arch_unmask_irq(uint16_t irq_nr)
         port_val = arch_inb(0x21) & mask;
         arch_outb(0x21, port_val);
     }
-    spinlock_unlock(irq_lock);
 }
 
 static void arch_mask_irq(uint16_t irq_nr)
@@ -85,7 +81,6 @@ static void arch_mask_irq(uint16_t irq_nr)
     if (irq_nr < ARCH_IRQ_BEGIN || irq_nr > ARCH_IRQ_END)
         return;
 
-    spinlock_lock(irq_lock);
     if (irq_nr >= RL_TIMER_IRQ_NO) {
         mask = (unsigned char)(1 << (irq_nr - INT_VECTOR_IRQ8));
         port_val = arch_inb(0xa1) | mask;
@@ -95,15 +90,11 @@ static void arch_mask_irq(uint16_t irq_nr)
         port_val = arch_inb(0x21) | mask;
         arch_outb(0x21, port_val);
     }
-    spinlock_unlock(irq_lock);
 }
 
-void arch_isr_tbl(void);
 void arch_init_irq(void)
 {
     int i = 0;
-
-    irq_lock = spinlock_alloc();
 
     arch_cli();
     for (i = 0; i < IDT_ENTRIES; i++) {
@@ -190,8 +181,11 @@ static int irqline_mask(struct irqline* line)
         }
     }
 
-    if (disable)
+    if (disable) {
+        spinlock_lock(line->sp_lock);
         arch_mask_irq(line->irq_nr);
+        spinlock_unlock(line->sp_lock);
+    }
 
     return 0;
 }
@@ -204,7 +198,9 @@ static int irqline_unmask(struct irqline* line)
     list_for_each(node, &line->dev_list) {
         irqdev* dev = list_entry(node, irqdev, dev_node);
         if (dev->enabled) {
+            spinlock_lock(line->sp_lock);
             arch_unmask_irq(line->irq_nr);
+            spinlock_unlock(line->sp_lock);
             break;
         }
     }
@@ -238,6 +234,15 @@ static int irqline_remove(struct irqline* line, struct irqdev* dev)
 
 static int irqline_remove_all(struct irqline* line)
 {
+    if (!line)
+        return -1;
+
+    spinlock_lock(line->sp_lock);
+    list_for_each(node, &line->dev_list) {
+        list_del(node);
+    }
+    spinlock_unlock(line->sp_lock);
+
     return 0;
 }
 
@@ -259,8 +264,6 @@ int irqline_init(irqline** out_line, uint32_t irq_nr)
     line->add = irqline_add;
     line->remove = irqline_remove;
     line->remove_all = irqline_remove_all;
-
-    line->sp_lock = spinlock_alloc();
 
     return 0;
 }

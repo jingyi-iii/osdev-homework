@@ -97,14 +97,14 @@ static int dev_write(struct iodev* dev, const char* buf, size_t size)
     return sdev->Write(buf, size);
 }
 
-int logdev_init(iodev **out_dev)
+int logdev_init(iodev **out_dev, const char* name)
 {
     if (!out_dev)
         return -1;
 
     LogMgr* logMgr = LogMgr::GetInstance();
 
-    int ret = io_alloc_dev("Log", logMgr, out_dev);
+    int ret = io_alloc_dev(name, logMgr, out_dev);
     if (ret != 0)
         return ret;
     

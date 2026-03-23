@@ -12,6 +12,7 @@ int io_alloc_dev(const char *name, void *context, iodev **out_dev)
 
     dev->name = name;
     dev->context = context;
+    dev->sp_lock = spinlock_alloc();
     list_init(&dev->dev_node);
 
     *out_dev = dev;
@@ -23,6 +24,7 @@ int io_free_dev(iodev *dev)
     if (!dev)
         return -1;
 
+    spinlock_free(dev->sp_lock);
     kfree(dev);
     return 0;
 }

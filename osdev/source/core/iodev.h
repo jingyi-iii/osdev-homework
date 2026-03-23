@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "list.h"
+#include "spinlock.h"
 
 typedef void (*iodev_cb)(struct iodev *dev, void* data, size_t size);
 
@@ -11,6 +12,7 @@ typedef struct iodev {
     const char *name;
     void *context;
     list_node dev_node;
+    spinlock* sp_lock;
 
     // Function pointers for device operations.
     // The specific io device can implement these as needed.

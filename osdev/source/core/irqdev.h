@@ -12,7 +12,7 @@ typedef struct irqdev {
     uint32_t irq_nr;
     int enabled;
     void (*handler)(struct irqdev* dev);
-    struct irqdev *next;
+    spinlock* sp_lock;
     list_node dev_node;
 
     int (*mask)(struct irqdev* dev);

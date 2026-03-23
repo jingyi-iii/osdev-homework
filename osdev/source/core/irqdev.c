@@ -16,7 +16,7 @@ int irq_alloc_dev(uint32_t irq_nr, const char *name,
     dev->irq_nr = irq_nr;
     dev->handler = handler;
     dev->enabled = 0;
-    dev->next = NULL;
+    dev->sp_lock = spinlock_alloc();
     list_init(&dev->dev_node);
 
     *out_dev = dev;
@@ -28,6 +28,7 @@ int irq_free_dev(irqdev *dev)
     if (!dev)
         return -1;
 
+    spinlock_free(dev->sp_lock);
     kfree(dev);
     return 0;
 }
@@ -44,6 +45,7 @@ int irq_alloc_line(uint32_t irq_nr, irqline **out_line)
     line->irq_nr = irq_nr;
     line->dev_cnt = 0;
     line->enabled = 0;
+    line->sp_lock = spinlock_alloc();
     list_init(&line->dev_list);
 
     *out_line = line;
@@ -56,6 +58,7 @@ int irq_free_line(irqline *line)
     if (!line)
         return -1;
 
+    spinlock_free(line->sp_lock);
     kfree(line);
     return 0;
 }

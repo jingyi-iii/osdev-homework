@@ -272,7 +272,7 @@ KBMgr::KBMgr(void)
     mIrqDev = 0;
 
     irqdev_init(&mIrqDev, "kbd", KEYBOARD_IRQ_NO, keyboard_handler);
-    logdev_init(&mLogDev);
+    logdev_init(&mLogDev, "kbd");
 }
 
 void KBMgr::OnReceive(uint8_t code)
