@@ -10,6 +10,7 @@ int io_alloc_dev(const char *name, void *context, iodev **out_dev)
     if (!dev)
         return -1;
 
+    dev->type = "io";
     dev->name = name;
     dev->context = context;
     dev->sp_lock = spinlock_alloc();

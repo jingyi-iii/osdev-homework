@@ -141,16 +141,6 @@ extern "C" {
 
 static void keyboard_handler(struct irqdev* dev)
 {
-    if (KBMgr::GetInstance()->mLogDev) {
-        KBMgr::GetInstance()->mLogDev->write(
-            KBMgr::GetInstance()->mLogDev, "\nhello\n", 7);
-
-        if (dev)
-            KBMgr::GetInstance()->mLogDev->write(
-                KBMgr::GetInstance()->mLogDev, dev->name, 3);
-    }
-
-
     KBMgr::GetInstance()->OnReceive(arch_inb(0x60));
 }
 
@@ -272,7 +262,6 @@ KBMgr::KBMgr(void)
     mIrqDev = 0;
 
     irqdev_init(&mIrqDev, "kbd", KEYBOARD_IRQ_NO, keyboard_handler);
-    logdev_init(&mLogDev, "kbd");
 }
 
 void KBMgr::OnReceive(uint8_t code)

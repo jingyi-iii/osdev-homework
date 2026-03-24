@@ -8,6 +8,7 @@
 
 typedef struct irqdev {
     const char *name;
+    const char *type;
     void *context;
     uint32_t irq_nr;
     int enabled;

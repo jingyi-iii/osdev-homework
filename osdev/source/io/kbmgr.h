@@ -169,8 +169,6 @@ private:
 
     
 public:
-    iodev* mLogDev;
-
     static KBMgr* GetInstance(void)
     {
         static KBMgr inst;

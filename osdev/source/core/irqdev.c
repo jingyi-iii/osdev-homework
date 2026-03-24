@@ -11,6 +11,7 @@ int irq_alloc_dev(uint32_t irq_nr, const char *name,
     if (!dev)
         return -1;
 
+    dev->type = "irq";
     dev->name = name;
     dev->context = context;
     dev->irq_nr = irq_nr;

@@ -14,12 +14,15 @@
 #error "This tutorial needs to be compiled with a ix86-elf compiler"
 #endif
 
-iodev* gdev = 0;
+iodev* glogdev = 0;
 void kb_read(struct iodev *dev, void* data, size_t size)
 {
-    if (gdev) {
-        gdev->write(gdev, (const char*)data, size);
-    }
+    LOG_DBG(glogdev, "%s\n", (const char*)data, size);
+}
+
+void kb_read2(struct iodev *dev, void* data, size_t size)
+{
+    LOG_DBG(glogdev, "kbdev2\n");
 }
 
 void timer_handler(void)
@@ -29,16 +32,13 @@ void timer_handler(void)
 
     iodev* dev = 0;
     logdev_init(&dev, "timer_handler");
-    gdev = dev;
-
-    dev->write(dev, "log_dev ok\n", 11);
-
-    LOG_DBG(dev, "test LOG macro\n");
+    glogdev = dev;
 
     iodev* kbdev = 0;
     kbdev_init(&kbdev, kb_read);
 
-    dev->write(dev, kbdev->name, 11);
+    iodev* kbdev2 = 0;
+    kbdev_init(&kbdev2, kb_read2);
 
     for ( ;; ) {
         while (*ptr_msg) {

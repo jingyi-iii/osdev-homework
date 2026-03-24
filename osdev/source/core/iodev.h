@@ -10,6 +10,7 @@ typedef void (*iodev_cb)(struct iodev *dev, void* data, size_t size);
 
 typedef struct iodev {
     const char *name;
+    const char *type;
     void *context;
     list_node dev_node;
     spinlock* sp_lock;
