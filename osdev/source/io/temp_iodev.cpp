@@ -1,6 +1,6 @@
 #include "temp_iodev.h"
 
-int TempDevice::Initialize(void){ return 0; }
+int TempDevice::Init(void){ return 0; }
 int TempDevice::Read(char* buf, size_t size){ return 0; }
 int TempDevice::Write(const char* buf, size_t size){ return 0; }
 int TempDevice::Ctrl(int cmd, void* arg){ (void)cmd; (void)arg; return 0; }
@@ -16,7 +16,7 @@ int tmpdev_init(iodev **out_dev)
     iodev* dev = nullptr;
     TempDevice* instance = TempDevice::GetInstance();
 
-    io_alloc_dev("temp_dev", instance, &dev);
+    io_alloc_dev("temp_dev", &dev);
     if (dev) {
         instance->_bind_c_interface(dev);
     }

@@ -314,7 +314,7 @@ int KBMgr::AddDevice(iodev* dev)
     return 0;
 }
 
-int KBMgr::Initialize(void){ return 0; }
+int KBMgr::Init(void){ return 0; }
 int KBMgr::Read(char* buf, size_t size){ return 0; }
 int KBMgr::Write(const char* buf, size_t size){ return 0; }
 int KBMgr::Ctrl(int cmd, void* arg){ (void)cmd; (void)arg; return 0; }
@@ -330,7 +330,7 @@ int kbdev_init(iodev **out_dev, const char* dev_name, iodev_cb cb)
     iodev* dev = nullptr;
     KBMgr* instance = KBMgr::GetInstance();
 
-    io_alloc_dev(dev_name, instance, &dev);
+    io_alloc_dev(dev_name, &dev);
     if (dev) {
         instance->_bind_c_interface(dev);
         dev->data_cb = cb;

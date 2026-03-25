@@ -2,7 +2,6 @@
 #define __TIME_IODEV_H__
 
 #include "iodev.h"
-#include "iodev_helper.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -70,7 +69,7 @@ public:
         return &inst;
     }
 
-    int Initialize(void);
+    int Init(void);
     int Read(char* buf, size_t size);
     int Write(const char* buf, size_t size);
     int Ctrl(int cmd, void* arg);

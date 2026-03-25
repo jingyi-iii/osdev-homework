@@ -103,16 +103,15 @@ void logdev_init(void)
 {
     LogMgr* logMgr = LogMgr::GetInstance();
 
-    int ret = io_alloc_dev("logdev", logMgr, &glogdev);
-    if (ret != 0)
-        return;
-    
-    glogdev->init = dev_init;
-    glogdev->read = dev_read;
-    glogdev->write = dev_write;
-    glogdev->shutdown = dev_shutdown;
-
-    logMgr->AddDevice(glogdev);
+    io_alloc_dev("logdev", &glogdev);
+    if (glogdev) {
+        glogdev->context = logMgr;
+        glogdev->init = dev_init;
+        glogdev->read = dev_read;
+        glogdev->write = dev_write;
+        glogdev->shutdown = dev_shutdown;
+        logMgr->AddDevice(glogdev);
+    }
 }
 
 module_init(logdev_init);

@@ -82,7 +82,7 @@ void TimeDevice::UpdateRtcTime(void)
     }
 }
 
-int TimeDevice::Initialize(void)
+int TimeDevice::Init(void)
 {
     mTickCount = 0;
     mFrequency = 100;  /* Default 100 Hz tick rate */
@@ -191,7 +191,7 @@ int timedevice_init(iodev **out_dev)
     iodev* dev = nullptr;
     TimeDevice* instance = TimeDevice::GetInstance();
 
-    io_alloc_dev("time_dev", instance, &dev);
+    io_alloc_dev("time_dev", &dev);
     if (dev) {
         instance->_bind_c_interface(dev);
         dev->type = "timer";
