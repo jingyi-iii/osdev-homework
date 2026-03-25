@@ -1,5 +1,6 @@
 #include "logmgr.h"
 #include "list.h"
+#include "module.h"
 
 class LogMgr {
 private:
@@ -97,26 +98,22 @@ static int dev_write(struct iodev* dev, const char* buf, size_t size)
     return sdev->Write(buf, size);
 }
 
-int logdev_init(iodev **out_dev, const char* name)
+iodev* glogdev = 0;
+void logdev_init(void)
 {
-    if (!out_dev)
-        return -1;
-
     LogMgr* logMgr = LogMgr::GetInstance();
 
-    int ret = io_alloc_dev(name, logMgr, out_dev);
+    int ret = io_alloc_dev("logdev", logMgr, &glogdev);
     if (ret != 0)
-        return ret;
+        return;
     
-    iodev* dev = *out_dev;
-    dev->init = dev_init;
-    dev->read = dev_read;
-    dev->write = dev_write;
-    dev->shutdown = dev_shutdown;
+    glogdev->init = dev_init;
+    glogdev->read = dev_read;
+    glogdev->write = dev_write;
+    glogdev->shutdown = dev_shutdown;
 
-    logMgr->AddDevice(dev);
-    
-    return 0;
+    logMgr->AddDevice(glogdev);
 }
 
+module_init(logdev_init);
 }

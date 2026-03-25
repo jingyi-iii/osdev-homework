@@ -3,6 +3,7 @@
 #include "process.h"
 #include "logmgr.h"
 #include "kbmgr.h"
+#include "time_iodev.h"
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -14,15 +15,20 @@
 #error "This tutorial needs to be compiled with a ix86-elf compiler"
 #endif
 
-iodev* glogdev = 0;
 void kb_read(struct iodev *dev, void* data, size_t size)
 {
-    LOG_DBG(glogdev, "%s\n", (const char*)data, size);
+    LOG_DBG(dev, "%s\n", (const char*)data, size);
 }
 
 void kb_read2(struct iodev *dev, void* data, size_t size)
 {
-    LOG_DBG(glogdev, "kbdev2\n");
+    // LOG_DBG(dev, "kbdev2\n");
+
+    iodev* timedev;
+    timedevice_init(&timedev);
+    char buf[32];
+    timedev->read(timedev, buf, 32);
+    LOG_DBG(dev, "%s", buf);
 }
 
 void timer_handler(void)
@@ -30,15 +36,11 @@ void timer_handler(void)
     const char* ptr_msg = "Timer interrupt triggered modification: \0";
     uint16_t* ptr_gbuf = (uint16_t*)0xb8000;
 
-    iodev* dev = 0;
-    logdev_init(&dev, "timer_handler");
-    glogdev = dev;
-
     iodev* kbdev = 0;
-    kbdev_init(&kbdev, kb_read);
+    kbdev_init(&kbdev, "kb_read", kb_read);
 
     iodev* kbdev2 = 0;
-    kbdev_init(&kbdev2, kb_read2);
+    kbdev_init(&kbdev2, "kb_read2", kb_read2);
 
     for ( ;; ) {
         while (*ptr_msg) {

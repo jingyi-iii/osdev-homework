@@ -309,7 +309,6 @@ int KBMgr::AddDevice(iodev* dev)
         return -1;
 
     spinlock_lock(mLock);
-    dev->name = "keyboard_dev";
     list_add(&dev->dev_node, &mDevList);
     spinlock_unlock(mLock);
     return 0;
@@ -327,7 +326,7 @@ static int dev_read(struct iodev* dev, char* buf, size_t size) { return 0; }
 static int dev_write(struct iodev* dev, const char* buf, size_t size) { return 0; }
 static int dev_shutdown(struct iodev* dev) { return 0; }
 
-int kbdev_init(iodev **out_dev, iodev_cb cb)
+int kbdev_init(iodev **out_dev, const char* dev_name, iodev_cb cb)
 {
     if (!out_dev)
         return -1;
@@ -335,7 +334,7 @@ int kbdev_init(iodev **out_dev, iodev_cb cb)
     iodev* dev = 0;
     int ret = 0;
 
-    ret = io_alloc_dev("temp_dev", KBMgr::GetInstance(), out_dev);
+    ret = io_alloc_dev(dev_name, KBMgr::GetInstance(), out_dev);
     if (ret != 0)
         return ret;
     

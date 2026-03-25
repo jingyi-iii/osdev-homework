@@ -10,16 +10,17 @@ extern "C" {
 #include "spinlock.h"
 #include "string.h"
 
-#define LOG_DBG(dev, fmt, ...)                                                      \
-    do {                                                                            \
-        if (!dev)                                                                   \
-            break;                                                                  \
-        char log_buf[256];                                                          \
-        snprintf(log_buf, sizeof(log_buf), "[%s] " fmt, dev->name, ##__VA_ARGS__);  \
-        dev->write(dev, log_buf, strlen(log_buf));                                  \
+extern iodev* glogdev;
+#define LOG_DBG(dev, fmt, ...)                                                                      \
+    do {                                                                                            \
+        if (!glogdev)                                                                               \
+            break;                                                                                  \
+        if (!dev || !dev->type || !dev->name)                                                       \
+            break;                                                                                  \
+        char log_buf[256];                                                                          \
+        snprintf(log_buf, sizeof(log_buf), "[%s][%s] " fmt, dev->type, dev->name, ##__VA_ARGS__);   \
+        glogdev->write(glogdev, log_buf, strlen(log_buf));                                          \
     } while (0)
-
-int logdev_init(iodev **out_dev, const char* name);
 
 #ifdef __cplusplus
 }

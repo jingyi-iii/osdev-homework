@@ -10,7 +10,7 @@ extern "C" {
 #include "irqdev.h"
 #include "logmgr.h"
 
-int kbdev_init(iodev **out_dev, iodev_cb cb);
+int kbdev_init(iodev **out_dev, const char* dev_name, iodev_cb cb);
 
 #ifdef __cplusplus
 }
