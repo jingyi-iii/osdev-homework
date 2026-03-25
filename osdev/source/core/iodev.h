@@ -6,6 +6,10 @@
 #include "list.h"
 #include "spinlock.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef void (*iodev_cb)(struct iodev *dev, void* data, size_t size);
 
 typedef struct iodev {
@@ -29,5 +33,9 @@ typedef struct iodev {
 
 int io_alloc_dev(const char *name, void *context, iodev **out_dev);
 int io_free_dev(iodev *dev);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

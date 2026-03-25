@@ -1,11 +1,12 @@
 #ifndef __TIME_IODEV_H__
 #define __TIME_IODEV_H__
 
+#include "iodev.h"
+#include "iodev_helper.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#include "iodev.h"
 
 int timedevice_init(iodev **out_dev);
 
@@ -61,6 +62,8 @@ private:
     void UpdateRtcTime(void);
 
 public:
+    IODEV_CPP_BIND_CLASS(TimeDevice);
+
     static TimeDevice* GetInstance(void)
     {
         static TimeDevice inst;
@@ -70,12 +73,13 @@ public:
     int Initialize(void);
     int Read(char* buf, size_t size);
     int Write(const char* buf, size_t size);
+    int Ctrl(int cmd, void* arg);
     int Shutdown(void);
 
     uint64_t GetTickCount(void) const { return mTickCount; }
     uint64_t GetFrequency(void) const { return mFrequency; }
     void IncrementTick(void) { mTickCount++; }
-    
+
     void GetTime(rtc_time_t* time);
 };
 

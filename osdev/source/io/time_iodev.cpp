@@ -158,6 +158,14 @@ int TimeDevice::Write(const char* buf, size_t size)
     return 0;
 }
 
+int TimeDevice::Ctrl(int cmd, void* arg)
+{
+    /* Control commands can be added here for time setting */
+    (void)cmd;
+    (void)arg;
+    return 0;
+}
+
 int TimeDevice::Shutdown(void)
 {
     mTickCount = 0;
@@ -175,56 +183,22 @@ void TimeDevice::GetTime(rtc_time_t* time)
 
 extern "C" {
 
-static int dev_init(struct iodev* dev) 
-{ 
-    return TimeDevice::GetInstance()->Initialize(); 
-}
-
-static int dev_read(struct iodev* dev, char* buf, size_t size) 
-{ 
-    return TimeDevice::GetInstance()->Read(buf, size); 
-}
-
-static int dev_write(struct iodev* dev, const char* buf, size_t size) 
-{ 
-    return TimeDevice::GetInstance()->Write(buf, size); 
-}
-
-static int dev_ctrl(struct iodev* dev, int cmd, void* arg)
-{
-    // Control commands can be added here for time setting
-    (void)dev;
-    (void)cmd;
-    (void)arg;
-    return 0;
-}
-
-static int dev_shutdown(struct iodev* dev) 
-{ 
-    return TimeDevice::GetInstance()->Shutdown(); 
-}
-
 int timedevice_init(iodev **out_dev)
 {
     if (!out_dev)
         return -1;
 
-    iodev* dev = *out_dev;
-    int ret = 0;
+    iodev* dev = nullptr;
+    TimeDevice* instance = TimeDevice::GetInstance();
 
-    ret = io_alloc_dev("time_dev", TimeDevice::GetInstance(), out_dev);
-    if (ret != 0)
-        return ret;
+    io_alloc_dev("time_dev", instance, &dev);
+    if (dev) {
+        instance->_bind_c_interface(dev);
+        dev->type = "timer";
+    }
 
-    dev = *out_dev;
-    dev->type = "timer";
-    dev->init = dev_init;
-    dev->read = dev_read;
-    dev->write = dev_write;
-    dev->ctrl = dev_ctrl;
-    dev->shutdown = dev_shutdown;
-
-    return 0;
+    *out_dev = dev;
+    return (dev != nullptr) ? 0 : -1;
 }
 
 }

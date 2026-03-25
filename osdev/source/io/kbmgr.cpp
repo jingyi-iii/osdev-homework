@@ -317,37 +317,28 @@ int KBMgr::AddDevice(iodev* dev)
 int KBMgr::Initialize(void){ return 0; }
 int KBMgr::Read(char* buf, size_t size){ return 0; }
 int KBMgr::Write(const char* buf, size_t size){ return 0; }
+int KBMgr::Ctrl(int cmd, void* arg){ (void)cmd; (void)arg; return 0; }
 int KBMgr::Shutdown(void){ return 0; }
 
 extern "C" {
-
-static int dev_init(struct iodev* dev) { return 0; }
-static int dev_read(struct iodev* dev, char* buf, size_t size) { return 0; }
-static int dev_write(struct iodev* dev, const char* buf, size_t size) { return 0; }
-static int dev_shutdown(struct iodev* dev) { return 0; }
 
 int kbdev_init(iodev **out_dev, const char* dev_name, iodev_cb cb)
 {
     if (!out_dev)
         return -1;
 
-    iodev* dev = 0;
-    int ret = 0;
+    iodev* dev = nullptr;
+    KBMgr* instance = KBMgr::GetInstance();
 
-    ret = io_alloc_dev(dev_name, KBMgr::GetInstance(), out_dev);
-    if (ret != 0)
-        return ret;
-    
-    dev = *out_dev;
-    dev->init = dev_init;
-    dev->read = dev_read;
-    dev->write = dev_write;
-    dev->shutdown = dev_shutdown;
-    dev->data_cb = cb;
+    io_alloc_dev(dev_name, instance, &dev);
+    if (dev) {
+        instance->_bind_c_interface(dev);
+        dev->data_cb = cb;
+        KBMgr::GetInstance()->AddDevice(dev);
+    }
 
-    KBMgr::GetInstance()->AddDevice(dev);
-    
-    return 0;
+    *out_dev = dev;
+    return (dev != nullptr) ? 0 : -1;
 }
 
 }

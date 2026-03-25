@@ -1,14 +1,15 @@
 #ifndef __KBMGR_H__
 #define __KBMGR_H__
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include "iodev.h"
+#include "iodev_helper.h"
 #include "spinlock.h"
 #include "irqdev.h"
 #include "logmgr.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 int kbdev_init(iodev **out_dev, const char* dev_name, iodev_cb cb);
 
@@ -167,8 +168,10 @@ private:
     spinlock* mLock;
     irqdev* mIrqDev;
 
-    
+
 public:
+    IODEV_CPP_BIND_CLASS(KBMgr);
+
     static KBMgr* GetInstance(void)
     {
         static KBMgr inst;
@@ -178,9 +181,10 @@ public:
     int Initialize(void);
     int Read(char* buf, size_t size);
     int Write(const char* buf, size_t size);
+    int Ctrl(int cmd, void* arg);
     int Shutdown(void);
-    int AddDevice(iodev* dev);
 
+    int AddDevice(iodev* dev);
     void Start(void);
     void Stop(void);
     uint8_t GetOneKey(void);
