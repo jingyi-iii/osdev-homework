@@ -17,7 +17,8 @@
 
 void kb_read(struct iodev *dev, void* data, size_t size)
 {
-    LOG_DBG(dev, "%s\n", (const char*)data, size);
+    LOG_DBG(dev, "%s", (const char*)data, size);
+    LOG_DBG(dev, "%05d", 0x1234);
 }
 
 void kb_read2(struct iodev *dev, void* data, size_t size)

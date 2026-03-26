@@ -135,10 +135,9 @@ int TimeDevice::Read(char* buf, size_t size)
     /* Second */
     p[17] = '0' + (mRtcTime.second / 10);
     p[18] = '0' + (mRtcTime.second % 10);
-    p[19] = '\n';
-    p[20] = '\0';
+    p[19] = '\0';
     
-    len = 20;
+    len = 19;
     
     if (len > (int)size)
         len = size;

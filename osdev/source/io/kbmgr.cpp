@@ -270,12 +270,13 @@ void KBMgr::OnReceive(uint8_t code)
     if (key)
         mKbuf.Add(key);
 
-    auto key2 = GetOneKey();
-    if (key2) {
+    char keybuf[2] = {0};
+    keybuf[0] = GetOneKey();
+    if (keybuf[0]) {
         list_for_each(pos, &mDevList) {
             iodev* dev = list_entry(pos, iodev, dev_node);
             if (dev->data_cb) {
-                dev->data_cb(dev, &key2, 1);
+                dev->data_cb(dev, keybuf, 1);
             }
         }
     }
@@ -334,7 +335,7 @@ int kbdev_init(iodev **out_dev, const char* dev_name, iodev_cb cb)
     if (dev) {
         instance->_bind_c_interface(dev);
         dev->data_cb = cb;
-        KBMgr::GetInstance()->AddDevice(dev);
+        instance->AddDevice(dev);
     }
 
     *out_dev = dev;
