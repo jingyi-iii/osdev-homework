@@ -1,5 +1,5 @@
 #include "kbmgr.h"
-#include "arch_irq.h"
+#include "core_api.h"
 #include "arch_regs.h"
 #include "module.h"
 #include "list.h"
@@ -141,6 +141,7 @@ extern "C" {
 
 static void keyboard_handler(struct irqdev* dev)
 {
+    (void)dev;
     KBMgr::GetInstance()->OnReceive(arch_inb(0x60));
 }
 
@@ -316,8 +317,8 @@ int KBMgr::AddDevice(iodev* dev)
 }
 
 int KBMgr::Init(void){ return 0; }
-int KBMgr::Read(char* buf, size_t size){ return 0; }
-int KBMgr::Write(const char* buf, size_t size){ return 0; }
+int KBMgr::Read(char* buf, size_t size){ (void)buf; (void)size; return 0; }
+int KBMgr::Write(const char* buf, size_t size){ (void)buf; (void)size; return 0; }
 int KBMgr::Ctrl(int cmd, void* arg){ (void)cmd; (void)arg; return 0; }
 int KBMgr::Shutdown(void){ return 0; }
 

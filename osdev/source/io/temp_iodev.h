@@ -3,16 +3,6 @@
 
 #include "iodev.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-int tmpdev_init(iodev **out_dev);
-
-#ifdef __cplusplus
-}
-#endif
-
 class TempDevice {
 private:
     TempDevice(void) = default;

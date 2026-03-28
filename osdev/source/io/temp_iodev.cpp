@@ -1,8 +1,8 @@
 #include "temp_iodev.h"
 
 int TempDevice::Init(void){ return 0; }
-int TempDevice::Read(char* buf, size_t size){ return 0; }
-int TempDevice::Write(const char* buf, size_t size){ return 0; }
+int TempDevice::Read(char* buf, size_t size){ (void)buf; (void)size; return 0; }
+int TempDevice::Write(const char* buf, size_t size){ (void)buf; (void)size; return 0; }
 int TempDevice::Ctrl(int cmd, void* arg){ (void)cmd; (void)arg; return 0; }
 int TempDevice::Shutdown(void){ return 0; }
 

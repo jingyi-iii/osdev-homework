@@ -1,16 +1,17 @@
 #include "process.h"
 #include "heap.h"
 #include "arch_protm.h"
-#include "arch_irq.h"
+#include "core_api.h"
 #include "module.h"
 #include "spinlock.h"
+#include "string.h"
 
 extern uint8_t stack_top;
 static spinlock* lock_dev;
 static volatile tss_t tss = {0};
-static volatile process_t proc_tbl[MAX_PROCESS] = {0};
+static process_t proc_tbl[MAX_PROCESS] = {0};
 static volatile uint8_t avail_proc_nr = 0;
-volatile process_t *proc_run = 0;
+process_t *proc_run = 0;
 volatile regs_t save_regs = {0};
 
 // TSS is only used to provide ss0 and esp0 when entering ring0
@@ -47,6 +48,8 @@ static int ldt_reload(void)
     uint64_t ldt_desc = arch_gen_desc((uint32_t)proc_run->ldts, 2 * 8, 0x0082);
     arch_set_desc(LDT, ldt_desc);
     arch_reload_ldt(arch_get_sel(LDT));
+
+    return 0;
 }
 
 int32_t create_proc(uint8_t ring, proc_entry_t entry)
@@ -65,11 +68,11 @@ int32_t create_proc(uint8_t ring, proc_entry_t entry)
 
     proc = &proc_tbl[avail_proc_nr++];
     // exec/read code segment, 0 ~ 0xfffff
-    *((uint32_t *)proc->ldts + 0) = 0x0000ffff;
-    *((uint32_t *)proc->ldts + 1) = 0x00cf9a00 | (ring << 13);
+    proc->ldts[0] = 0x0000ffff;
+    proc->ldts[1] = 0x00cf9a00 | (ring << 13);
     // r/w data segment, 0 ~ 0xfffff
-    *((uint32_t *)proc->ldts + 2) = 0x0000ffff;
-    *((uint32_t *)proc->ldts + 3) = 0x00cf9200 | (ring << 13);
+    proc->ldts[2] = 0x0000ffff;
+    proc->ldts[3] = 0x00cf9200 | (ring << 13);
 
     proc->stack = kmalloc(0x1000);    // 4KB stack
     // proc->regs = (regs_t*)kmalloc(sizeof(regs_t));    // 4KB stack
@@ -103,18 +106,11 @@ int32_t create_proc(uint8_t ring, proc_entry_t entry)
     return proc->pid;
 }
 
-inline void memcpy(void *dest, const void *src, uint32_t size)
-{
-    uint32_t i = 0;
-
-    for (i = 0; i < size; i++)
-        *((uint8_t *)dest + i) = *((uint8_t *)src + i);
-}
-
 static void schedule(struct irqdev* dev)
 {
+    (void)dev;
+
     static uint32_t timeslice = 0;
-    uint64_t* ldt_desc = 0;
 
     spinlock_lock(lock_dev);
     timeslice++;
@@ -125,7 +121,7 @@ static void schedule(struct irqdev* dev)
     }
     timeslice = 0;
 
-    memcpy(proc_run->regs, &save_regs, sizeof(regs_t));
+    memcpy(proc_run->regs, (const void*)&save_regs, sizeof(regs_t));
     proc_run = proc_run->next;
     // tss.esp0 = (uint32_t)&proc_run->regs + sizeof(regs_t);
     ldt_reload();
@@ -136,7 +132,7 @@ static void schedule(struct irqdev* dev)
 static irqdev* pcb_irqdev = 0;
 void process_evn_setup(void)
 {
-    int32_t i = 0;
+    uint32_t i = 0;
 
     lock_dev = spinlock_alloc();
     tss_init();

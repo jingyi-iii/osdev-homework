@@ -1,9 +1,7 @@
 #include "terminal.h"
 #include "module.h"
-#include "process.h"
-#include "logmgr.h"
-#include "kbmgr.h"
-#include "time_iodev.h"
+#include "core_api.h"
+#include "iodev_api.h"
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -18,18 +16,14 @@
 void kb_read(struct iodev *dev, void* data, size_t size)
 {
     LOG_DBG(dev, "%s", (const char*)data, size);
-    LOG_DBG(dev, "%05d", 0x1234);
 }
 
 void kb_read2(struct iodev *dev, void* data, size_t size)
 {
-    // LOG_DBG(dev, "kbdev2\n");
+    (void)data;
+    (void)size;
 
-    iodev* timedev;
-    timedevice_init(&timedev);
-    char buf[32];
-    timedev->read(timedev, buf, 32);
-    LOG_DBG(dev, "%s", buf);
+    LOG_DBG(dev, "kbdev2");
 }
 
 void timer_handler(void)
@@ -39,9 +33,6 @@ void timer_handler(void)
 
     iodev* kbdev = 0;
     kbdev_init(&kbdev, "kb_read", kb_read);
-
-    iodev* kbdev2 = 0;
-    kbdev_init(&kbdev2, "kb_read2", kb_read2);
 
     for ( ;; ) {
         while (*ptr_msg) {
@@ -60,6 +51,9 @@ void timer_handler2(void)
 {
     const char* ptr_msg = "Timer interrupt triggered modification:    \0";
     uint16_t* ptr_gbuf = (uint16_t*)0xb8000;
+
+    iodev* kbdev2 = 0;
+    kbdev_init(&kbdev2, "kb_read2", kb_read2);
 
     for ( ;; ) {
         while (*ptr_msg) {

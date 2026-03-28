@@ -1,4 +1,5 @@
 #include "logmgr.h"
+#include "iodev_api.h"
 
 int LogMgr::Init(void)
 {
@@ -27,7 +28,6 @@ int LogMgr::Init(void)
 
 int LogMgr::Shutdown(void)
 {
-    io_free_dev(mIoDev);
     spinlock_free(mLock);
     return 0;
 }
@@ -56,7 +56,7 @@ void logdev_init(void)
         logMgr->_bind_c_interface(glogdev);
     }
 
-    timedevice_init(&gtmrdev);
+    tmrdev_init(&gtmrdev);
 }
 
 module_init(logdev_init);

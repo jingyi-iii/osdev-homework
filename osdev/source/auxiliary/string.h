@@ -7,5 +7,6 @@
 
 size_t strlen(const char *s);
 int snprintf(char *str, size_t size, const char *format, ...);
+void memcpy(void *dest, const void *src, uint32_t size);
 
 #endif

@@ -1,4 +1,4 @@
-#include "time_iodev.h"
+#include "tmrmgr.h"
 #include "logmgr.h"
 #include "arch_regs.h"
 
@@ -182,7 +182,7 @@ void TimeDevice::GetTime(rtc_time_t* time)
 
 extern "C" {
 
-int timedevice_init(iodev **out_dev)
+int tmrdev_init(iodev **out_dev)
 {
     if (!out_dev)
         return -1;

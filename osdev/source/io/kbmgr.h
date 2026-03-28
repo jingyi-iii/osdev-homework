@@ -6,16 +6,6 @@
 #include "irqdev.h"
 #include "logmgr.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-int kbdev_init(iodev **out_dev, const char* dev_name, iodev_cb cb);
-
-#ifdef __cplusplus
-}
-#endif
-
 /************************************************************************/
 /*                          Macros Declaration                          */
 /************************************************************************/

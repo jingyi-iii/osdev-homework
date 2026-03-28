@@ -5,6 +5,8 @@
 #include "compiler.h"
 #include "irqdev.h"
 
+#define IDT_ENTRIES             (256)
+
 typedef struct {
     uint16_t isr_low;
     uint16_t sel_code;
@@ -39,15 +41,7 @@ enum arch_irq_no {
     ARCH_IRQ_END    = 0x35,
 };
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-void arch_init_irq(void);
-int irqdev_init(irqdev **out_dev, const char* name, uint32_t irq_nr, irq_handler handler);
-int irqline_init(irqline** out_line, uint32_t irq_nr);
-void irqline_handler(uint32_t irq_nr);
-#ifdef __cplusplus
-}
-#endif
-#endif
+void arch_unmask_irq(uint16_t irq_nr);
+void arch_mask_irq(uint16_t irq_nr);
 
+#endif

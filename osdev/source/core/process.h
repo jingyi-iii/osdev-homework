@@ -3,10 +3,6 @@
 
 #include <stdint.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #define MAX_PROCESS     (32)
 #define MAX_NAME_LEN    (16)
 
@@ -70,17 +66,11 @@ typedef struct tss {
 typedef void (*proc_entry_t)(void);
 typedef struct process {
     regs_t*         regs;
-    uint64_t        ldts[2];
+    uint32_t        ldts[4];    // 64 bits for each ldt entry
     void*           stack;
     proc_entry_t    entry;
     int32_t         pid;
     struct process  *next;
 } process_t;
 
-int32_t create_proc(uint8_t ring, proc_entry_t entry);
-int ldt_init(void);
-
-#ifdef __cplusplus
-}
-#endif
 #endif

@@ -1,19 +1,8 @@
-#ifndef __TIME_IODEV_H__
-#define __TIME_IODEV_H__
-
-#include "iodev.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-int timedevice_init(iodev **out_dev);
-
-#ifdef __cplusplus
-}
-#endif
+#ifndef __TMRMGR_H__
+#define __TMRMGR_H__
 
 #include <stdint.h>
+#include "iodev.h"
 
 /* CMOS RTC I/O Ports */
 #define CMOS_ADDR    0x70

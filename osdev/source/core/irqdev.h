@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "spinlock.h"
 #include "list.h"
+#include "spinlock.h"
 
 typedef struct irqdev {
     const char *name;

@@ -11,6 +11,7 @@ extern "C" {
 #endif
 
 // C structure for iodev
+struct iodev;
 typedef void (*iodev_cb)(struct iodev *dev, void* data, size_t size);
 typedef struct iodev {
     const char *name;
@@ -69,8 +70,7 @@ int io_free_dev(iodev *dev);
         dev->write = _c_write;                                  \
         dev->ctrl = _c_ctrl;                                    \
         dev->shutdown = _c_shutdown;                            \
-        mIoDev = dev;                                           \
-    }                                                           \
-    iodev* mIoDev;
+    }
+
 #endif
 #endif
