@@ -360,16 +360,17 @@ int kbdev_init(iodev **out_dev, const char* dev_name, iodev_cb cb)
     return (dev != nullptr) ? 0 : -1;
 }
 
-void kbdev_release(iodev *dev)
+void kbdev_release(iodev **dev)
 {
     if (!dev)
         return;
 
     KBMgr* instance = KBMgr::GetInstance();
     if (instance) {
-        instance->RemoveDevice(dev);
+        instance->RemoveDevice(*dev);
     }
-    io_free_dev(dev);
+    io_free_dev(*dev);
+    *dev = 0;
 }
 
 }

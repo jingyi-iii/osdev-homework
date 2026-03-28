@@ -1,6 +1,7 @@
 #include "tmrmgr.h"
 #include "logmgr.h"
 #include "arch_regs.h"
+#include "string.h"
 
 // Time format: "YYYY-MM-DD HH:MM:SS\n"
 #define TIME_STRING_SIZE  21
@@ -141,10 +142,8 @@ int TimeDevice::Read(char* buf, size_t size)
     
     if (len > (int)size)
         len = size;
-    
-    for (int i = 0; i < len; i++)
-        buf[i] = time_str[i];
 
+    memcpy(buf, time_str, len);
     return len;
 }
 
@@ -200,4 +199,11 @@ int tmrdev_init(iodev **out_dev)
     return (dev != nullptr) ? 0 : -1;
 }
 
+void tmrdev_release(iodev **dev)
+{
+    if (!dev)
+        return;
+    io_free_dev(*dev);
+    *dev = 0;
+}
 }

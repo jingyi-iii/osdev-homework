@@ -1,5 +1,6 @@
 #include "iodev.h"
 #include "heap.h"
+#include "string.h"
 
 int io_alloc_dev(const char *name, iodev **out_dev)
 {
