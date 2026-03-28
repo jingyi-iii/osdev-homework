@@ -53,11 +53,11 @@ static void kheap_init(void)
     spinlock_unlock(heappool.lock_dev);
 }
 
-int8_t* kmalloc(unsigned int alloc_size)
+void* kmalloc(unsigned int alloc_size)
 {
     heapchunk_t* pck = 0;
     heapchunk_t* new_pck = 0;
-    uint8_t* ret_addr = 0;
+    void* ret_addr = 0;
     unsigned int req_size = sizeof(heapchunk_t) + alloc_size;
 
     spinlock_lock(heappool.lock_dev);
@@ -104,7 +104,7 @@ int8_t* kmalloc(unsigned int alloc_size)
     heappool.avail_size -= req_size;
     spinlock_unlock(heappool.lock_dev);
 
-    return (int8_t*)ret_addr;
+    return (void*)ret_addr;
 
 ALLOC_FAIL:
     spinlock_unlock(heappool.lock_dev);

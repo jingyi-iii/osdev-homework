@@ -31,7 +31,7 @@ int io_free_dev(iodev *dev)
     if (!dev)
         return -1;
 
-    spinlock_free(dev->sp_lock);
+    spinlock_release(dev->sp_lock);
     list_del(&dev->dev_node);
     kfree(dev);
     return 0;

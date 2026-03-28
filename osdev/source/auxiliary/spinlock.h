@@ -21,7 +21,7 @@ typedef struct spinlock {
 } spinlock;
 
 spinlock* spinlock_alloc(void);
-void spinlock_free(spinlock* lock);
+void spinlock_release(spinlock* lock);
 int spinlock_lock(spinlock* lock);
 int spinlock_trylock(spinlock* lock);
 int spinlock_unlock(spinlock* lock);

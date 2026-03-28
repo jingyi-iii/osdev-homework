@@ -265,6 +265,13 @@ KBMgr::KBMgr(void)
     irqdev_init(&mIrqDev, "kbd", KEYBOARD_IRQ_NO, keyboard_handler);
 }
 
+KBMgr::~KBMgr(void)
+{
+    irqdev_release(mIrqDev);
+    list_del(&mDevList);
+    spinlock_release(mLock);
+}
+
 void KBMgr::OnReceive(uint8_t code)
 {
     auto key = mDecoder.Parse(code);
@@ -316,6 +323,16 @@ int KBMgr::AddDevice(iodev* dev)
     return 0;
 }
 
+void KBMgr::RemoveDevice(iodev* dev)
+{
+    if (!dev)
+        return;
+
+    spinlock_lock(mLock);
+    list_del(&dev->dev_node);
+    spinlock_unlock(mLock);
+}
+
 int KBMgr::Init(void){ return 0; }
 int KBMgr::Read(char* buf, size_t size){ (void)buf; (void)size; return 0; }
 int KBMgr::Write(const char* buf, size_t size){ (void)buf; (void)size; return 0; }
@@ -333,7 +350,7 @@ int kbdev_init(iodev **out_dev, const char* dev_name, iodev_cb cb)
     KBMgr* instance = KBMgr::GetInstance();
 
     io_alloc_dev(dev_name, &dev);
-    if (dev) {
+    if (dev && instance) {
         instance->_bind_c_interface(dev);
         dev->data_cb = cb;
         instance->AddDevice(dev);
@@ -341,6 +358,18 @@ int kbdev_init(iodev **out_dev, const char* dev_name, iodev_cb cb)
 
     *out_dev = dev;
     return (dev != nullptr) ? 0 : -1;
+}
+
+void kbdev_release(iodev *dev)
+{
+    if (!dev)
+        return;
+
+    KBMgr* instance = KBMgr::GetInstance();
+    if (instance) {
+        instance->RemoveDevice(dev);
+    }
+    io_free_dev(dev);
 }
 
 }

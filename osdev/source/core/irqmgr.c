@@ -1,20 +1,17 @@
-#include "arch_regs.h"
-#include "arch_protm.h"
 #include "arch_irq.h"
-#include "spinlock.h"
-#include "privilege.h"
-#include <stdint.h>
-#include "compiler.h"
 #include "irqdev.h"
+#include "string.h"
 
-irqline* irqlines[IDT_ENTRIES] = {0};
+static irqline* irqlines[IDT_ENTRIES] = {0};
 
 static int irq_dev_mask(struct irqdev* dev)
 {
     if (!dev)
         return -1;
 
+    spinlock_lock(dev->sp_lock);
     dev->enabled = 0;
+    spinlock_unlock(dev->sp_lock);
     if (irqlines[dev->irq_nr]) {
         irqlines[dev->irq_nr]->mask(irqlines[dev->irq_nr]);
     }
@@ -27,7 +24,9 @@ static int irq_dev_unmask(struct irqdev* dev)
     if (!dev)
         return -1;
 
+    spinlock_lock(dev->sp_lock);
     dev->enabled = 1;
+    spinlock_unlock(dev->sp_lock);
     if (irqlines[dev->irq_nr]) {
         irqlines[dev->irq_nr]->unmask(irqlines[dev->irq_nr]);
     }
@@ -137,6 +136,17 @@ int irqline_init(irqline** out_line, uint32_t irq_nr)
     return 0;
 }
 
+void irqline_release(irqline* line)
+{
+    if (!line)
+        return;
+
+    line->remove_all(line);
+    list_del(&line->dev_list);
+    spinlock_release(line->sp_lock);
+    memset(line, 0, sizeof(irqline));
+}
+
 void irqline_handler(uint32_t irq_nr)
 {
     if (!irqlines[irq_nr])
@@ -172,4 +182,16 @@ int irqdev_init(irqdev **out_dev, const char* name, uint32_t irq_nr, irq_handler
     }
 
     return 0;
+}
+
+void irqdev_release(irqdev *dev)
+{
+    if (!dev)
+        return;
+
+    if (irqlines[dev->irq_nr]) {
+        irqlines[dev->irq_nr]->remove(irqlines[dev->irq_nr], dev);
+    }
+    spinlock_release(dev->sp_lock);
+    irq_free_dev(dev);
 }

@@ -28,7 +28,7 @@ int LogMgr::Init(void)
 
 int LogMgr::Shutdown(void)
 {
-    spinlock_free(mLock);
+    spinlock_release(mLock);
     return 0;
 }
 

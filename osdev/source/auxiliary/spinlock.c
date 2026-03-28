@@ -17,7 +17,7 @@ spinlock* spinlock_alloc(void)
     return 0;
 }
 
-void spinlock_free(spinlock* lock)
+void spinlock_release(spinlock* lock)
 {
     if (!lock)
         return;

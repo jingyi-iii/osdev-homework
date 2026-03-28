@@ -1,7 +1,6 @@
 #ifndef __IODEV_H__
 #define __IODEV_H__
 
-#include <stdint.h>
 #include <stddef.h>
 #include "list.h"
 #include "spinlock.h"

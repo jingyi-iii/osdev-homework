@@ -9,6 +9,8 @@ extern "C" {
 #include "string.h"
 
 int kbdev_init(iodev **out_dev, const char* dev_name, iodev_cb cb);
+void kbdev_release(iodev *dev);
+
 int tmrdev_init(iodev **out_dev);
 int tmpdev_init(iodev **out_dev);
 

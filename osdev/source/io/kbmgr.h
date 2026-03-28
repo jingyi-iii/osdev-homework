@@ -149,7 +149,7 @@ public:
 class KBMgr {
 private:
     KBMgr(void);
-    ~KBMgr(void) = default;
+    ~KBMgr(void);
 
     KDecoder mDecoder;
     KBuf mKbuf;
@@ -174,6 +174,7 @@ public:
     int Shutdown(void);
 
     int AddDevice(iodev* dev);
+    void RemoveDevice(iodev* dev);
     void Start(void);
     void Stop(void);
     uint8_t GetOneKey(void);

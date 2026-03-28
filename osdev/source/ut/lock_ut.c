@@ -19,7 +19,7 @@ void test_basic_allocation(void) {
     assert(lock != NULL);
     assert(lock->state == LOCK_UNLOCKED);
 
-    spinlock_free(lock);
+    spinlock_release(lock);
 
     printf("  ✓ Passed\n");
 }
@@ -37,7 +37,7 @@ void test_multiple_allocations(void) {
     }
 
     for (int i = 0; i < NUM_LOCKS; i++) {
-        spinlock_free(locks[i]);
+        spinlock_release(locks[i]);
     }
 
     printf("  ✓ Passed\n");
@@ -60,7 +60,7 @@ void test_lock_unlock(void) {
     assert(ret == 0);
     assert(lock->state == LOCK_UNLOCKED);
 
-    spinlock_free(lock);
+    spinlock_release(lock);
     printf("  ✓ Passed\n");
 }
 
@@ -88,7 +88,7 @@ void test_trylock(void) {
     assert(lock->state == LOCK_LOCKED);
 
     spinlock_unlock(lock);
-    spinlock_free(lock);
+    spinlock_release(lock);
     printf("  ✓ Passed\n");
 }
 
@@ -104,7 +104,7 @@ void test_null_handling(void) {
     assert(spinlock_trylock(lock) == -1);
 
     // These should not crash
-    spinlock_free(lock);
+    spinlock_release(lock);
 
     // Allocate and then free
     lock = spinlock_alloc();
@@ -114,7 +114,7 @@ void test_null_handling(void) {
     assert(spinlock_lock(lock) == 0);
     assert(spinlock_unlock(lock) == 0);
 
-    spinlock_free(lock);
+    spinlock_release(lock);
     printf("  ✓ Passed\n");
 }
 
@@ -139,7 +139,7 @@ void test_max_allocation(void) {
 
     // Clean up
     for (int i = 0; i < success_count; i++) {
-        spinlock_free(locks[i]);
+        spinlock_release(locks[i]);
     }
 
     printf("  ✓ Passed\n");
@@ -203,7 +203,7 @@ void test_concurrent_access(void) {
     assert(shared_counter == expected);
     printf("  ✓ Passed (counter=%d, expected=%d)\n", shared_counter, expected);
 
-    spinlock_free(lock);
+    spinlock_release(lock);
 }
 
 // Thread function for trylock testing
@@ -259,7 +259,7 @@ void test_concurrent_trylock(void) {
     printf("  ✓ Passed (successful locks=%d, max possible=%d)\n",
            total_successes, NUM_THREADS * (NUM_ITERATIONS / 10));
 
-    spinlock_free(lock);
+    spinlock_release(lock);
 }
 
 // Test 9: Reinitialize after release
@@ -272,7 +272,7 @@ void test_reinitialize(void) {
     // Use and free
     spinlock_lock(lock);
     spinlock_unlock(lock);
-    spinlock_free(lock);
+    spinlock_release(lock);
 
     // Second allocation - might get same or different address
     lock = spinlock_alloc();
@@ -286,7 +286,7 @@ void test_reinitialize(void) {
     assert(lock->state == LOCK_LOCKED);
     spinlock_unlock(lock);
 
-    spinlock_free(lock);
+    spinlock_release(lock);
     printf("  ✓ Passed\n");
 }
 
@@ -338,7 +338,7 @@ void test_multiple_locks_concurrent(void) {
 
     // Cleanup
     for (int i = 0; i < 5; i++) {
-        spinlock_free(locks[i]);
+        spinlock_release(locks[i]);
     }
 }
 

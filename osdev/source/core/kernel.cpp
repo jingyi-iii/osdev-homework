@@ -72,8 +72,7 @@ extern "C" {
 
 extern init_call_t __start_initcall[];
 extern init_call_t __stop_initcall[];
-
-void kernel_do_initcalls(void)
+static void kernel_do_initcalls(void)
 {
     init_call_t *call_ptr = 0;
     

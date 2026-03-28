@@ -537,3 +537,10 @@ void memcpy(void *dest, const void *src, uint32_t size)
     for (i = 0; i < size; i++)
         *((uint8_t *)dest + i) = *((const uint8_t *)src + i);
 }
+
+void memset(void* dest, char chr, size_t size)
+{
+    for (size_t i = 0; i < size; i++) {
+        *((char*)dest + i) = chr;
+    }
+}

@@ -62,7 +62,6 @@ typedef struct tss {
     uint16_t iobase;
 } __attribute__((packed)) tss_t;
 
-
 typedef void (*proc_entry_t)(void);
 typedef struct process {
     regs_t*         regs;
