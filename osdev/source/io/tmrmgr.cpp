@@ -54,16 +54,7 @@ void TimeDevice::UpdateRtcTime(void)
     /* Check if RTC is in BCD or binary mode */
     uint8_t reg_b = ReadRegister(RTC_REG_B);
     
-    if (!(reg_b & RTC_BCD)) {
-        /* BCD mode - convert to binary */
-        mRtcTime.second = BcdToBin(last_second & 0x7F);
-        mRtcTime.minute = BcdToBin(last_minute & 0x7F);
-        mRtcTime.hour   = BcdToBin(last_hour & 0x3F);
-        mRtcTime.day    = BcdToBin(last_day & 0x3F);
-        mRtcTime.month  = BcdToBin(last_month & 0x1F);
-        mRtcTime.year   = BcdToBin(last_year & 0xFF);
-        mRtcTime.century = BcdToBin(last_century & 0xFF);
-    } else {
+    if (reg_b & RTC_BCD) {
         /* Binary mode */
         mRtcTime.second = last_second & 0x7F;
         mRtcTime.minute = last_minute & 0x7F;
@@ -72,6 +63,15 @@ void TimeDevice::UpdateRtcTime(void)
         mRtcTime.month  = last_month & 0x1F;
         mRtcTime.year   = last_year & 0xFF;
         mRtcTime.century = last_century & 0xFF;
+    } else {
+        /* BCD mode - convert to binary */
+        mRtcTime.second = BcdToBin(last_second & 0x7F);
+        mRtcTime.minute = BcdToBin(last_minute & 0x7F);
+        mRtcTime.hour   = BcdToBin(last_hour & 0x3F);
+        mRtcTime.day    = BcdToBin(last_day & 0x3F);
+        mRtcTime.month  = BcdToBin(last_month & 0x1F);
+        mRtcTime.year   = BcdToBin(last_year & 0xFF);
+        mRtcTime.century = BcdToBin(last_century & 0xFF);
     }
 
     /* Handle 12-hour format if needed */
@@ -81,6 +81,9 @@ void TimeDevice::UpdateRtcTime(void)
             mRtcTime.hour = (mRtcTime.hour & 0x7F) + 12;
         }
     }
+
+    /* Show as Beijing time: +8hour */
+    mRtcTime.hour += 8;
 }
 
 int TimeDevice::Init(void)

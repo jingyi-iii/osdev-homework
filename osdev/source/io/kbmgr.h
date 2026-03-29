@@ -121,22 +121,6 @@ private:
     char mBuffer[MAX_KB_SIZE];
     uint32_t mCount;
 
-    inline void memcpy(void *dest, const void *src, uint32_t size)
-    {
-        uint32_t i = 0;
-
-        for (i = 0; i < size; i++)
-            *((uint8_t *)dest + i) = *((uint8_t *)src + i);
-    }
-
-    inline void memset(void *dest, uint8_t data, uint32_t size)
-    {
-        uint32_t i = 0;
-
-        for (i = 0; i < size; i++)
-            *((uint8_t *)dest + i) = data;
-    }
-
 public:
     void Reset(void);
     void Add(char chr);

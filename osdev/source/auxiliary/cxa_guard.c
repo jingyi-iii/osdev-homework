@@ -18,6 +18,12 @@ int __cxa_guard_acquire(char* guard)
     if (*guard_byte & 1)
         return 0;
 
+    if (!guard_spinlock) {
+        while (!guard_spinlock) {
+            __asm__ __volatile__("pause");
+        }
+    }
+
     spinlock_lock(guard_spinlock);
     if (*guard_byte & 1) {
         spinlock_unlock(guard_spinlock);

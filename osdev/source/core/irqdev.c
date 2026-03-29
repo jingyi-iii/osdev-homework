@@ -18,6 +18,9 @@ int irq_alloc_dev(uint32_t irq_nr, const char *name,
     dev->handler = handler;
     dev->enabled = 0;
     dev->sp_lock = spinlock_alloc();
+    if (!dev->sp_lock)
+        return -1;
+
     list_init(&dev->dev_node);
 
     *out_dev = dev;

@@ -75,8 +75,8 @@ int32_t create_proc(uint8_t ring, proc_entry_t entry)
     proc->ldts[3] = 0x00cf9200 | (ring << 13);
 
     proc->stack = kmalloc(0x1000);    // 4KB stack
-    // proc->regs = (regs_t*)kmalloc(sizeof(regs_t));    // 4KB stack
-    proc->regs = (regs_t*)((uint8_t*)proc->stack + 0x1000 - 68);
+    // proc->regs = (regs_t*)kmalloc(sizeof(regs_t));
+    proc->regs = (regs_t*)((uint8_t*)proc->stack + 0x1000 - sizeof(regs_t));
     proc->regs->cs = 0x0 | 0x4 | ring;
     proc->regs->gs = 0x8 | 0x4 | ring;
     proc->regs->fs = 0x8 | 0x4 | ring;
@@ -135,10 +135,13 @@ void process_evn_setup(void)
     uint32_t i = 0;
 
     lock_dev = spinlock_alloc();
+    if (!lock_dev) {
+        return;
+    }
+
     tss_init();
     
-    for (i = 0; i < MAX_PROCESS * sizeof(process_t); i++)
-        *((uint8_t *)proc_tbl + i) = 0;
+    memset(proc_tbl, 0, sizeof(proc_tbl));
     for (i = 0; i < MAX_PROCESS; i++)
         proc_tbl[i].pid = -1;
 

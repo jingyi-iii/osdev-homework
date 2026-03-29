@@ -1,6 +1,7 @@
 #include "heap.h"
 #include "spinlock.h"
 #include "module.h"
+#include "string.h"
 
 #define HEAP_TOTAL_SIZE         (1024 * 1024 * 10)
 
@@ -20,14 +21,6 @@ typedef struct heappool {
 } heappool_t;
 
 static heappool_t heappool = {0};
-
-static inline void memset(void *dest, uint8_t data, uint32_t size)
-{
-    uint32_t i = 0;
-
-    for (i = 0; i < size; i++)
-        *((uint8_t *)dest + i) = data;
-}
 
 static void kheap_init(void)
 {
@@ -60,13 +53,10 @@ void* kmalloc(unsigned int alloc_size)
     void* ret_addr = 0;
     unsigned int req_size = sizeof(heapchunk_t) + alloc_size;
 
-    spinlock_lock(heappool.lock_dev);
-    if (!heappool.init) {
-        spinlock_unlock(heappool.lock_dev);
+    if (!heappool.init)
         kheap_init();
-        spinlock_lock(heappool.lock_dev);
-    }
 
+    spinlock_lock(heappool.lock_dev);
     if (req_size < alloc_size)         // overflow
         goto ALLOC_FAIL;
     if (req_size > heappool.avail_size)
@@ -92,7 +82,7 @@ void* kmalloc(unsigned int alloc_size)
         new_pck->size = pck->size - req_size;
 
         pck = &heappool.ckstart;
-        while (new_pck->size > pck->next->size) {
+        while (pck->next != &heappool.ckend && new_pck->size > pck->next->size) {
             pck = pck->next;
         }
 

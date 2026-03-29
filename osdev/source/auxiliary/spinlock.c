@@ -34,6 +34,7 @@ int spinlock_lock(spinlock* lock)
                                __ATOMIC_ACQUIRE) == LOCK_LOCKED) {
         __asm__ __volatile__("pause" ::: "memory");
     }
+    barrier();
     return 0;
 }
 

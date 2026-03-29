@@ -26,7 +26,7 @@ void kb_read2(struct iodev *dev, void* data, size_t size)
     LOG_DBG(dev, "kbdev2");
 }
 
-void timer_handler(void)
+void timer_process(void)
 {
     const char* ptr_msg = "Timer interrupt triggered modification: \0";
     uint16_t* ptr_gbuf = (uint16_t*)0xb8000;
@@ -47,7 +47,7 @@ void timer_handler(void)
     while (1);
 }
 
-void timer_handler2(void)
+void timer_process2(void)
 {
     const char* ptr_msg = "Timer interrupt triggered modification:    \0";
     uint16_t* ptr_gbuf = (uint16_t*)0xb8000;
@@ -90,8 +90,8 @@ void kernel_start(void)
 
     kernel_do_initcalls();
 
-    create_proc(0, timer_handler);
-    create_proc(3, timer_handler2);
+    create_proc(0, timer_process);
+    create_proc(3, timer_process2);
 }
 }
 

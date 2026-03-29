@@ -3,6 +3,7 @@
 #include "arch_regs.h"
 #include "module.h"
 #include "list.h"
+#include "string.h"
 
 const unsigned int keymap[NR_SCAN_CODES * MAP_COLS] = {
 /* scan-code			!Shift		Shift		E0 XX	*/
@@ -208,7 +209,7 @@ uint8_t KDecoder::Parse(uint8_t code)
 
 void KBuf::Reset(void)
 {
-    this->memset(mBuffer, 0, sizeof(mBuffer));
+    memset(mBuffer, 0, sizeof(mBuffer));
     mpHead = mBuffer;
     mpTail = mBuffer;
     mCount = 0;
