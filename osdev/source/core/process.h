@@ -69,6 +69,7 @@ typedef struct process {
     void*           stack;
     proc_entry_t    entry;
     int32_t         pid;
+    uint8_t         ring;
     struct process  *next;
 } process_t;
 

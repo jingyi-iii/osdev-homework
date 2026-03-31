@@ -87,6 +87,7 @@ int32_t create_proc(uint8_t ring, proc_entry_t entry)
     proc->regs->esp = (uint32_t)proc->stack + 0x1000;
     proc->regs->eflags = 0x0202;
     proc->pid = proc - proc_tbl;
+    proc->ring = ring;
 
     if (!proc_run) {    // the first process
         proc_run = proc;
@@ -121,7 +122,8 @@ static void schedule(struct irqdev* dev)
     }
     timeslice = 0;
 
-    memcpy(proc_run->regs, (const void*)&save_regs, sizeof(regs_t));
+    if (proc_run->ring)
+        memcpy(proc_run->regs, (const void*)&save_regs, sizeof(regs_t));
     proc_run = proc_run->next;
     // tss.esp0 = (uint32_t)&proc_run->regs + sizeof(regs_t);
     ldt_reload();

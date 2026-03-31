@@ -7,12 +7,25 @@
         pushl   %fs
         pushl   %gs
 
+        testl   $3,             52(%esp)
+        jz      from_kernel
+
+from_user:
+
         movl    %esp,           %esi
         movl    $save_regs,     %edi
         movl    $17,            %ecx
         cld
         rep     movsl
 
+        jmp     switch_heap
+
+from_kernel:
+
+        movl    proc_run,       %eax
+        movl    %esp,           (%eax)
+
+switch_heap:
         mov     $0x10,          %ax
         mov     %ax,            %ds
         mov     %ax,            %es
@@ -51,11 +64,7 @@
 
 .macro DEFAULT_EXCEPTION irq_no
 .align  256,     0x90
-        SAVE_REGS_ADD_SWITCH_KERNEL_STACK
-        movl    \irq_no,        %esi
-        call    esr
-        RESTORE_REGS_AND_SWITCH_USER_STACK
-        iret
+        hlt
 .endm
 
 .macro DEFAULT_INTERRUPT irq_no
