@@ -12,7 +12,7 @@ static volatile tss_t tss = {0};
 static process_t proc_tbl[MAX_PROCESS] = {0};
 static volatile uint8_t avail_proc_nr = 0;
 process_t *proc_run = 0;
-volatile regs_t save_regs = {0};
+// volatile regs_t save_regs = {0};
 
 // TSS is only used to provide ss0 and esp0 when entering ring0
 static int tss_init(void)
@@ -92,7 +92,8 @@ int32_t create_proc(uint8_t ring, proc_entry_t entry)
     if (!proc_run) {    // the first process
         proc_run = proc;
         proc_run->next = proc_run;
-        // tss.esp0 = (uint32_t)&proc_run->regs + sizeof(regs_t);
+        if (proc->ring)
+            tss.esp0 = (uint32_t)proc_run->regs + sizeof(regs_t);
         ldt_reload();
     } else {
         prev = proc_tbl;
@@ -115,16 +116,18 @@ static void schedule(struct irqdev* dev)
 
     spinlock_lock(lock_dev);
     timeslice++;
-    // if (timeslice < 5 || !proc_run || !proc_run->next) {
-    if (!proc_run || !proc_run->next) {
+    if (timeslice < 5 || !proc_run || !proc_run->next) {
+    // if (!proc_run || !proc_run->next) {
         spinlock_unlock(lock_dev);
         return;
     }
     timeslice = 0;
 
-    if (proc_run->ring)
-        memcpy(proc_run->regs, (const void*)&save_regs, sizeof(regs_t));
+    // if (proc_run->ring)
+    //     memcpy(proc_run->regs, (const void*)&save_regs, sizeof(regs_t));
     proc_run = proc_run->next;
+    if (proc_run->ring)
+        tss.esp0 = (uint32_t)proc_run->regs + sizeof(regs_t);
     // tss.esp0 = (uint32_t)&proc_run->regs + sizeof(regs_t);
     ldt_reload();
 

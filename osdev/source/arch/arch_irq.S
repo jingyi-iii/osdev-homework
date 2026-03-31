@@ -12,11 +12,11 @@
 
 from_user:
 
-        movl    %esp,           %esi
-        movl    $save_regs,     %edi
-        movl    $17,            %ecx
-        cld
-        rep     movsl
+        # movl    %esp,           %esi
+        # movl    $save_regs,     %edi
+        # movl    $17,            %ecx
+        # cld
+        # rep     movsl
 
         jmp     switch_heap
 
