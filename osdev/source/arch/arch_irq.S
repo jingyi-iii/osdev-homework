@@ -8,24 +8,14 @@
         pushl   %gs
 
         testl   $3,             52(%esp)
-        jz      from_kernel
+        jnz     1f
 
-from_user:
-
-        # movl    %esp,           %esi
-        # movl    $save_regs,     %edi
-        # movl    $17,            %ecx
-        # cld
-        # rep     movsl
-
-        jmp     switch_heap
-
-from_kernel:
-
+        # from kernel
         movl    proc_run,       %eax
         movl    %esp,           (%eax)
 
-switch_heap:
+1:
+        # from user
         mov     $0x10,          %ax
         mov     %ax,            %ds
         mov     %ax,            %es

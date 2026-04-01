@@ -2,8 +2,9 @@
 #define __PROCESS_H_
 
 #include <stdint.h>
+#include "list.h"
+#include "spinlock.h"
 
-#define MAX_PROCESS     (32)
 #define MAX_NAME_LEN    (16)
 
 enum proc_run_state {
@@ -63,14 +64,17 @@ typedef struct tss {
 } __attribute__((packed)) tss_t;
 
 typedef void (*proc_entry_t)(void);
-typedef struct process {
+
+/* Process Control Block */
+typedef struct pcb {
     regs_t*         regs;
     uint32_t        ldts[4];    // 64 bits for each ldt entry
     void*           stack;
     proc_entry_t    entry;
     int32_t         pid;
     uint8_t         ring;
-    struct process  *next;
-} process_t;
+    list_node       pcb_node;
+    spinlock*       sp_lock;
+} pcb;
 
 #endif

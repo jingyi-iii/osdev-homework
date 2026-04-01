@@ -83,12 +83,13 @@ static void kernel_do_initcalls(void)
 
 void kernel_start(void) 
 {
+    kernel_do_initcalls();
+    /* KLOG is available here */
+
 	Terminal terminal;
 	terminal.Flush();
 	for (int i = 0; i < 100; i++)
 		terminal.Write("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
-
-    kernel_do_initcalls();
 
     create_proc(0, timer_process);
     create_proc(3, timer_process2);

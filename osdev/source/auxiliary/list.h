@@ -37,6 +37,11 @@ static inline void list_del(list_node* node)
     list_init(node);
 }
 
+static inline list_node* list_next(list_node* node)
+{
+    return node ? node->next : 0;
+}
+
 #define list_entry(ptr, type, member) \
     ((type *)((char *)(ptr)-(unsigned long)(&((type *)0)->member)))
 
