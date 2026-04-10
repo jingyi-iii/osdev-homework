@@ -7,14 +7,11 @@ extern "C" {
 
 #include "irqdev.h"
 #include "arch_irq.h"
-
-typedef void (*proc_entry_t)(void);
+#include "process.h"
 
 int irqdev_init(irqdev **out_dev, const char* name,
     uint32_t irq_nr, irq_handler handler);
 void irqdev_release(irqdev *dev);
-
-int32_t create_proc(uint8_t ring, proc_entry_t entry);
 
 #ifdef __cplusplus
 }

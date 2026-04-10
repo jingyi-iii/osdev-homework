@@ -45,7 +45,7 @@ knl32_entry:
         call    arch_init_irq
         call    kernel_start
 
-        movl    proc_run,       %eax
+        movl    curr_context,   %eax
         movl    (%eax),         %esp
         popl    %gs
         popl    %fs

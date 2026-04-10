@@ -11,7 +11,7 @@
         jnz     1f
 
         # from kernel
-        movl    proc_run,       %eax
+        movl    curr_context,   %eax
         movl    %esp,           (%eax)
 
 1:
@@ -23,7 +23,7 @@
 .endm
 
 .macro RESTORE_REGS_AND_SWITCH_USER_STACK
-        movl    proc_run,       %eax
+        movl    curr_context,   %eax
         movl    (%eax),         %esp
 
         popl    %gs
@@ -33,24 +33,6 @@
         popal
 .endm
 
-.macro SAVE_REGS
-        pushal
-        pushl   %ds
-        pushl   %es
-        pushl   %fs
-        pushl   %gs
-        mov     $0x10,          %ax
-        mov     %ax,            %ds
-        mov     %ax,            %es
-.endm
-
-.macro RESTORE_REGS
-        popl    %gs
-        popl    %fs
-        popl    %es
-        popl    %ds
-        popal
-.endm
 
 .macro DEFAULT_EXCEPTION irq_no
 .align  256,     0x90
@@ -58,21 +40,6 @@
 .endm
 
 .macro DEFAULT_INTERRUPT irq_no
-.align  256,     0x90
-        SAVE_REGS
-        movl    \irq_no,        %eax
-        call    mask_int
-
-        movl    \irq_no,        %esi
-        call    isr
-        
-        movl    \irq_no,        %eax
-        call    unmask_int  
-        RESTORE_REGS
-        iret
-.endm
-
-.macro TIMER_INTERRUPT irq_no
 .align  256,     0x90
         SAVE_REGS_ADD_SWITCH_KERNEL_STACK
         movl    \irq_no,        %eax
@@ -123,7 +90,7 @@ arch_isr_tbl:
         DEFAULT_EXCEPTION       $0x1d
         DEFAULT_EXCEPTION       $0x1e
         DEFAULT_EXCEPTION       $0x1f
-        TIMER_INTERRUPT         $0x20
+        DEFAULT_INTERRUPT       $0x20
         DEFAULT_INTERRUPT       $0x21
         DEFAULT_INTERRUPT       $0x22
         DEFAULT_INTERRUPT       $0x23

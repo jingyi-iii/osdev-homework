@@ -91,8 +91,8 @@ void kernel_start(void)
 	for (int i = 0; i < 100; i++)
 		terminal.Write("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
 
-    create_proc(0, timer_process);
-    create_proc(3, timer_process2);
+    create_proc(PROC_PRIV_KERNEL, timer_process);
+    create_proc(PROC_PRIV_USER, timer_process2);
 }
 }
 

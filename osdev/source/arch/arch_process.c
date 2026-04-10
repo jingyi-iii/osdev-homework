@@ -2,7 +2,7 @@
 #include "iodev_api.h"
 
 static volatile tss_t tss = {0};
-proc_context* proc_run_context = 0;
+volatile proc_context* curr_context = 0;
 
 // TSS is only used to provide ss0 and esp0 when entering ring0 from non-ring0
 int tss_init(void)
@@ -41,8 +41,10 @@ static inline void ldt_reload(proc_context* context)
     arch_reload_ldt(arch_get_sel(LDT));
 }
 
-int proc_context_init(proc_context* context, proc_entry_t entry, uint8_t ring)
+int proc_context_init(proc_context* context, proc_entry_t entry, proc_priv priv)
 {
+    uint8_t ring = priv == PROC_PRIV_KERNEL ? 0 : 3;
+
     if (!context) {
         KLOG("process context is null");
         return -22;
@@ -78,5 +80,6 @@ int proc_restore_context(proc_context* context)
 
     if (context->ring)
         tss.esp0 = (uint32_t)context->regs + sizeof(regs_t);
-    ldt_reload(context);
+    curr_context = context;
+    ldt_reload(curr_context);
 }
