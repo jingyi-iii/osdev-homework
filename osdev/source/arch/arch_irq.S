@@ -1,4 +1,5 @@
 .globl  arch_isr_tbl
+.globl  syscall
 
 .macro SAVE_REGS_ADD_SWITCH_KERNEL_STACK
         pushal
@@ -11,20 +12,20 @@
         jnz     1f
 
         # from kernel
-        movl    curr_context,   %eax
-        movl    %esp,           (%eax)
+        movl    curr_context,   %esi
+        movl    %esp,           (%esi)
 
 1:
         # from user
-        mov     $0x10,          %ax
-        mov     %ax,            %ds
-        mov     %ax,            %es
+        mov     $0x10,          %si
+        mov     %si,            %ds
+        mov     %si,            %es
         movl    $stack_top,     %esp
 .endm
 
 .macro RESTORE_REGS_AND_SWITCH_USER_STACK
-        movl    curr_context,   %eax
-        movl    (%eax),         %esp
+        movl    curr_context,   %esi
+        movl    (%esi),         %esp
 
         popl    %gs
         popl    %fs
@@ -34,21 +35,29 @@
 .endm
 
 
-.macro DEFAULT_EXCEPTION irq_no
+.macro DECLARE_EXCEPTION irq_no
 .align  256,     0x90
         hlt
 .endm
 
-.macro DEFAULT_INTERRUPT irq_no
+.macro DECLARE_INTERRUPT irq_no
 .align  256,     0x90
         SAVE_REGS_ADD_SWITCH_KERNEL_STACK
-        movl    \irq_no,        %eax
+        movl    \irq_no,        %esi
         call    mask_int
+
+        incl    k_reenter
+        movl    k_reenter,      %esi
+        cmp     $0,             %esi
+        jne     1f
 
         movl    \irq_no,        %esi
         call    isr
+
+1:
+        decl    k_reenter
         
-        movl    \irq_no,        %eax
+        movl    \irq_no,        %esi
         call    unmask_int  
         RESTORE_REGS_AND_SWITCH_USER_STACK
         iret
@@ -58,54 +67,54 @@
 .section        .text
 .align  256,     0x90
 arch_isr_tbl:
-        DEFAULT_EXCEPTION       $0x00
-        DEFAULT_EXCEPTION       $0x01
-        DEFAULT_EXCEPTION       $0x02
-        DEFAULT_EXCEPTION       $0x03
-        DEFAULT_EXCEPTION       $0x04
-        DEFAULT_EXCEPTION       $0x05
-        DEFAULT_EXCEPTION       $0x06
-        DEFAULT_EXCEPTION       $0x07
-        DEFAULT_EXCEPTION       $0x08
-        DEFAULT_EXCEPTION       $0x09
-        DEFAULT_EXCEPTION       $0x0a
-        DEFAULT_EXCEPTION       $0x0b
-        DEFAULT_EXCEPTION       $0x0c
-        DEFAULT_EXCEPTION       $0x0d
-        DEFAULT_EXCEPTION       $0x0e
-        DEFAULT_EXCEPTION       $0x0f
-        DEFAULT_EXCEPTION       $0x10
-        DEFAULT_EXCEPTION       $0x11
-        DEFAULT_EXCEPTION       $0x12
-        DEFAULT_EXCEPTION       $0x13
-        DEFAULT_EXCEPTION       $0x14
-        DEFAULT_EXCEPTION       $0x15
-        DEFAULT_EXCEPTION       $0x16
-        DEFAULT_EXCEPTION       $0x17
-        DEFAULT_EXCEPTION       $0x18
-        DEFAULT_EXCEPTION       $0x19
-        DEFAULT_EXCEPTION       $0x1a
-        DEFAULT_EXCEPTION       $0x1b
-        DEFAULT_EXCEPTION       $0x1c
-        DEFAULT_EXCEPTION       $0x1d
-        DEFAULT_EXCEPTION       $0x1e
-        DEFAULT_EXCEPTION       $0x1f
-        DEFAULT_INTERRUPT       $0x20
-        DEFAULT_INTERRUPT       $0x21
-        DEFAULT_INTERRUPT       $0x22
-        DEFAULT_INTERRUPT       $0x23
-        DEFAULT_INTERRUPT       $0x24
-        DEFAULT_INTERRUPT       $0x25
-        DEFAULT_INTERRUPT       $0x26
-        DEFAULT_INTERRUPT       $0x27
-        DEFAULT_INTERRUPT       $0x28
-        DEFAULT_INTERRUPT       $0x29
-        DEFAULT_INTERRUPT       $0x2a
-        DEFAULT_INTERRUPT       $0x2b
-        DEFAULT_INTERRUPT       $0x2c
-        DEFAULT_INTERRUPT       $0x2d
-        DEFAULT_INTERRUPT       $0x2e
-        DEFAULT_INTERRUPT       $0x2f
+        DECLARE_EXCEPTION       $0x00
+        DECLARE_EXCEPTION       $0x01
+        DECLARE_EXCEPTION       $0x02
+        DECLARE_EXCEPTION       $0x03
+        DECLARE_EXCEPTION       $0x04
+        DECLARE_EXCEPTION       $0x05
+        DECLARE_EXCEPTION       $0x06
+        DECLARE_EXCEPTION       $0x07
+        DECLARE_EXCEPTION       $0x08
+        DECLARE_EXCEPTION       $0x09
+        DECLARE_EXCEPTION       $0x0a
+        DECLARE_EXCEPTION       $0x0b
+        DECLARE_EXCEPTION       $0x0c
+        DECLARE_EXCEPTION       $0x0d
+        DECLARE_EXCEPTION       $0x0e
+        DECLARE_EXCEPTION       $0x0f
+        DECLARE_EXCEPTION       $0x10
+        DECLARE_EXCEPTION       $0x11
+        DECLARE_EXCEPTION       $0x12
+        DECLARE_EXCEPTION       $0x13
+        DECLARE_EXCEPTION       $0x14
+        DECLARE_EXCEPTION       $0x15
+        DECLARE_EXCEPTION       $0x16
+        DECLARE_EXCEPTION       $0x17
+        DECLARE_EXCEPTION       $0x18
+        DECLARE_EXCEPTION       $0x19
+        DECLARE_EXCEPTION       $0x1a
+        DECLARE_EXCEPTION       $0x1b
+        DECLARE_EXCEPTION       $0x1c
+        DECLARE_EXCEPTION       $0x1d
+        DECLARE_EXCEPTION       $0x1e
+        DECLARE_EXCEPTION       $0x1f
+        DECLARE_INTERRUPT       $0x20
+        DECLARE_INTERRUPT       $0x21
+        DECLARE_INTERRUPT       $0x22
+        DECLARE_INTERRUPT       $0x23
+        DECLARE_INTERRUPT       $0x24
+        DECLARE_INTERRUPT       $0x25
+        DECLARE_INTERRUPT       $0x26
+        DECLARE_INTERRUPT       $0x27
+        DECLARE_INTERRUPT       $0x28
+        DECLARE_INTERRUPT       $0x29
+        DECLARE_INTERRUPT       $0x2a
+        DECLARE_INTERRUPT       $0x2b
+        DECLARE_INTERRUPT       $0x2c
+        DECLARE_INTERRUPT       $0x2d
+        DECLARE_INTERRUPT       $0x2e
+        DECLARE_INTERRUPT       $0x2f
 
 #
 # Handle function for exceptions(IRQ0~IRQ31).
@@ -115,7 +124,7 @@ arch_isr_tbl:
 #
 .align  32
 esr:
-        # call    *user_isrs(, %esi, 4)
+        hlt
         ret
 
 #
@@ -126,14 +135,6 @@ esr:
 #
 .align  32
 isr:
-        # pushl   %esi
-        # call    get_dev_by_irq_nr
-        # addl    $4, %esp
-
-        # pushl   %eax
-        # call    *user_isrs(, %esi, 4)
-        # addl    $4, %esp
-
         pushl   %esi
         call    irqline_handler
         addl    $4, %esp
@@ -164,9 +165,10 @@ mask_int:
         pushl   %ebx
         pushl   %ecx
         pushl   %edx
+        pushl   %esi
 
-        movl    %eax,           %edx
-        cmpl    $40,            %eax
+        movl    %esi,           %edx
+        cmpl    $40,            %esi
         jnb     2f
 1:
         in      $0x21,          %al     # ignore current interrupt (master)
@@ -186,6 +188,7 @@ mask_int:
         orb     %bl,            %al
         out     %al,            $0xa1
 3:
+        popl    %esi
         popl    %edx
         popl    %ecx
         popl    %ebx
@@ -204,9 +207,10 @@ unmask_int:
         pushl   %ebx
         pushl   %ecx
         pushl   %edx
+        pushl   %esi
 
-        movl    %eax,           %edx
-        cmpl    $40,            %eax
+        movl    %esi,           %edx
+        cmpl    $40,            %esi
         jnb     2f
 1:                                      # master
         in      $0x21,          %al
@@ -229,9 +233,28 @@ unmask_int:
         and     %bl,            %al
         out     %al,            $0xa1
 3:
+        popl    %esi
         popl    %edx
         popl    %ecx
         popl    %ebx
         popl    %eax
         ret
 
+
+.align  256,     0x90
+syscall:
+        SAVE_REGS_ADD_SWITCH_KERNEL_STACK
+
+        incl    k_reenter
+        movl    k_reenter,      %esi
+        cmp     $0,             %esi
+        jne     1f
+
+        call    syscall_handler
+
+1:
+        decl    k_reenter
+
+        RESTORE_REGS_AND_SWITCH_USER_STACK
+        iret
+.endm

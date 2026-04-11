@@ -43,5 +43,6 @@ enum arch_irq_no {
 
 void arch_unmask_irq(uint16_t irq_nr);
 void arch_mask_irq(uint16_t irq_nr);
-
+// void arch_syscall(uint32_t minor, void* data);
+void arch_syscall(void);
 #endif

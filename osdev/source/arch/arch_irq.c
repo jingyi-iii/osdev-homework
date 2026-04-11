@@ -16,13 +16,16 @@
 #define IDT_GATE_TRAP16         (0x87)
 #define IDT_GATE_INT32          (0x8E)
 #define IDT_GATE_TRAP32         (0x8F)
+#define IDT_GATE_SYSCALL32      (0xEE)
 
 #define NUM_EXCEPTIONS          (32)
 #define NUM_INTERRUPTS          (16)
 
+int32_t k_reenter = -1;
 static idtmeta_t idtmeta = { 0 };
 static ATTR_ALIGINED(idesc_t) idesc_t idt[IDT_ENTRIES] = { 0 };
 void arch_isr_tbl(void);
+void syscall(void);
 static void hlt_handler(void) { for (;;) __asm__ volatile ("hlt"); }
 
 static idesc_t gen_idesc(uint32_t isr, uint16_t sel_code, uint8_t flags)
@@ -106,6 +109,11 @@ void arch_init_irq(void)
                            IDT_GATE_INT32);
     }
 
+    // syscall
+    idt[100] = gen_idesc((uint32_t)syscall,
+                           arch_get_sel(SYS_CODE),
+                           IDT_GATE_SYSCALL32);
+
     idtmeta.limit = sizeof(idesc_t) * IDT_ENTRIES - 1;
     idtmeta.base = (uint32_t)idt;
     arch_reload_idt(&idtmeta);
@@ -114,3 +122,22 @@ void arch_init_irq(void)
     arch_init_8259a();
 }
 
+// void arch_syscall(uint32_t minor, void* data)
+// {
+//     __asm__ __volatile__(
+//             "movl %0,       %%eax   \n\t"
+//             "movl %1,       %%ebx   \n\t"
+//             "int  $100              \n\t"
+//             :
+//             :"g"(minor), "g"(data)
+//             :"eax", "ebx"
+//     );
+// }
+
+void arch_syscall(void)
+{
+    __asm__ __volatile__(
+            "int  $100              \n\t"
+            :::
+    );
+}

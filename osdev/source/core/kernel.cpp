@@ -34,6 +34,9 @@ void timer_process(void)
     iodev* kbdev = 0;
     kbdev_init(&kbdev, "kb_read", kb_read);
 
+    // arch_syscall(0, (void*)"hello ring0");
+    arch_syscall();
+
     for ( ;; ) {
         while (*ptr_msg) {
             *ptr_gbuf = (0xe << 8) | *ptr_msg;
@@ -54,6 +57,9 @@ void timer_process2(void)
 
     iodev* kbdev2 = 0;
     kbdev_init(&kbdev2, "kb_read2", kb_read2);
+
+    // arch_syscall(0, (void*)"hello ring3");
+    arch_syscall();
 
     for ( ;; ) {
         while (*ptr_msg) {

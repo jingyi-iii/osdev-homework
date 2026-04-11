@@ -1,6 +1,7 @@
 #include "arch_irq.h"
 #include "irqdev.h"
 #include "string.h"
+#include "iodev_api.h"
 
 static irqline* irqlines[IDT_ENTRIES] = {0};
 
@@ -158,6 +159,14 @@ void irqline_handler(uint32_t irq_nr)
             dev->handler(dev);
         }
     }
+}
+
+// void syscall_handler(uint32_t minor_nr, void* data)
+void syscall_handler(void)
+{
+    // KLOG("syscall: %s", (const char*)data);
+    KLOG("syscall:");
+    return;
 }
 
 int irqdev_init(irqdev **out_dev, const char* name, uint32_t irq_nr, irq_handler handler)

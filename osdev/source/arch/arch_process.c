@@ -66,7 +66,7 @@ int proc_context_init(proc_context* context, proc_entry_t entry, proc_priv priv)
     context->regs->ds = 0x8 | 0x4 | ring;
     context->regs->ss = 0x8 | 0x4 | ring;
     context->regs->eip = (uint32_t)entry;
-    context->regs->esp = (uint32_t)context->stack + 0x1000;
+    context->regs->esp = (uint32_t)context->stack + 0x1000 - sizeof(regs_t);
     context->regs->eflags = 0x0202;
     context->ring = ring;
 
