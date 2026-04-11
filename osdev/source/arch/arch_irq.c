@@ -25,7 +25,7 @@ int32_t k_reenter = -1;
 static idtmeta_t idtmeta = { 0 };
 static ATTR_ALIGINED(idesc_t) idesc_t idt[IDT_ENTRIES] = { 0 };
 void arch_isr_tbl(void);
-void syscall(void);
+void arch_syscall_entry(void);
 static void hlt_handler(void) { for (;;) __asm__ volatile ("hlt"); }
 
 static idesc_t gen_idesc(uint32_t isr, uint16_t sel_code, uint8_t flags)
@@ -110,7 +110,7 @@ void arch_init_irq(void)
     }
 
     // syscall
-    idt[100] = gen_idesc((uint32_t)syscall,
+    idt[100] = gen_idesc((uint32_t)arch_syscall_entry,
                            arch_get_sel(SYS_CODE),
                            IDT_GATE_SYSCALL32);
 
@@ -122,22 +122,14 @@ void arch_init_irq(void)
     arch_init_8259a();
 }
 
-// void arch_syscall(uint32_t minor, void* data)
-// {
-//     __asm__ __volatile__(
-//             "movl %0,       %%eax   \n\t"
-//             "movl %1,       %%ebx   \n\t"
-//             "int  $100              \n\t"
-//             :
-//             :"g"(minor), "g"(data)
-//             :"eax", "ebx"
-//     );
-// }
-
-void arch_syscall(void)
+void arch_syscall(uint32_t minor, void* data)
 {
     __asm__ __volatile__(
+            "movl %0,       %%eax   \n\t"
+            "movl %1,       %%ebx   \n\t"
             "int  $100              \n\t"
-            :::
+            :
+            :"g"(minor), "g"(data)
+            :"eax", "ebx"
     );
 }

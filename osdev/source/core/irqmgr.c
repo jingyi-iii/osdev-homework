@@ -161,11 +161,9 @@ void irqline_handler(uint32_t irq_nr)
     }
 }
 
-// void syscall_handler(uint32_t minor_nr, void* data)
-void syscall_handler(void)
+void syscall_handler(uint32_t minor_nr, void* data)
 {
-    // KLOG("syscall: %s", (const char*)data);
-    KLOG("syscall:");
+    KLOG("syscall: minor %d triggled", minor_nr);
     return;
 }
 

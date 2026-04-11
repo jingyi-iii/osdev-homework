@@ -1,5 +1,5 @@
 .globl  arch_isr_tbl
-.globl  syscall
+.globl  arch_syscall_entry
 
 .macro SAVE_REGS_ADD_SWITCH_KERNEL_STACK
         pushal
@@ -242,7 +242,7 @@ unmask_int:
 
 
 .align  256,     0x90
-syscall:
+arch_syscall_entry:
         SAVE_REGS_ADD_SWITCH_KERNEL_STACK
 
         incl    k_reenter
@@ -250,7 +250,10 @@ syscall:
         cmp     $0,             %esi
         jne     1f
 
+        pushl   %ebx
+        pushl   %eax
         call    syscall_handler
+        addl    $8,             %esp
 
 1:
         decl    k_reenter
