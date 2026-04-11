@@ -135,9 +135,11 @@ esr:
 #
 .align  32
 isr:
+        pushl   $0
+        pushl   $0
         pushl   %esi
         call    irqline_handler
-        addl    $4, %esp
+        addl    $12, %esp
 
         cmpl    $0x28,          %esi
         jl      .master
@@ -250,10 +252,11 @@ arch_syscall_entry:
         cmp     $0,             %esi
         jne     1f
 
+        pushl   %ecx
         pushl   %ebx
         pushl   %eax
-        call    syscall_handler
-        addl    $8,             %esp
+        call    irqline_handler
+        addl    $12,            %esp
 
 1:
         decl    k_reenter

@@ -125,11 +125,12 @@ void arch_init_irq(void)
 void arch_syscall(uint32_t minor, void* data)
 {
     __asm__ __volatile__(
-            "movl %0,       %%eax   \n\t"
-            "movl %1,       %%ebx   \n\t"
+            "movl $100,     %%eax   \n\t"
+            "movl %0,       %%ebx   \n\t"
+            "movl %1,       %%ecx   \n\t"
             "int  $100              \n\t"
             :
             :"g"(minor), "g"(data)
-            :"eax", "ebx"
+            :"eax", "ebx", "ecx"
     );
 }

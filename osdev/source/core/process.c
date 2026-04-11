@@ -48,7 +48,7 @@ int32_t create_proc(proc_priv priv, proc_entry_t entry)
     return proc->pid;
 }
 
-static void schedule(struct irqdev* dev)
+static void schedule(void* dev)
 {
     (void)dev;
     static uint32_t timeslice = 0;
@@ -68,7 +68,7 @@ static irqdev* pcb_irqdev = 0;
 void process_evn_setup(void)
 {
     tss_init();
-    irqdev_init(&pcb_irqdev, "tmr", TIMER_IRQ_NO, schedule);
+    irqdev_init(&pcb_irqdev, "tmr", TIMER_IRQ_NO, 0, schedule);
     if (pcb_irqdev) {
         pcb_irqdev->unmask(pcb_irqdev);
     }

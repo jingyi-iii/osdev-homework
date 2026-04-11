@@ -13,8 +13,8 @@ static int irq_dev_mask(struct irqdev* dev)
     spinlock_lock(dev->sp_lock);
     dev->enabled = 0;
     spinlock_unlock(dev->sp_lock);
-    if (irqlines[dev->irq_nr]) {
-        irqlines[dev->irq_nr]->mask(irqlines[dev->irq_nr]);
+    if (irqlines[dev->major]) {
+        irqlines[dev->major]->mask(irqlines[dev->major]);
     }
 
     return 0;
@@ -28,8 +28,8 @@ static int irq_dev_unmask(struct irqdev* dev)
     spinlock_lock(dev->sp_lock);
     dev->enabled = 1;
     spinlock_unlock(dev->sp_lock);
-    if (irqlines[dev->irq_nr]) {
-        irqlines[dev->irq_nr]->unmask(irqlines[dev->irq_nr]);
+    if (irqlines[dev->major]) {
+        irqlines[dev->major]->unmask(irqlines[dev->major]);
     }
 
     return 0;
@@ -52,7 +52,7 @@ static int irqline_mask(struct irqline* line)
 
     if (disable) {
         spinlock_lock(line->sp_lock);
-        arch_mask_irq(line->irq_nr);
+        arch_mask_irq(line->major);
         spinlock_unlock(line->sp_lock);
     }
 
@@ -68,7 +68,7 @@ static int irqline_unmask(struct irqline* line)
         irqdev* dev = list_entry(node, irqdev, dev_node);
         if (dev->enabled) {
             spinlock_lock(line->sp_lock);
-            arch_unmask_irq(line->irq_nr);
+            arch_unmask_irq(line->major);
             spinlock_unlock(line->sp_lock);
             break;
         }
@@ -115,15 +115,15 @@ static int irqline_remove_all(struct irqline* line)
     return 0;
 }
 
-int irqline_init(irqline** out_line, uint32_t irq_nr)
+int irqline_init(irqline** out_line, uint32_t major)
 {
-    if (!out_line || irq_nr >= IDT_ENTRIES)
+    if (!out_line || major >= IDT_ENTRIES)
         return -1;
 
     irqline* line = 0;
     int ret = 0;
 
-    ret = irq_alloc_line(irq_nr, out_line);
+    ret = irq_alloc_line(major, out_line);
     if (ret != 0)
         return ret;
     
@@ -148,34 +148,38 @@ void irqline_release(irqline* line)
     memset(line, 0, sizeof(irqline));
 }
 
-void irqline_handler(uint32_t irq_nr)
+void irqline_handler(uint32_t major, uint32_t minor, void* data)
 {
-    if (!irqlines[irq_nr])
+    (void)minor;
+    (void)data;
+
+    if (!irqlines[major])
         return;
 
-    list_for_each(node, &irqlines[irq_nr]->dev_list) {
+    list_for_each(node, &irqlines[major]->dev_list) {
         irqdev* dev = list_entry(node, irqdev, dev_node);
         if (dev->enabled) {
-            dev->handler(dev);
+            if (dev->major != 100) {
+                dev->handler((void*)dev);
+            } else {
+                if (dev->minor == minor) {
+                    dev->handler((void*)data);
+                    KLOG("syscall: minor %d triggled", minor);
+                }
+            }
         }
     }
 }
 
-void syscall_handler(uint32_t minor_nr, void* data)
+int irqdev_init(irqdev **out_dev, const char* name, uint32_t major, uint32_t minor, irq_handler handler)
 {
-    KLOG("syscall: minor %d triggled", minor_nr);
-    return;
-}
-
-int irqdev_init(irqdev **out_dev, const char* name, uint32_t irq_nr, irq_handler handler)
-{
-    if (!out_dev || irq_nr >= IDT_ENTRIES)
+    if (!out_dev || major >= IDT_ENTRIES)
         return -1;
 
     irqdev* dev = 0;
     int ret = 0;
 
-    ret = irq_alloc_dev(irq_nr, name, 0, handler, out_dev);
+    ret = irq_alloc_dev(major, minor, name, 0, handler, out_dev);
     if (ret != 0)
         return ret;
     
@@ -183,9 +187,9 @@ int irqdev_init(irqdev **out_dev, const char* name, uint32_t irq_nr, irq_handler
     dev->mask = irq_dev_mask;
     dev->unmask = irq_dev_unmask;
 
-    if (!irqlines[irq_nr]) {
-        if (!irqline_init(&irqlines[irq_nr], irq_nr) && irqlines[irq_nr])
-            irqlines[irq_nr]->add(irqlines[irq_nr], dev);
+    if (!irqlines[major]) {
+        if (!irqline_init(&irqlines[major], major) && irqlines[major])
+            irqlines[major]->add(irqlines[major], dev);
     }
 
     return 0;
@@ -196,8 +200,8 @@ void irqdev_release(irqdev *dev)
     if (!dev)
         return;
 
-    if (irqlines[dev->irq_nr]) {
-        irqlines[dev->irq_nr]->remove(irqlines[dev->irq_nr], dev);
+    if (irqlines[dev->major]) {
+        irqlines[dev->major]->remove(irqlines[dev->major], dev);
     }
     spinlock_release(dev->sp_lock);
     irq_free_dev(dev);

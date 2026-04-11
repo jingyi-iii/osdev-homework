@@ -140,7 +140,7 @@ const unsigned int keymap[NR_SCAN_CODES * MAP_COLS] = {
 
 extern "C" {
 
-static void keyboard_handler(struct irqdev* dev)
+static void keyboard_handler(void* dev)
 {
     (void)dev;
     KBMgr::GetInstance()->OnReceive(arch_inb(0x60));
@@ -263,7 +263,7 @@ KBMgr::KBMgr(void)
     list_init(&mDevList);
     mIrqDev = 0;
 
-    irqdev_init(&mIrqDev, "kbd", KEYBOARD_IRQ_NO, keyboard_handler);
+    irqdev_init(&mIrqDev, "kbd", KEYBOARD_IRQ_NO, 0, keyboard_handler);
 }
 
 KBMgr::~KBMgr(void)

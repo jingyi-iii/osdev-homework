@@ -10,7 +10,7 @@ extern "C" {
 #include "process.h"
 
 int irqdev_init(irqdev **out_dev, const char* name,
-    uint32_t irq_nr, irq_handler handler);
+    uint32_t major, uint32_t minor, irq_handler handler);
 void irqdev_release(irqdev *dev);
 
 #ifdef __cplusplus
