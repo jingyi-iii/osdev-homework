@@ -34,8 +34,6 @@ void timer_process(void)
     iodev* kbdev = 0;
     kbdev_init(&kbdev, "kb_read", kb_read);
 
-    arch_syscall(0, (void*)"hello ring0");
-
     for ( ;; ) {
         while (*ptr_msg) {
             *ptr_gbuf = (0xe << 8) | *ptr_msg;
@@ -57,7 +55,7 @@ void timer_process2(void)
     iodev* kbdev2 = 0;
     kbdev_init(&kbdev2, "kb_read2", kb_read2);
 
-    arch_syscall(3, (void*)"hello ring3");
+    ULOG("hello ulog");
 
     for ( ;; ) {
         while (*ptr_msg) {
@@ -70,16 +68,6 @@ void timer_process2(void)
     }
 
     while (1);
-}
-
-void scall_minor0_handler(void* data)
-{
-    KLOG("%s", (const char*)data);
-}
-
-void scall_minor3_handler(void* data)
-{
-    KLOG("%s", (const char*)data);
 }
 
 extern "C" {
@@ -110,14 +98,7 @@ void kernel_start(void)
 
     irqdev* scall_dev = 0;
     irqdev* scall_dev2 = 0;
-
-    irqdev_init(&scall_dev, "minor0", 100, 0, scall_minor0_handler);
-    irqdev_init(&scall_dev2, "minor3", 100, 3, scall_minor3_handler);
-
-    if (scall_dev)
-        scall_dev->unmask(scall_dev);
-    if (scall_dev2)
-        scall_dev2->unmask(scall_dev2);
 }
+
 }
 

@@ -1,6 +1,30 @@
 #include "logmgr.h"
 #include "iodev_api.h"
 
+class LogMgr {
+private:
+    const uint32_t mComPort = 0x3f8;
+    spinlock* mLock;
+
+    LogMgr(void) { Init(); }
+    ~LogMgr(void) { Shutdown(); }
+
+public:
+    IODEV_CPP_BIND_CLASS(LogMgr);
+
+    static LogMgr* GetInstance(void)
+    {
+        static LogMgr inst;
+        return &inst;
+    }
+
+    int Init(void);
+    int Shutdown(void);
+    int Ctrl(int cmd, void* arg) { (void)cmd; (void)arg; return 0; }
+    int Read(char* buf, size_t size) { (void)buf; (void)size; return 0; }
+    int Write(const char* buf, size_t size);
+};
+
 int LogMgr::Init(void)
 {
     mLock = spinlock_alloc();
@@ -47,6 +71,16 @@ int LogMgr::Write(const char* buf, size_t size)
 extern "C" {
 iodev* glogdev = 0;
 iodev* gtmrdev = 0;
+static irqdev* scall_dev = 0;
+
+void scall_user_log_handler(void* data)
+{
+    ulog_msg* msg = (ulog_msg*)data;
+    if (glogdev) {
+        glogdev->write(glogdev, msg->msg, msg->size);
+    }
+}
+
 void logdev_init(void)
 {
     LogMgr* logMgr = LogMgr::GetInstance();
@@ -57,6 +91,9 @@ void logdev_init(void)
     }
 
     tmrdev_init(&gtmrdev);
+    irqdev_init(&scall_dev, "userlog", 100, 0, scall_user_log_handler);
+    if (scall_dev)
+        scall_dev->unmask(scall_dev);
 }
 
 module_init(logdev_init);

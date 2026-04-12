@@ -7,6 +7,8 @@ extern "C" {
 
 #include "iodev.h"
 #include "string.h"
+#include "arch_irq.h"
+#include "logmgr.h"
 
 int kbdev_init(iodev **out_dev, const char* dev_name, iodev_cb cb);
 void kbdev_release(iodev **dev);
@@ -48,6 +50,16 @@ extern iodev* gtmrdev;
             snprintf(log_buf, sizeof(log_buf), "KLOG: " fmt "\n", ##__VA_ARGS__);                                           \
         }                                                                                                                   \
         glogdev->write(glogdev, log_buf, strlen(log_buf));                                                                  \
+    } while (0)
+
+#define ULOG(fmt, ...)                                                                                                      \
+    do {                                                                                                                    \
+        char log_buf[256] = {0};                                                                                            \
+        ulog_msg msg = {0};                                                                                                 \
+        snprintf(log_buf, sizeof(log_buf), "ULOG: " fmt "\n", ##__VA_ARGS__);                                               \
+        msg.msg = (const char*)log_buf;                                                                                     \
+        msg.size = strlen(log_buf);                                                                                         \
+        arch_syscall(0, &msg);                                                                                              \
     } while (0)
 
 
