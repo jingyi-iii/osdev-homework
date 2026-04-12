@@ -163,8 +163,8 @@ void irqline_handler(uint32_t major, uint32_t minor, void* data)
                 dev->handler((void*)dev);
             } else {
                 if (dev->minor == minor) {
-                    dev->handler((void*)data);
                     KLOG("syscall: minor %d triggled", minor);
+                    dev->handler((void*)data);
                 }
             }
         }
@@ -188,9 +188,10 @@ int irqdev_init(irqdev **out_dev, const char* name, uint32_t major, uint32_t min
     dev->unmask = irq_dev_unmask;
 
     if (!irqlines[major]) {
-        if (!irqline_init(&irqlines[major], major) && irqlines[major])
-            irqlines[major]->add(irqlines[major], dev);
+        if (irqline_init(&irqlines[major], major) && irqlines[major])
+            return -1;
     }
+    irqlines[major]->add(irqlines[major], dev);
 
     return 0;
 }

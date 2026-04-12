@@ -72,6 +72,16 @@ void timer_process2(void)
     while (1);
 }
 
+void scall_minor0_handler(void* data)
+{
+    KLOG("%s", (const char*)data);
+}
+
+void scall_minor3_handler(void* data)
+{
+    KLOG("%s", (const char*)data);
+}
+
 extern "C" {
 
 extern init_call_t __start_initcall[];
@@ -97,6 +107,17 @@ void kernel_start(void)
 
     create_proc(PROC_PRIV_KERNEL, timer_process);
     create_proc(PROC_PRIV_USER, timer_process2);
+
+    irqdev* scall_dev = 0;
+    irqdev* scall_dev2 = 0;
+
+    irqdev_init(&scall_dev, "minor0", 100, 0, scall_minor0_handler);
+    irqdev_init(&scall_dev2, "minor3", 100, 3, scall_minor3_handler);
+
+    if (scall_dev)
+        scall_dev->unmask(scall_dev);
+    if (scall_dev2)
+        scall_dev2->unmask(scall_dev2);
 }
 }
 
