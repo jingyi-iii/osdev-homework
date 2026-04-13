@@ -101,6 +101,9 @@ void logdev_init(void)
     irqdev_init(&scall_dev, "userlog", 100, 0, scall_user_log_handler);
     if (scall_dev)
         scall_dev->unmask(scall_dev);
+
+    irqdev* tmp_dev = 0;
+    irqdev_init(&tmp_dev, "userlog", 100, 0, scall_user_log_handler);
 }
 
 module_init(logdev_init);

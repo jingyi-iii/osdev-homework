@@ -178,6 +178,7 @@ int irqdev_init(irqdev **out_dev, const char* name, uint32_t major, uint32_t min
 
     irqdev* dev = 0;
     int ret = 0;
+    int minor_existed = 0;
 
     ret = irq_alloc_dev(major, minor, name, 0, handler, out_dev);
     if (ret != 0)
@@ -191,7 +192,24 @@ int irqdev_init(irqdev **out_dev, const char* name, uint32_t major, uint32_t min
         if (irqline_init(&irqlines[major], major) && irqlines[major])
             return -1;
     }
-    irqlines[major]->add(irqlines[major], dev);
+    if (irqlines[major]) {
+        list_for_each(node, &irqlines[major]->dev_list) {
+            irqdev* dev = list_entry(node, irqdev, dev_node);
+            if (dev->minor == minor) {
+                minor_existed = 1;
+                break;
+            }
+        }
+
+        if (minor_existed) {
+            KLOG("%s: initialization failed - minor already exists", __FUNCTION__);
+            irqdev_release(*out_dev);
+            *out_dev = 0;
+            return -1;
+        }
+
+        irqlines[major]->add(irqlines[major], dev);
+    }
 
     return 0;
 }
