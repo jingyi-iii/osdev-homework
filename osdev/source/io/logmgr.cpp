@@ -75,6 +75,13 @@ static irqdev* scall_dev = 0;
 
 void scall_user_log_handler(void* data)
 {
+    char tmr_buf[32] = {0};
+    if (gtmrdev) {
+        gtmrdev->read(gtmrdev, tmr_buf, 32);
+        glogdev->write(glogdev, tmr_buf, 32);
+        glogdev->write(glogdev, " ", 1);
+    }
+
     ulog_msg* msg = (ulog_msg*)data;
     if (glogdev) {
         glogdev->write(glogdev, msg->msg, msg->size);
