@@ -48,7 +48,7 @@ int32_t create_proc(proc_priv priv, proc_entry_t entry)
     return proc->pid;
 }
 
-static void schedule(void* dev)
+static void isr_schedule(void* dev)
 {
     (void)dev;
     static uint32_t timeslice = 0;
@@ -64,13 +64,33 @@ static void schedule(void* dev)
     spinlock_unlock(proc_run->sp_lock);
 }
 
+static void syscall(void* data)
+{
+    (void)data;
+    proc_run = list_entry(list_next(&proc_run->pcb_node), pcb, pcb_node);
+    spinlock_lock(proc_run->sp_lock);
+    proc_restore_context(&proc_run->context);
+    spinlock_unlock(proc_run->sp_lock);
+}
+
+void schedule(void)
+{
+    arch_syscall(0, 0);
+}
+
 static irqdev* pcb_irqdev = 0;
+static irqdev* pcb_scalldev = 0;
 void process_evn_setup(void)
 {
     tss_init();
-    irqdev_init(&pcb_irqdev, "tmr", TIMER_IRQ_NO, 0, schedule);
+    irqdev_init(&pcb_irqdev, "tmr", TIMER_IRQ_NO, 0, isr_schedule);
     if (pcb_irqdev) {
         pcb_irqdev->unmask(pcb_irqdev);
+    }
+
+    irqdev_init(&pcb_scalldev, "proc_syscall", 100, 0, syscall);
+    if (pcb_scalldev) {
+        pcb_scalldev->unmask(pcb_scalldev);
     }
 }
 module_init(process_evn_setup);

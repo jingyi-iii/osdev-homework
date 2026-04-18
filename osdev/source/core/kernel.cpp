@@ -58,6 +58,7 @@ void timer_process2(void)
     ULOG("hello ulog");
 
     for ( ;; ) {
+        schedule();
         while (*ptr_msg) {
             *ptr_gbuf = (0xe << 8) | *ptr_msg;
             ptr_msg += 1;

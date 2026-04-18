@@ -24,5 +24,6 @@ typedef struct pcb {
 typedef void (*proc_entry_t)(void);
 
 int32_t create_proc(proc_priv priv, proc_entry_t entry);
+void schedule(void);
 
 #endif

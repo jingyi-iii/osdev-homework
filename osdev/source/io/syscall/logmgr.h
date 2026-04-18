@@ -59,7 +59,7 @@ extern iodev* gtmrdev;
         snprintf(log_buf, sizeof(log_buf), "ULOG: " fmt "\n", ##__VA_ARGS__);                                               \
         msg.msg = (const char*)log_buf;                                                                                     \
         msg.size = strlen(log_buf);                                                                                         \
-        arch_syscall(0, &msg);                                                                                              \
+        arch_syscall(1, &msg);                                                                                              \
     } while (0)
 
 

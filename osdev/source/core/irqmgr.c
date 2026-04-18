@@ -202,7 +202,7 @@ int irqdev_init(irqdev **out_dev, const char* name, uint32_t major, uint32_t min
         }
 
         if (minor_existed) {
-            KLOG("%s: initialization failed - minor already exists", __FUNCTION__);
+            KLOG("%s: initialization failed - minor %d already exists", __FUNCTION__, minor);
             irqdev_release(*out_dev);
             *out_dev = 0;
             return -1;
