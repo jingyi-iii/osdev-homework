@@ -87,21 +87,31 @@ static void syscall(void* data)
     case PROC_CTRL_BLOCK:
         list_for_each(node, &proc_run->pcb_node) {
             pcb* dev = list_entry(node, pcb, pcb_node);
+            if (!dev)
+                continue;
+            spinlock_lock(dev->sp_lock);
             if (dev->pid == config->pid) {
                 dev->state = PS_PENDING;
+                spinlock_unlock(dev->sp_lock);
                 break;
             }
+            spinlock_unlock(dev->sp_lock);
         }
         break;
-    // case PROC_CTRL_UNBLOCK:
-    //     list_for_each(node, &proc_run->pcb_node) {
-    //         pcb* dev = list_entry(node, pcb, pcb_node);
-    //         if (dev->pid == config->pid) {
-    //             dev->state = PS_READY_TO_RUN;
-    //             break;
-    //         }
-    //     }
-    //     break;
+    case PROC_CTRL_UNBLOCK:
+        list_for_each(node, &proc_run->pcb_node) {
+            pcb* dev = list_entry(node, pcb, pcb_node);
+            if (!dev)
+                continue;
+            spinlock_lock(dev->sp_lock);
+            if (dev->pid == config->pid) {
+                dev->state = PS_READY_TO_RUN;
+                spinlock_unlock(dev->sp_lock);
+                break;
+            }
+            spinlock_unlock(dev->sp_lock);
+        }
+        break;
     default:
         break;
     }
