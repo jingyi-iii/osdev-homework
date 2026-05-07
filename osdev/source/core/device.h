@@ -13,6 +13,7 @@ struct device {
     const char *name;
     const char *type;
     list_node dev_node;
+    enum dev_state state;
     void *dev_data;
 
     struct bus *bus;

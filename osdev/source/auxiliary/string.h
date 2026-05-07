@@ -10,6 +10,7 @@ extern "C" {
 #endif
 
 size_t strlen(const char *s);
+int strcmp(const char *s1, const char *s2);
 int snprintf(char *str, size_t size, const char *format, ...);
 void memcpy(void *dest, const void *src, uint32_t size);
 void memset(void* dest, char chr, size_t size);
