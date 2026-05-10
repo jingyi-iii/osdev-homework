@@ -59,6 +59,7 @@ int bus_register_driver(struct bus *bus, struct driver *drv)
 
     spinlock_lock(bus->splock);
     list_add(&drv->drv_node, &bus->drivers);
+    drv->ops = bus->bus_ops;
     list_for_each(node, &bus->devices) {
         struct device *dev = list_entry(node, struct device, dev_node);
         if (try_bind_and_probe(bus, drv, dev) == 0) {
