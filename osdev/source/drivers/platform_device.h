@@ -43,4 +43,6 @@ struct platform_resource* platform_device_get_resource(
 
 struct platform_bus_ops* platform_device_get_ops(struct platform_device* dev);
 
+struct platform_device* platform_get_device(struct device* dev);
+
 #endif

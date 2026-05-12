@@ -7,6 +7,7 @@
 #include "arch_regs.h"
 #include "spinlock.h"
 #include "core_api.h"
+#include "string.h"
 
 #ifdef __cplusplus
 extern "C" {

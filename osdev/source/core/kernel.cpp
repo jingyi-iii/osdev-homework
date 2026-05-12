@@ -2,6 +2,7 @@
 #include "module.h"
 #include "core_api.h"
 #include "iodev_api.h"
+#include "kb_driver.h"
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -33,6 +34,8 @@ void timer_process(void)
 
     iodev* kbdev = 0;
     kbdev_init(&kbdev, "kb_read", kb_read);
+
+    kb_init();
 
     for ( ;; ) {
         while (*ptr_msg) {

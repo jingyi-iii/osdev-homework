@@ -1,7 +1,6 @@
 #ifndef DEVICE_H
 #define DEVICE_H
 
-#include "bus.h"
 #include "driver.h"
 
 enum dev_state {
@@ -9,6 +8,7 @@ enum dev_state {
     DEV_REGISTERED,
 };
 
+struct bus;
 struct device {
     const char *name;
     const char *type;

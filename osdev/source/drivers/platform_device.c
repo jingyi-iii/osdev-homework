@@ -1,6 +1,11 @@
 #include "platform_device.h"
 #include <stddef.h>
 
+#define container_of(ptr, type, member) ({                \
+    const typeof(((type *)0)->member) *__mptr = (ptr);    \
+    (type *)((char *)__mptr - offsetof(type, member));    \
+})
+
 struct platform_resource* platform_device_get_resource(
     struct platform_device* dev, enum platform_resource_type type, int index)
 {
@@ -25,4 +30,12 @@ struct platform_bus_ops* platform_device_get_ops(struct platform_device* dev)
         return NULL;
 
     return (struct platform_bus_ops*)dev->dev.bus->bus_ops;
+}
+
+struct platform_device* platform_get_device(struct device* dev)
+{
+    if (!dev)
+        return NULL;
+
+    return container_of(dev, struct platform_device, dev);
 }
