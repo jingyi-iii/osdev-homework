@@ -5,7 +5,6 @@
 
 struct device;
 struct driver {
-    const char *name;
     const char *type;
     list_node drv_node;
     void* ops;

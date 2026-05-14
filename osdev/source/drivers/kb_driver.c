@@ -5,8 +5,8 @@ static int kb_probe(struct device *dev)
 {
     ULOG("kb_probe");
 
-    struct platform_device* plat_dev = platform_get_device(dev);
-    struct platform_bus_ops* ops = platform_device_get_ops(plat_dev);
+    struct platform_device* device = to_platform_device(dev);
+    struct platform_bus_ops* ops = platform_device_get_ops(device);
     
     if (ops) {
         ops->in_port8(0);
@@ -22,7 +22,6 @@ static int kb_remove(struct device *dev)
 }
 
 struct driver kb_driver = {
-    .name = "kb",
     .type = "kb",
     .probe = kb_probe,
     .remove = kb_remove,

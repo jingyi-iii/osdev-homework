@@ -72,7 +72,6 @@ static void platform_bus_init(void)
     list_init(&platform_bus.devices);
     list_init(&platform_bus.drivers);
 
-    platform_bus.name = "platform_bus";
     platform_bus.type = "platform";
     platform_bus.match = platform_match;
     platform_bus.bus_ops = (void*)&ops;

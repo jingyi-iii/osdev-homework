@@ -32,7 +32,7 @@ struct platform_bus_ops* platform_device_get_ops(struct platform_device* dev)
     return (struct platform_bus_ops*)dev->dev.bus->bus_ops;
 }
 
-struct platform_device* platform_get_device(struct device* dev)
+struct platform_device* to_platform_device(struct device* dev)
 {
     if (!dev)
         return NULL;
