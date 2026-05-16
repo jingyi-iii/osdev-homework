@@ -108,8 +108,8 @@ void kernel_start(void)
     create_proc(PROC_PRIV_KERNEL, timer_process);
     create_proc(PROC_PRIV_USER, timer_process2);
 
-    irqdev* scall_dev = 0;
-    irqdev* scall_dev2 = 0;
+    irq* scall_dev = 0;
+    irq* scall_dev2 = 0;
 }
 
 }

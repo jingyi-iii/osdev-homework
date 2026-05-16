@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include "compiler.h"
-#include "irqdev.h"
+#include "irq.h"
 
 #define IDT_ENTRIES             (256)
 

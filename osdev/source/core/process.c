@@ -143,19 +143,19 @@ void unblock(int32_t pid)
     arch_syscall(0, &config);
 }
 
-static irqdev* pcb_irqdev = 0;
-static irqdev* pcb_scalldev = 0;
+static irq* pcb_irq = 0;
+static irq* pcb_scall = 0;
 void process_evn_setup(void)
 {
     tss_init();
-    irqdev_init(&pcb_irqdev, "tmr", TIMER_IRQ_NO, 0, schedule_isr);
-    if (pcb_irqdev) {
-        pcb_irqdev->unmask(pcb_irqdev);
+    irq_request(&pcb_irq, "tmr", TIMER_IRQ_NO, 0, schedule_isr);
+    if (pcb_irq) {
+        irq_unmask(pcb_irq);
     }
 
-    irqdev_init(&pcb_scalldev, "proc_syscall", 100, 0, syscall_isr);
-    if (pcb_scalldev) {
-        pcb_scalldev->unmask(pcb_scalldev);
+    irq_request(&pcb_scall, "proc_syscall", 100, 0, syscall_isr);
+    if (pcb_scall) {
+        irq_unmask(pcb_scall);
     }
 }
 module_init(process_evn_setup);

@@ -3,7 +3,7 @@
 
 #include "iodev.h"
 #include "spinlock.h"
-#include "irqdev.h"
+#include "irq.h"
 #include "logmgr.h"
 
 /************************************************************************/
@@ -139,7 +139,7 @@ private:
     KBuf mKbuf;
     list_node mDevList;
     spinlock* mLock;
-    irqdev* mIrqDev;
+    irq* mIrqDev;
 
 
 public:

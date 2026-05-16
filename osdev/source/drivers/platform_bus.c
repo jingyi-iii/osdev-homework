@@ -6,24 +6,22 @@
 
 static int in8(uint16_t port)
 {
-    uint8_t data;
-    // __asm__ volatile("inb %1, %0" : "=a"(data) : "dN"(port));
-
-    ULOG("platform bus in8\n");
+    uint8_t data = 0;
+    __asm__ volatile("inb %1, %0" : "=a"(data) : "dN"(port));
 
     return data;
 }
 
 static int in16(uint16_t port)
 {
-    uint16_t data;
+    uint16_t data = 0;
     __asm__ volatile("inw %1, %0" : "=a"(data) : "dN"(port));
     return data;
 }
 
 static int in32(uint16_t port)
 {
-    uint32_t data;
+    uint32_t data = 0;
     __asm__ volatile("inl %1, %0" : "=a"(data) : "dN"(port));
     return data;
 }

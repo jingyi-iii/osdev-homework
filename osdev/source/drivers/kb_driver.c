@@ -32,7 +32,11 @@ struct platform_device kb_device = {
         .name = "kb",
         .type = "kb",
     },
-    .num_res = 0,
+    .num_res = 1,
+    .resources[0] = {
+        .type = PLAT_RES_IRQ,
+        .irq.nr = 0x21,
+    },
 };
 
 void kb_init(void)

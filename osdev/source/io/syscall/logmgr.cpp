@@ -71,7 +71,7 @@ int LogMgr::Write(const char* buf, size_t size)
 extern "C" {
 iodev* glogdev = 0;
 iodev* gtmrdev = 0;
-static irqdev* scall_dev = 0;
+static irq* irq_scall = 0;
 
 void scall_user_log_handler(void* data)
 {
@@ -98,12 +98,12 @@ void logdev_init(void)
     }
 
     tmrdev_init(&gtmrdev);
-    irqdev_init(&scall_dev, "userlog", 100, 1, scall_user_log_handler);
-    if (scall_dev)
-        scall_dev->unmask(scall_dev);
+    irq_request(&irq_scall, "userlog", 100, 1, scall_user_log_handler);
+    if (irq_scall)
+        irq_unmask(irq_scall);
 
-    irqdev* tmp_dev = 0;
-    irqdev_init(&tmp_dev, "userlog", 100, 1, scall_user_log_handler);
+    irq* tmp_irq_for_test = 0;
+    irq_request(&tmp_irq_for_test, "userlog", 100, 1, scall_user_log_handler);
 }
 
 module_init(logdev_init);

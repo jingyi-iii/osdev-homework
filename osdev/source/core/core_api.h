@@ -5,13 +5,9 @@
 extern "C" {
 #endif
 
-#include "irqdev.h"
+#include "irq.h"
 #include "arch_irq.h"
 #include "process.h"
-
-int irqdev_init(irqdev **out_dev, const char* name,
-    uint32_t major, uint32_t minor, irq_handler handler);
-void irqdev_release(irqdev *dev);
 
 #ifdef __cplusplus
 }

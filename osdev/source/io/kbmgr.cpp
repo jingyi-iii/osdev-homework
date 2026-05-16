@@ -263,12 +263,12 @@ KBMgr::KBMgr(void)
     list_init(&mDevList);
     mIrqDev = 0;
 
-    irqdev_init(&mIrqDev, "kbd", KEYBOARD_IRQ_NO, 0, keyboard_handler);
+    irq_request(&mIrqDev, "kbd", KEYBOARD_IRQ_NO, 0, keyboard_handler);
 }
 
 KBMgr::~KBMgr(void)
 {
-    irqdev_release(mIrqDev);
+    irq_release(mIrqDev);
     list_del(&mDevList);
     spinlock_release(mLock);
 }
@@ -296,13 +296,13 @@ void KBMgr::Start(void)
     mKbuf.Reset();
 
     if (mIrqDev)
-        mIrqDev->unmask(mIrqDev);
+        irq_unmask(mIrqDev);
 }
 
 void KBMgr::Stop(void)
 {
     if (mIrqDev)
-        mIrqDev->mask(mIrqDev);
+        irq_mask(mIrqDev);
 }
 
 uint8_t KBMgr::GetOneKey(void)
