@@ -1,5 +1,11 @@
 #include "kb_driver.h"
 #include "logmgr.h"
+#include "spinlock.h"
+#include "irq.h"
+#include "arch_irq.h"
+#include "core_api.h"
+#include "string.h"
+#include "heap.h"
 
 const unsigned int keymap[NR_SCAN_CODES * MAP_COLS] = {
 /* scan-code			!Shift		Shift		E0 XX	*/
@@ -141,6 +147,62 @@ typedef struct kbuf {
     uint32_t count;
 } kbuf;
 
+/* ===========================================================
+ *  Circular buffer operations
+ * =========================================================== */
+static void kbuf_reset(kbuf* kb)
+{
+    memset(kb->buf, 0, sizeof(kb->buf));
+    kb->head = kb->buf;
+    kb->tail = kb->buf;
+    kb->count = 0;
+}
+
+static void kbuf_add(kbuf* kb, char chr)
+{
+    if (kb->count >= MAX_KB_SIZE)
+        return;
+    *kb->head = chr;
+    kb->head += 1;
+    kb->count += 1;
+    if (kb->head >= kb->buf + MAX_KB_SIZE)
+        kb->head = kb->buf;
+}
+
+static char kbuf_pop(kbuf* kb)
+{
+    if (!kb->count)
+        return 0;
+    char key = *kb->tail;
+    kb->tail += 1;
+    kb->count -= 1;
+    if (kb->tail >= kb->buf + MAX_KB_SIZE)
+        kb->tail = kb->buf;
+    return key;
+}
+
+static int kbuf_is_empty(const kbuf* kb)
+{
+    return kb->count == 0;
+}
+
+/* ===========================================================
+ *  Keyboard context — all driver state in one place
+ * =========================================================== */
+struct kb_listener {
+    list_node node;
+    kb_callback_fn cb;
+};
+
+struct kb_ctx {
+    kbuf buf;                    /* circular input buffer        */
+    list_node listener_list;     /* registered callback list     */
+    spinlock* lock;              /* protects listener_list       */
+    irq* irq_dev;                /* keyboard IRQ descriptor      */
+};
+
+static struct kb_ctx g_ctx;
+
 static uint8_t parse(uint8_t code)
 {
     static int lshift = 0;
@@ -198,26 +260,112 @@ static uint8_t parse(uint8_t code)
 
 static void kb_handler(void* context)
 {
-    // (void)context;
-    // KBMgr::GetInstance()->OnReceive(arch_inb(0x60));
+    (void)context;
+
+    ULOG("kb_handler triggered\n");
+
+    uint8_t scancode = arch_inb(0x60);
+    uint8_t key = parse(scancode);
+    if (key)
+        kbuf_add(&g_ctx.buf, (char)key);
+
+    /* distribute one key from the buffer to all registered listeners */
+    char keybuf[2] = {0};
+    keybuf[0] = kbuf_pop(&g_ctx.buf);
+    if (keybuf[0]) {
+        spinlock_lock(g_ctx.lock);
+        list_for_each(pos, &g_ctx.listener_list) {
+            struct kb_listener* lsn = list_entry(pos, struct kb_listener, node);
+            if (lsn->cb) {
+                lsn->cb(keybuf, 1);
+            }
+        }
+        spinlock_unlock(g_ctx.lock);
+    }
 }
 
 static int kb_probe(struct device *dev)
 {
     ULOG("kb_probe");
 
-    struct platform_device* device = to_platform_device(dev);
-    struct platform_bus_ops* ops = platform_device_get_ops(device);
-    
-    // KBMgr::GetInstance()->Start();
+    g_ctx.lock = spinlock_alloc();
+    list_init(&g_ctx.listener_list);
+    kbuf_reset(&g_ctx.buf);
 
+    struct platform_device* device = to_platform_device(dev);
+    struct platform_resource* res = platform_device_get_resource(
+        device, PLAT_RES_IRQ, 0);
+
+    uint32_t irq_nr = res ? res->irq.nr : KEYBOARD_IRQ_NO;
+
+    int ret = irq_request(&g_ctx.irq_dev, "kbd", irq_nr, 0, kb_handler);
+    if (ret)
+        return ret;
+
+    irq_unmask(g_ctx.irq_dev);
     return 0;
 }
 
 static int kb_remove(struct device *dev)
 {
+    (void)dev;
     ULOG("kb_remove");
+
+    if (g_ctx.irq_dev) {
+        irq_mask(g_ctx.irq_dev);
+        irq_release(g_ctx.irq_dev);
+        g_ctx.irq_dev = 0;
+    }
+
+    if (g_ctx.lock) {
+        spinlock_lock(g_ctx.lock);
+        list_init(&g_ctx.listener_list);
+        spinlock_unlock(g_ctx.lock);
+        spinlock_release(g_ctx.lock);
+        g_ctx.lock = 0;
+    }
+
+    kbuf_reset(&g_ctx.buf);
     return 0;
+}
+
+/* ===========================================================
+ *  C API for registering/unregistering keyboard listeners
+ * =========================================================== */
+
+int kb_register_callback(kb_callback_fn cb)
+{
+    if (!cb)
+        return -1;
+
+    struct kb_listener* lsn = (struct kb_listener*)kmalloc(sizeof(*lsn));
+    if (!lsn)
+        return -1;
+
+    lsn->cb = cb;
+
+    spinlock_lock(g_ctx.lock);
+    list_add(&lsn->node, &g_ctx.listener_list);
+    spinlock_unlock(g_ctx.lock);
+
+    return 0;
+}
+
+void kb_unregister_callback(kb_callback_fn cb)
+{
+    if (!cb)
+        return;
+
+    spinlock_lock(g_ctx.lock);
+    list_for_each(pos, &g_ctx.listener_list) {
+        struct kb_listener* lsn = list_entry(pos, struct kb_listener, node);
+        if (lsn->cb == cb) {
+            list_del(&lsn->node);
+            kfree(lsn);
+            break;
+        }
+    }
+    spinlock_unlock(g_ctx.lock);
 }
 
 struct driver kb_driver = {
