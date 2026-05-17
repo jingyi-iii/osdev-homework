@@ -147,6 +147,33 @@ typedef struct kbuf {
     uint32_t count;
 } kbuf;
 
+struct kb_listener {
+    list_node node;
+    kb_callback_fn cb;
+};
+
+struct kb_device {
+    kbuf buf;                           /* circular input buffer        */
+    struct platform_device plat_dev;    /* platform device structure    */
+    list_node listener_list;            /* registered callback list     */
+    spinlock* lock;                     /* protects listener_list       */
+    irq* irq;                           /* keyboard IRQ descriptor      */
+};
+
+struct kb_device kb_device = {
+    .plat_dev = {
+        .dev = {
+            .name = "keyboard",
+            .type = "keyboard",
+        },
+        .num_res = 1,
+        .resources[0] = {
+            .type = PLAT_RES_IRQ,
+            .irq.nr = KEYBOARD_IRQ_NO,
+        },
+    },
+};
+
 /* ===========================================================
  *  Circular buffer operations
  * =========================================================== */
@@ -186,22 +213,7 @@ static int kbuf_is_empty(const kbuf* kb)
     return kb->count == 0;
 }
 
-/* ===========================================================
- *  Keyboard context — all driver state in one place
- * =========================================================== */
-struct kb_listener {
-    list_node node;
-    kb_callback_fn cb;
-};
-
-struct kb_ctx {
-    kbuf buf;                    /* circular input buffer        */
-    list_node listener_list;     /* registered callback list     */
-    spinlock* lock;              /* protects listener_list       */
-    irq* irq_dev;                /* keyboard IRQ descriptor      */
-};
-
-static struct kb_ctx g_ctx;
+static struct kb_device kbdev;
 
 static uint8_t parse(uint8_t code)
 {
@@ -269,20 +281,20 @@ static void kb_handler(void* context)
     uint8_t scancode = ops->in_port8(0x60);
     uint8_t key = parse(scancode);
     if (key)
-        kbuf_add(&g_ctx.buf, (char)key);
+        kbuf_add(&kb_device.buf, (char)key);
 
     /* distribute one key from the buffer to all registered listeners */
     char keybuf[2] = {0};
-    keybuf[0] = kbuf_pop(&g_ctx.buf);
+    keybuf[0] = kbuf_pop(&kb_device.buf);
     if (keybuf[0]) {
-        spinlock_lock(g_ctx.lock);
-        list_for_each(pos, &g_ctx.listener_list) {
+        spinlock_lock(kb_device.lock);
+        list_for_each(pos, &kb_device.listener_list) {
             struct kb_listener* lsn = list_entry(pos, struct kb_listener, node);
             if (lsn->cb) {
                 lsn->cb(keybuf, 1);
             }
         }
-        spinlock_unlock(g_ctx.lock);
+        spinlock_unlock(kb_device.lock);
     }
 }
 
@@ -290,9 +302,9 @@ static int kb_probe(struct device *dev)
 {
     ULOG("kb_probe");
 
-    g_ctx.lock = spinlock_alloc();
-    list_init(&g_ctx.listener_list);
-    kbuf_reset(&g_ctx.buf);
+    kb_device.lock = spinlock_alloc();
+    list_init(&kb_device.listener_list);
+    kbuf_reset(&kb_device.buf);
 
     struct platform_device* device = to_platform_device(dev);
     struct platform_resource* res = platform_device_get_resource(
@@ -301,11 +313,11 @@ static int kb_probe(struct device *dev)
 
     uint32_t irq_nr = res ? res->irq.nr : KEYBOARD_IRQ_NO;
 
-    int ret = irq_request(&g_ctx.irq_dev, "kbd", irq_nr, IRQ_ANY_MINOR, kb_handler, ops);
+    int ret = irq_request(&kb_device.irq, "kbd", irq_nr, IRQ_ANY_MINOR, kb_handler, ops);
     if (ret)
         return ret;
 
-    irq_unmask(g_ctx.irq_dev);
+    irq_unmask(kb_device.irq);
     return 0;
 }
 
@@ -314,21 +326,21 @@ static int kb_remove(struct device *dev)
     (void)dev;
     ULOG("kb_remove");
 
-    if (g_ctx.irq_dev) {
-        irq_mask(g_ctx.irq_dev);
-        irq_release(g_ctx.irq_dev);
-        g_ctx.irq_dev = 0;
+    if (kb_device.irq) {
+        irq_mask(kb_device.irq);
+        irq_release(kb_device.irq);
+        kb_device.irq = 0;
     }
 
-    if (g_ctx.lock) {
-        spinlock_lock(g_ctx.lock);
-        list_init(&g_ctx.listener_list);
-        spinlock_unlock(g_ctx.lock);
-        spinlock_release(g_ctx.lock);
-        g_ctx.lock = 0;
+    if (kb_device.lock) {
+        spinlock_lock(kb_device.lock);
+        list_init(&kb_device.listener_list);
+        spinlock_unlock(kb_device.lock);
+        spinlock_release(kb_device.lock);
+        kb_device.lock = 0;
     }
 
-    kbuf_reset(&g_ctx.buf);
+    kbuf_reset(&kb_device.buf);
     return 0;
 }
 
@@ -347,9 +359,9 @@ int kb_register_callback(kb_callback_fn cb)
 
     lsn->cb = cb;
 
-    spinlock_lock(g_ctx.lock);
-    list_add(&lsn->node, &g_ctx.listener_list);
-    spinlock_unlock(g_ctx.lock);
+    spinlock_lock(kb_device.lock);
+    list_add(&lsn->node, &kb_device.listener_list);
+    spinlock_unlock(kb_device.lock);
 
     return 0;
 }
@@ -359,8 +371,8 @@ void kb_unregister_callback(kb_callback_fn cb)
     if (!cb)
         return;
 
-    spinlock_lock(g_ctx.lock);
-    list_for_each(pos, &g_ctx.listener_list) {
+    spinlock_lock(kb_device.lock);
+    list_for_each(pos, &kb_device.listener_list) {
         struct kb_listener* lsn = list_entry(pos, struct kb_listener, node);
         if (lsn->cb == cb) {
             list_del(&lsn->node);
@@ -368,25 +380,13 @@ void kb_unregister_callback(kb_callback_fn cb)
             break;
         }
     }
-    spinlock_unlock(g_ctx.lock);
+    spinlock_unlock(kb_device.lock);
 }
 
 struct driver kb_driver = {
-    .type = "kb",
+    .type = "keyboard",
     .probe = kb_probe,
     .remove = kb_remove,
-};
-
-struct platform_device kb_device = {
-    .dev = {
-        .name = "kb",
-        .type = "kb",
-    },
-    .num_res = 1,
-    .resources[0] = {
-        .type = PLAT_RES_IRQ,
-        .irq.nr = 0x21,
-    },
 };
 
 void kb_init(void)
@@ -394,7 +394,7 @@ void kb_init(void)
     KLOG("kb_init");
 
     platform_driver_register(&kb_driver);
-    platform_device_register(&kb_device.dev);
+    platform_device_register(&kb_device.plat_dev.dev);
 }
 
 void kb_exit(void)
