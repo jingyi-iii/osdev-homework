@@ -32,8 +32,8 @@ typedef struct irqline {
     list_node irqs;
 } irqline;
 
-int irq_request(irq **out, const char* name, uint32_t major,
-    uint32_t minor, irq_handler_fn handler);
+int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
+                    irq_handler_fn cb, void* cb_param);
 void irq_release(irq *p);
 int irq_mask(struct irq* p);
 int irq_unmask(struct irq* p);

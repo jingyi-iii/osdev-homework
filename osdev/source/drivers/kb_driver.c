@@ -260,11 +260,13 @@ static uint8_t parse(uint8_t code)
 
 static void kb_handler(void* context)
 {
-    (void)context;
+    struct platform_bus_ops* ops = (struct platform_bus_ops*)context;
+    if (!ops)
+        return;
 
     KLOG("kb_handler triggered\n");
 
-    uint8_t scancode = arch_inb(0x60);
+    uint8_t scancode = ops->in_port8(0x60);
     uint8_t key = parse(scancode);
     if (key)
         kbuf_add(&g_ctx.buf, (char)key);
@@ -295,10 +297,11 @@ static int kb_probe(struct device *dev)
     struct platform_device* device = to_platform_device(dev);
     struct platform_resource* res = platform_device_get_resource(
         device, PLAT_RES_IRQ, 0);
+    struct platform_bus_ops* ops = platform_device_get_ops(device);
 
     uint32_t irq_nr = res ? res->irq.nr : KEYBOARD_IRQ_NO;
 
-    int ret = irq_request(&g_ctx.irq_dev, "kbd", irq_nr, IRQ_ANY_MINOR, kb_handler);
+    int ret = irq_request(&g_ctx.irq_dev, "kbd", irq_nr, IRQ_ANY_MINOR, kb_handler, ops);
     if (ret)
         return ret;
 

@@ -98,12 +98,12 @@ void logdev_init(void)
     }
 
     tmrdev_init(&gtmrdev);
-    irq_request(&irq_scall, "userlog", 100, 1, scall_user_log_handler);
+    irq_request(&irq_scall, "userlog", 100, 1, scall_user_log_handler, 0);
     if (irq_scall)
         irq_unmask(irq_scall);
 
     irq* tmp_irq_for_test = 0;
-    irq_request(&tmp_irq_for_test, "userlog", 100, 1, scall_user_log_handler);
+    irq_request(&tmp_irq_for_test, "userlog", 100, 1, scall_user_log_handler, 0);
 }
 
 module_init(logdev_init);

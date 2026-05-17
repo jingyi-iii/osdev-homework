@@ -148,12 +148,12 @@ static irq* pcb_scall = 0;
 void process_evn_setup(void)
 {
     tss_init();
-    irq_request(&pcb_irq, "tmr", TIMER_IRQ_NO, 0, schedule_isr);
+    irq_request(&pcb_irq, "tmr", TIMER_IRQ_NO, 0, schedule_isr, 0);
     if (pcb_irq) {
         irq_unmask(pcb_irq);
     }
 
-    irq_request(&pcb_scall, "proc_syscall", 100, 0, syscall_isr);
+    irq_request(&pcb_scall, "proc_syscall", 100, 0, syscall_isr, 0);
     if (pcb_scall) {
         irq_unmask(pcb_scall);
     }

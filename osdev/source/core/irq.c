@@ -215,7 +215,8 @@ static int irq_free(irq *p)
     return 0;
 }
 
-int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor, irq_handler_fn handler)
+int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
+                    irq_handler_fn cb, void* cb_param)
 {
     if (!out || major >= IDT_ENTRIES)
         return -1;
@@ -238,7 +239,7 @@ int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor, irq
         }
     }
 
-    ret = irq_alloc(major, minor, name, 0, handler, out);
+    ret = irq_alloc(major, minor, name, cb_param, cb, out);
     if (ret != 0 || *out == 0)
         return ret;
 
