@@ -6,6 +6,8 @@
 #include "list.h"
 #include "spinlock.h"
 
+#define IRQ_ANY_MINOR  UINT32_MAX
+
 #ifdef __cplusplus
 extern "C" {
 #endif

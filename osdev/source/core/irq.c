@@ -134,6 +134,27 @@ static void irqline_release(irqline* line)
     memset(line, 0, sizeof(irqline));
 }
 
+/*
+ * Find the first free (unused) minor number on the given irqline.
+ * Returns IRQ_ANY_MINOR if none is available.
+ */
+static uint32_t irqline_find_free_minor(struct irqline* line)
+{
+    for (uint32_t candidate = 0; candidate < UINT32_MAX; candidate++) {
+        int used = 0;
+        list_for_each(each, &line->irqs) {
+            irq* p = list_entry(each, irq, node);
+            if (p->minor == candidate) {
+                used = 1;
+                break;
+            }
+        }
+        if (!used)
+            return candidate;
+    }
+    return IRQ_ANY_MINOR;
+}
+
 void irqline_handler(uint32_t major, uint32_t minor, void* context)
 {
     (void)minor;
@@ -201,6 +222,21 @@ int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor, irq
 
     int ret = 0;
     int minor_existed = 0;
+
+    if (minor == IRQ_ANY_MINOR) {
+        if (!irqlines[major]) {
+            if (irqline_init(&irqlines[major], major) != 0)
+                return -1;
+        }
+        if (!irqlines[major])
+            return -1;
+
+        minor = irqline_find_free_minor(irqlines[major]);
+        if (minor == IRQ_ANY_MINOR) {
+            KLOG("%s: no free minor on major %d", __FUNCTION__, major);
+            return -1;
+        }
+    }
 
     ret = irq_alloc(major, minor, name, 0, handler, out);
     if (ret != 0 || *out == 0)

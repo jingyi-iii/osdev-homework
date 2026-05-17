@@ -262,7 +262,7 @@ static void kb_handler(void* context)
 {
     (void)context;
 
-    ULOG("kb_handler triggered\n");
+    KLOG("kb_handler triggered\n");
 
     uint8_t scancode = arch_inb(0x60);
     uint8_t key = parse(scancode);
@@ -298,7 +298,7 @@ static int kb_probe(struct device *dev)
 
     uint32_t irq_nr = res ? res->irq.nr : KEYBOARD_IRQ_NO;
 
-    int ret = irq_request(&g_ctx.irq_dev, "kbd", irq_nr, 0, kb_handler);
+    int ret = irq_request(&g_ctx.irq_dev, "kbd", irq_nr, IRQ_ANY_MINOR, kb_handler);
     if (ret)
         return ret;
 

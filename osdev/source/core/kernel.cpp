@@ -14,17 +14,17 @@
 #error "This tutorial needs to be compiled with a ix86-elf compiler"
 #endif
 
-void kb_read(struct iodev *dev, void* data, size_t size)
+void kb_read(const char* data, size_t size)
 {
-    LOG_DBG(dev, "%s", (const char*)data, size);
+    KLOG("%s", data, size);
 }
 
-void kb_read2(struct iodev *dev, void* data, size_t size)
+void kb_read2(const char* data, size_t size)
 {
     (void)data;
     (void)size;
 
-    LOG_DBG(dev, "kbdev2");
+    KLOG("kbdev2");
 }
 
 void timer_process(void)
@@ -32,10 +32,8 @@ void timer_process(void)
     const char* ptr_msg = "Timer interrupt triggered modification: \0";
     uint16_t* ptr_gbuf = (uint16_t*)0xb8000;
 
-    iodev* kbdev = 0;
-    kbdev_init(&kbdev, "kb_read", kb_read);
-
     kb_init();
+    kb_register_callback(kb_read);
 
     for ( ;; ) {
         while (*ptr_msg) {
@@ -56,9 +54,7 @@ void timer_process2(void)
     uint16_t* ptr_gbuf = (uint16_t*)0xb8000;
     static size_t count = 0;
 
-    iodev* kbdev2 = 0;
-    kbdev_init(&kbdev2, "kb_read2", kb_read2);
-
+    kb_register_callback(kb_read2);
     ULOG("hello ulog");
 
     for ( ;; ) {
