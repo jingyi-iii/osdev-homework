@@ -7,6 +7,11 @@
 
 #define MAX_PLATFORM_RES    (128)
 
+#define container_of(ptr, type, member) ({                \
+    const typeof(((type *)0)->member) *__mptr = (ptr);    \
+    (type *)((char *)__mptr - offsetof(type, member));    \
+})
+
 enum platform_resource_type {
     PLAT_RES_IO,
     PLAT_RES_IRQ,
@@ -18,11 +23,12 @@ struct platform_resource {
     union {
         struct {
             uint16_t base;
-            uint16_t count;
+            uint16_t size;
         } io;
 
         struct {
-            uint32_t nr;
+            uint32_t major;
+            uint32_t minor;
         } irq;
 
         struct {

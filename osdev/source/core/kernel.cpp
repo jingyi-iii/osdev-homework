@@ -3,6 +3,7 @@
 #include "core_api.h"
 #include "iodev_api.h"
 #include "kb_driver.h"
+#include "log_driver.h"
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -95,6 +96,8 @@ void kernel_start(void)
 {
     kernel_do_initcalls();
     /* KLOG is available here */
+
+    log_init();
 
 	Terminal terminal;
 	terminal.Flush();

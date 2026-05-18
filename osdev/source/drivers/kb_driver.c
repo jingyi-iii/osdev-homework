@@ -169,7 +169,8 @@ struct kb_device kb_device = {
         .num_res = 1,
         .resources[0] = {
             .type = PLAT_RES_IRQ,
-            .irq.nr = KEYBOARD_IRQ_NO,
+            .irq.major = KEYBOARD_IRQ_NO,
+            .irq.minor = 0,
         },
     },
 };
@@ -311,7 +312,7 @@ static int kb_probe(struct device *dev)
         device, PLAT_RES_IRQ, 0);
     struct platform_bus_ops* ops = platform_device_get_ops(device);
 
-    uint32_t irq_nr = res ? res->irq.nr : KEYBOARD_IRQ_NO;
+    uint32_t irq_nr = res ? res->irq.major : KEYBOARD_IRQ_NO;
 
     int ret = irq_request(&kb_device.irq, "kbd", irq_nr, IRQ_ANY_MINOR, kb_handler, ops);
     if (ret)

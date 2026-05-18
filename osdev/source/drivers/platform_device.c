@@ -1,11 +1,6 @@
 #include "platform_device.h"
 #include <stddef.h>
 
-#define container_of(ptr, type, member) ({                \
-    const typeof(((type *)0)->member) *__mptr = (ptr);    \
-    (type *)((char *)__mptr - offsetof(type, member));    \
-})
-
 struct platform_resource* platform_device_get_resource(
     struct platform_device* dev, enum platform_resource_type type, int index)
 {
