@@ -1,11 +1,11 @@
 #include "kb_driver.h"
-#include "logmgr.h"
 #include "spinlock.h"
 #include "irq.h"
 #include "arch_irq.h"
 #include "core_api.h"
 #include "string.h"
 #include "heap.h"
+#include "log_driver.h"
 
 const unsigned int keymap[NR_SCAN_CODES * MAP_COLS] = {
 /* scan-code			!Shift		Shift		E0 XX	*/

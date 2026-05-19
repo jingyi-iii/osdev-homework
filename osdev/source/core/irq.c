@@ -1,7 +1,7 @@
 #include "arch_irq.h"
 #include "irq.h"
 #include "string.h"
-#include "iodev_api.h"
+#include "log_driver.h"
 #include "heap.h"
 
 static irqline* irqlines[IDT_ENTRIES] = {0};

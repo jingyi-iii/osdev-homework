@@ -2,7 +2,6 @@
 #include "module.h"
 #include "string.h"
 #include "spinlock.h"
-#include "logmgr.h"
 
 static int in8(uint16_t port)
 {

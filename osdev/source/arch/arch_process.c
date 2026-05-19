@@ -1,6 +1,10 @@
 #include "arch_process.h"
 #include "iodev_api.h"
 
+#ifndef KLOG
+#define KLOG(x) 
+#endif
+
 static volatile tss_t tss = {0};
 volatile proc_context* curr_context = 0;
 
