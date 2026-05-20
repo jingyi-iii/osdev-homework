@@ -40,6 +40,15 @@ typedef struct {
     uint8_t century;
 } rtc_time_t;
 
+/* Timer syscall minor number for RING3 access */
+#define TIMER_SYSCALL_MINOR     (2)
+
+/* Data structure for timer syscall */
+typedef struct timer_syscall_data {
+    char* buf;      /* Buffer to write time string "YYYY-MM-DD HH:MM:SS" */
+    size_t size;    /* Size of buffer */
+} timer_syscall_data;
+
 void timer_init(void);
 void timer_exit(void);
 

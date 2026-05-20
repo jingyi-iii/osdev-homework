@@ -173,14 +173,36 @@ struct driver timer_driver = {
     .remove = timer_remove,
 };
 
+static irq* timer_scall = NULL;
+
+static void timer_syscall_handler(void* context)
+{
+    timer_syscall_data* data = (timer_syscall_data*)context;
+    if (data && data->buf && data->size > 0) {
+        timer_read_time_str(data->buf, data->size);
+    }
+}
+
 void timer_init(void)
 {
     platform_driver_register(&timer_driver);
     platform_device_register(&timer_device.plat_dev.dev);
+
+    /* Register timer syscall for RING3 access */
+    int ret = irq_request(&timer_scall, "timer_syscall", 100,
+                          TIMER_SYSCALL_MINOR, timer_syscall_handler, NULL);
+    if (ret == 0 && timer_scall) {
+        irq_unmask(timer_scall);
+    }
 }
 
 void timer_exit(void)
 {
+    if (timer_scall) {
+        irq_release(timer_scall);
+        timer_scall = NULL;
+    }
+
     platform_driver_unregister(&timer_driver);
     platform_device_unregister(&timer_device.plat_dev.dev);
 }

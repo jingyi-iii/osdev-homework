@@ -34,7 +34,10 @@ void log_handler(void* context);
 #define ULOG(fmt, ...)                                                                                                      \
     do {                                                                                                                    \
         char log_buf[256] = {0};                                                                                            \
-        snprintf(log_buf, sizeof(log_buf), "ULOG: " fmt "\n", ##__VA_ARGS__);                                               \
+        char tmr_buf[32] = {0};                                                                                             \
+        timer_syscall_data ts_data = { .buf = tmr_buf, .size = sizeof(tmr_buf) };                                           \
+        arch_syscall(TIMER_SYSCALL_MINOR, &ts_data);                                                                        \
+        snprintf(log_buf, sizeof(log_buf), "%s ULOG: " fmt "\n", tmr_buf, ##__VA_ARGS__);                                   \
         log_data log = {0};                                                                                                 \
         log.log = log_buf;                                                                                                  \
         log.size = strlen(log_buf);                                                                                         \
