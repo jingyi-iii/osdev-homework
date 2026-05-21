@@ -9,6 +9,8 @@ extern "C" {
 #include "platform_bus.h"
 #include "platform_device.h"
 #include "timer_driver.h"
+#include "arch_irq.h"
+#include "string.h"
 
 typedef struct log_data {
     const char* log;

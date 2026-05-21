@@ -2,7 +2,6 @@
 #include "spinlock.h"
 #include "irq.h"
 #include "arch_irq.h"
-#include "core_api.h"
 #include "string.h"
 #include "heap.h"
 #include "log_driver.h"

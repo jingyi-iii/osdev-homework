@@ -1,11 +1,10 @@
 #include "process.h"
 #include "heap.h"
-#include "core_api.h"
-#include "iodev_api.h"
 #include "arch_protm.h"
 #include "module.h"
 #include "string.h"
 #include "log_driver.h"
+#include "arch_irq.h"
 
 #define PROC_CTRL_SCHEDULE  (1)
 #define PROC_CTRL_BLOCK     (2)

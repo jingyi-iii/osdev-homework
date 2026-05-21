@@ -1,10 +1,9 @@
 #include "terminal.h"
 #include "module.h"
-#include "core_api.h"
-#include "iodev_api.h"
 #include "kb_driver.h"
 #include "timer_driver.h"
 #include "log_driver.h"
+#include "process.h"
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */
 #if defined(__linux__)
