@@ -1,10 +1,6 @@
 #ifndef __PROCESS_H_
 #define __PROCESS_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <stdint.h>
 #include "list.h"
 #include "arch_process.h"
@@ -37,9 +33,5 @@ int32_t create_proc(proc_priv priv, proc_entry_t entry);
 void schedule(void);
 void block(int32_t pid);
 void unblock(int32_t pid);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

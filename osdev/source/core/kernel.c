@@ -1,4 +1,4 @@
-#include "terminal.h"
+#include "terminal_driver.h"
 #include "module.h"
 #include "kb_driver.h"
 #include "timer_driver.h"
@@ -79,8 +79,6 @@ void timer_process2(void)
     while (1);
 }
 
-extern "C" {
-
 extern init_call_t __start_initcall[];
 extern init_call_t __stop_initcall[];
 static void kernel_do_initcalls(void)
@@ -99,18 +97,16 @@ void kernel_start(void)
 
     timer_init();
     log_init();
+    terminal_init();
 
-	Terminal terminal;
-	terminal.Flush();
+	terminal_flush();
 	for (int i = 0; i < 100; i++)
-		terminal.Write("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
+		terminal_write("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
 
     create_proc(PROC_PRIV_KERNEL, timer_process);
     create_proc(PROC_PRIV_USER, timer_process2);
 
     irq* scall_dev = 0;
     irq* scall_dev2 = 0;
-}
-
 }
 

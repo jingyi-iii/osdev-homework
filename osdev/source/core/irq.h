@@ -8,10 +8,6 @@
 
 #define IRQ_ANY_MINOR  UINT32_MAX
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 typedef void (*irq_handler_fn)(void* context);
 
 typedef struct irq {
@@ -37,9 +33,5 @@ int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
 void irq_release(irq *p);
 int irq_mask(struct irq* p);
 int irq_unmask(struct irq* p);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

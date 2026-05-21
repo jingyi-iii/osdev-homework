@@ -1,10 +1,6 @@
 #ifndef TIMER_DRIVER_H
 #define TIMER_DRIVER_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <stdint.h>
 #include <stddef.h>
 #include "platform_bus.h"
@@ -58,9 +54,5 @@ void timer_get_time(rtc_time_t* time);
 /* Read time as formatted string "YYYY-MM-DD HH:MM:SS" */
 /* Returns number of bytes written, or -1 on error */
 int timer_read_time_str(char* buf, size_t size);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

@@ -1,10 +1,6 @@
 #ifndef __SPINLOCK_H__
 #define __SPINLOCK_H__
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #define mb()        __asm__ __volatile__("mfence" ::: "memory")
 #define rmb()       __asm__ __volatile__("lfence" ::: "memory")
 #define wmb()       __asm__ __volatile__("sfence" ::: "memory")
@@ -25,9 +21,5 @@ void spinlock_release(spinlock* lock);
 int spinlock_lock(spinlock* lock);
 int spinlock_trylock(spinlock* lock);
 int spinlock_unlock(spinlock* lock);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

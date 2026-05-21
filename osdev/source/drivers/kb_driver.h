@@ -1,10 +1,6 @@
 #ifndef KB_DRIVER_H
 #define KB_DRIVER_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include "stddef.h"
 #include "platform_bus.h"
 #include "platform_device.h"
@@ -119,9 +115,5 @@ void kb_exit(void);
 typedef void (*kb_callback_fn)(const char* data, size_t size);
 int kb_register_callback(kb_callback_fn cb);
 void kb_unregister_callback(kb_callback_fn cb);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

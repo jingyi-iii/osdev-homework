@@ -1,10 +1,6 @@
 #ifndef LOG_DRIVER_H
 #define LOG_DRIVER_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include "stddef.h"
 #include "platform_bus.h"
 #include "platform_device.h"
@@ -46,9 +42,5 @@ void log_handler(void* context);
         arch_syscall(1, &log);                                                                                              \
     } while (0)
 
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

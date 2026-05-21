@@ -50,10 +50,6 @@
                      SEG_LONG(0)     | SEG_SIZE(1) | SEG_GRAN(1) | \
                      SEG_PRIV(3)     | SEG_DATA_RDWR
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 inline void arch_reload_gdt(void* gdtmeta)
 {
     if (!gdtmeta)
@@ -127,7 +123,4 @@ inline uint8_t arch_inb(uint16_t port)
     return value;
 }
 
-#ifdef __cplusplus
-}
-#endif
 #endif

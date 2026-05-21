@@ -2,7 +2,6 @@
 #include "arch_protm.h"
 #include "arch_irq.h"
 #include "spinlock.h"
-#include "privilege.h"
 
 #define INT_MASTER_CMD          (0x20)
 #define INT_MASTER_DATA         (0x21)
