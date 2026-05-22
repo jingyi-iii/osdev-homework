@@ -64,7 +64,7 @@ static int platform_match(struct driver *drv, struct device *dev)
     return strcmp(drv->type, dev->type);
 }
 
-static void platform_bus_init(void)
+void platform_bus_init(void)
 {
     list_init(&platform_bus.devices);
     list_init(&platform_bus.drivers);
@@ -106,6 +106,3 @@ int platform_device_unregister(struct device* dev)
 
     return bus_remove_device(&platform_bus, dev);
 }
-
-module_init(platform_bus_init);
-

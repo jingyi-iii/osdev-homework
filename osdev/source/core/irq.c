@@ -171,7 +171,8 @@ void irqline_handler(uint32_t major, uint32_t minor, void* context)
             } else {
                 /* Syscall (major 100): dispatch by minor, pass real data */
                 if (p->minor == minor) {
-                    KLOG("syscall: minor %d triggled", minor);
+                    if (minor != 0)
+                        KLOG("syscall: minor %d triggled", minor);
                     p->handler(context);
                 }
             }

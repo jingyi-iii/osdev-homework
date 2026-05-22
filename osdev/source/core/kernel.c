@@ -33,7 +33,6 @@ void timer_process(void)
     const char* ptr_msg = "Timer interrupt triggered modification: \0";
     uint16_t* ptr_gbuf = (uint16_t*)0xb8000;
 
-    kb_init();
     kb_register_callback(kb_read);
 
     for ( ;; ) {
@@ -92,12 +91,12 @@ static void kernel_do_initcalls(void)
 
 void kernel_start(void) 
 {
-    kernel_do_initcalls();
-    /* KLOG is available here */
+    platform_bus_init();
 
-    timer_init();
+    process_evn_setup();
     log_init();
-    terminal_init();
+
+    kernel_do_initcalls();
 
 	terminal_flush();
 	for (int i = 0; i < 100; i++)
@@ -105,8 +104,5 @@ void kernel_start(void)
 
     create_proc(PROC_PRIV_KERNEL, timer_process);
     create_proc(PROC_PRIV_USER, timer_process2);
-
-    irq* scall_dev = 0;
-    irq* scall_dev2 = 0;
 }
 

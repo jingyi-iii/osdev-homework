@@ -1,6 +1,7 @@
 #include "timer_driver.h"
 #include "irq.h"
 #include "string.h"
+#include "module.h"
 
 struct timer_device {
     struct platform_device plat_dev;
@@ -206,3 +207,5 @@ void timer_exit(void)
     platform_driver_unregister(&timer_driver);
     platform_device_unregister(&timer_device.plat_dev.dev);
 }
+
+module_init(timer_init);

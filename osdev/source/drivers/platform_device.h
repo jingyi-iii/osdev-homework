@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "device.h"
 #include "platform_bus.h"
+#include "module.h"
 
 #define MAX_PLATFORM_RES    (128)
 

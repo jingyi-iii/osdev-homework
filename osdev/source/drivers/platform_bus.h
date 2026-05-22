@@ -18,4 +18,6 @@ int platform_driver_unregister(struct driver* drv);
 int platform_device_register(struct device* dev);
 int platform_device_unregister(struct device* dev);
 
+void platform_bus_init(void);
+
 #endif

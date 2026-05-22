@@ -143,6 +143,17 @@ void unblock(int32_t pid)
     arch_syscall(0, &config);
 }
 
+void exit(int32_t pid)
+{
+
+}
+
+void yield(int32_t pid)
+{
+
+}
+
+
 static irq* pcb_irq = 0;
 static irq* pcb_scall = 0;
 void process_evn_setup(void)
@@ -158,4 +169,3 @@ void process_evn_setup(void)
         irq_unmask(pcb_scall);
     }
 }
-module_init(process_evn_setup);

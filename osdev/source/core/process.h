@@ -34,4 +34,6 @@ void schedule(void);
 void block(int32_t pid);
 void unblock(int32_t pid);
 
+void process_evn_setup(void);
+
 #endif

@@ -5,6 +5,7 @@
 #include "string.h"
 #include "heap.h"
 #include "log_driver.h"
+#include "module.h"
 
 const unsigned int keymap[NR_SCAN_CODES * MAP_COLS] = {
 /* scan-code			!Shift		Shift		E0 XX	*/
@@ -276,8 +277,6 @@ static void kb_handler(void* context)
     if (!ops)
         return;
 
-    KLOG("kb_handler triggered\n");
-
     uint8_t scancode = ops->in_port8(0x60);
     uint8_t key = parse(scancode);
     if (key)
@@ -300,7 +299,7 @@ static void kb_handler(void* context)
 
 static int kb_probe(struct device *dev)
 {
-    ULOG("kb_probe");
+    KLOG("kb_probe");
 
     kb_device.lock = spinlock_alloc();
     list_init(&kb_device.listener_list);
@@ -324,7 +323,7 @@ static int kb_probe(struct device *dev)
 static int kb_remove(struct device *dev)
 {
     (void)dev;
-    ULOG("kb_remove");
+    KLOG("kb_remove");
 
     if (kb_device.irq) {
         irq_mask(kb_device.irq);
@@ -401,3 +400,5 @@ void kb_exit(void)
 {
     KLOG("kb_exit");
 }
+
+module_init(kb_init);

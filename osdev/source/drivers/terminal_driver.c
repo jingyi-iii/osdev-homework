@@ -1,5 +1,6 @@
 #include "terminal_driver.h"
 #include "spinlock.h"
+#include "module.h"
 
 /************************************************************************/
 /*                        Internal Definitions                          */
@@ -165,3 +166,5 @@ void terminal_exit(void)
     platform_driver_unregister(&terminal_driver);
     platform_device_unregister(&term_device.plat_dev.dev);
 }
+
+module_init(terminal_init);
