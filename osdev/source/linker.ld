@@ -16,6 +16,10 @@ SECTIONS
         __start_initcall = .;
         *(.initcall)
         __stop_initcall = .;
+
+        __start_exitcall = .;
+        *(.exitcall)
+        __stop_exitcall = .;
     } :text
 
 	/* Read-only data. */

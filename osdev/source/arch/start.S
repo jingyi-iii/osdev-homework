@@ -43,7 +43,9 @@ knl32_entry:
 
         movl    $stack_top,     %esp
         call    arch_init_irq
-        call    kernel_start
+        cli
+
+        call    kernel_start_noirq
 
         movl    curr_context,   %eax
         movl    (%eax),         %esp

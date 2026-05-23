@@ -116,8 +116,6 @@ void arch_init_irq(void)
     idtmeta.limit = sizeof(idesc_t) * IDT_ENTRIES - 1;
     idtmeta.base = (uint32_t)idt;
     arch_reload_idt(&idtmeta);
-    arch_sti();
-
     arch_init_8259a();
 }
 

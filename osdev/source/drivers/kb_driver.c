@@ -401,4 +401,5 @@ void kb_exit(void)
     KLOG("kb_exit");
 }
 
-module_init(kb_init);
+// module_init(kb_init);
+// module_exit(kb_exit);

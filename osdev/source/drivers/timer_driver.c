@@ -209,3 +209,4 @@ void timer_exit(void)
 }
 
 module_init(timer_init);
+module_exit(timer_exit);

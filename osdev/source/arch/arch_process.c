@@ -1,11 +1,12 @@
 #include "arch_process.h"
+#include "string.h"
 
 #ifndef KLOG
 #define KLOG(x) 
 #endif
 
 static volatile tss_t tss = {0};
-volatile proc_context* curr_context = 0;
+volatile arch_proc_context* curr_context = 0;
 
 // TSS is only used to provide ss0 and esp0 when entering ring0 from non-ring0
 int tss_init(void)
@@ -34,7 +35,7 @@ int tss_init(void)
     return 0;
 }
 
-static inline void ldt_reload(proc_context* context)
+static inline void ldt_reload(arch_proc_context* context)
 {
     if (!context)
         return;
@@ -44,7 +45,7 @@ static inline void ldt_reload(proc_context* context)
     arch_reload_ldt(arch_get_sel(LDT));
 }
 
-int proc_context_init(proc_context* context, proc_entry_t entry, proc_priv priv)
+int arch_proc_context_init(arch_proc_context* context, proc_entry_t entry, proc_priv priv)
 {
     uint8_t ring = priv == PROC_PRIV_KERNEL ? 0 : 3;
 
@@ -61,6 +62,10 @@ int proc_context_init(proc_context* context, proc_entry_t entry, proc_priv priv)
     context->ldts[3] = 0x00cf9200 | (ring << 13);
 
     context->stack = kmalloc(0x1000);    // 4KB stack
+    if (!context->stack) {
+        KLOG("failed to alloc process stack");
+        return -1;
+    }
     context->regs = (regs_t*)((uint8_t*)context->stack + 0x1000 - sizeof(regs_t));
     context->regs->cs = 0x0 | 0x4 | ring;
     context->regs->gs = 0x8 | 0x4 | ring;
@@ -76,7 +81,18 @@ int proc_context_init(proc_context* context, proc_entry_t entry, proc_priv priv)
     return 0;
 }
 
-int proc_restore_context(proc_context* context)
+void arch_proc_context_release(arch_proc_context* context)
+{
+    if (!context)
+        return;
+
+    if (context->stack)
+        kfree(context->stack);
+
+    memset(context, 0, sizeof(arch_proc_context));
+}
+
+int arch_proc_restore_context(arch_proc_context* context)
 {
     if (!context)
         return -22;
@@ -85,4 +101,5 @@ int proc_restore_context(proc_context* context)
         tss.esp0 = (uint32_t)context->regs + sizeof(regs_t);
     curr_context = context;
     ldt_reload(curr_context);
+    return 0;
 }

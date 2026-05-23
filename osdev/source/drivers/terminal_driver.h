@@ -41,12 +41,14 @@ static inline uint16_t to_vga_char(uint8_t chr, uint8_t color)
 /************************************************************************/
 /*                      Terminal Public API                             */
 /************************************************************************/
-void terminal_init(void);
-void terminal_exit(void);
-
-void terminal_flush(void);
+void terminal_flush(const char* unused);
 void terminal_write_at(char chr, uint8_t color, size_t x, size_t y);
 void terminal_write_at_str(const char* str, uint8_t color, size_t x, size_t y);
 void terminal_write(const char* str);
+void terminal_putchar(char c);
+
+typedef void (*terminal_cmd_fn)(const char* args);
+int terminal_register_cmd(const char* name, terminal_cmd_fn callback);
+void terminal_unregister_cmd(const char* name);
 
 #endif /* TERMINAL_DRIVER_H */

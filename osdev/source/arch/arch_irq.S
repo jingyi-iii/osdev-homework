@@ -13,10 +13,12 @@
 
         # from kernel
         movl    curr_context,   %esi
+        testl   %esi,           %esi
+        jz      1f
         movl    %esp,           (%esi)
 
 1:
-        # from user
+        # from user, or current_context is null
         mov     $0x10,          %si
         mov     %si,            %ds
         mov     %si,            %es

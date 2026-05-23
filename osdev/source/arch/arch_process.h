@@ -61,14 +61,15 @@ typedef enum proc_priv {
     PROC_PRIV_USER,
 } proc_priv;
 
-typedef struct proc_context {
+typedef struct arch_proc_context {
     regs_t*         regs;
     uint32_t        ldts[4];    // 64 bits for each ldt entry
     void*           stack;
     uint8_t         ring;
-} proc_context;
+} arch_proc_context;
 
 int tss_init(void);
-int proc_context_init(proc_context* context, proc_entry_t entry, proc_priv priv);
-int proc_restore_context(proc_context* context);
+int arch_proc_context_init(arch_proc_context* context, proc_entry_t entry, proc_priv priv);
+void arch_proc_context_release(arch_proc_context* context);
+int arch_proc_restore_context(arch_proc_context* context);
 #endif
