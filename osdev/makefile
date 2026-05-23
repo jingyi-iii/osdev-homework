@@ -1,14 +1,11 @@
-SRC_DIR  := source/
 OUT_DIR	 := output/
 GRUB_DIR := $(OUT_DIR)iso/boot/grub
 OBJS_DIR := $(OUT_DIR)objs/
-VLD_DIRS := $(filter-out ./.git% ./$(OUT_DIR)%, $(shell find $(SRC_DIR) -type d))
-SRC_DIRS := $(patsubst ./%,%,$(VLD_DIRS))
-INC_DIRS := $(addprefix -I,$(SRC_DIRS))
+INC_DIRS := -Iinclude -Iarch/i386
 
-ASMSRCS  := $(shell find . -type f -name '*.S' -not -path "./$(OUT_DIR)*" -not -path "./source/ut*")
-CSRCS    := $(shell find . -type f -name '*.c' -not -path "./$(OUT_DIR)*" -not -path "./source/ut*")
-CXXSRCS  := $(shell find . -type f -name '*.cpp' -not -path "./$(OUT_DIR)*" -not -path "./source/ut*")
+ASMSRCS  := $(shell find . -type f -name '*.S' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*")
+CSRCS    := $(shell find . -type f -name '*.c' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*")
+CXXSRCS  := $(shell find . -type f -name '*.cpp' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*")
 COBJS    := $(patsubst %.c,   $(OBJS_DIR)%.c.o,   $(CSRCS))
 CXXOBJS  := $(patsubst %.cpp, $(OBJS_DIR)%.cpp.o, $(CXXSRCS))
 ASMOBJS  := $(patsubst %.S,   $(OBJS_DIR)%.S.o,   $(ASMSRCS))
@@ -16,8 +13,8 @@ OBJS     := $(COBJS) $(CXXOBJS) $(ASMOBJS)
 
 TARGET_BIN := $(OUT_DIR)myos.bin
 TARGET_ISO := $(OUT_DIR)myos.iso
-LINKFILE   := $(SRC_DIR)linker.ld
-GRUBFILE   := $(SRC_DIR)grub.cfg
+LINKFILE   := config/linker.ld
+GRUBFILE   := config/grub.cfg
 ARCH       := i686-elf-
 
 CC         := $(ARCH)gcc

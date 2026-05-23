@@ -1,0 +1,126 @@
+#include "mm/heap.h"
+#include "sync/spinlock.h"
+#include "lib/module.h"
+#include "lib/string.h"
+
+#define HEAP_TOTAL_SIZE         (1024 * 1024 * 10)
+
+typedef struct heapchunk {
+        struct heapchunk* prev;
+        struct heapchunk* next;
+        unsigned int size;
+} heapchunk_t;
+
+typedef struct heappool {
+    int8_t pool[HEAP_TOTAL_SIZE];
+    heapchunk_t ckstart;
+    heapchunk_t ckend;
+    uint32_t avail_size;
+    spinlock* lock_dev;
+    int8_t init;
+} heappool_t;
+
+static heappool_t heappool = {0};
+
+static void kheap_init(void)
+{
+    heappool.lock_dev = spinlock_alloc();
+    if (!heappool.lock_dev)
+        return;
+
+    spinlock_lock(heappool.lock_dev);
+    heappool.ckstart.next = (heapchunk_t *)heappool.pool;
+    heappool.ckstart.size = 0;
+    heappool.ckstart.prev = 0;
+
+    heappool.ckend.prev = (heapchunk_t*)heappool.pool;
+    heappool.ckend.next = 0;
+    heappool.ckend.size = HEAP_TOTAL_SIZE;
+
+    ((heapchunk_t*)heappool.pool)->prev = &heappool.ckstart;
+    ((heapchunk_t*)heappool.pool)->next = &heappool.ckend;
+    ((heapchunk_t*)heappool.pool)->size = HEAP_TOTAL_SIZE;
+
+    heappool.avail_size = HEAP_TOTAL_SIZE;
+    heappool.init = 1;
+    spinlock_unlock(heappool.lock_dev);
+}
+
+void* kmalloc(unsigned int alloc_size)
+{
+    heapchunk_t* pck = 0;
+    heapchunk_t* new_pck = 0;
+    void* ret_addr = 0;
+    unsigned int req_size = sizeof(heapchunk_t) + alloc_size;
+
+    if (!heappool.init)
+        kheap_init();
+
+    spinlock_lock(heappool.lock_dev);
+    if (req_size < alloc_size)         // overflow
+        goto ALLOC_FAIL;
+    if (req_size > heappool.avail_size)
+        goto ALLOC_FAIL;
+    if (!req_size)
+        goto ALLOC_FAIL;
+
+    pck = &heappool.ckstart;
+    do {
+        pck = pck->next;
+    } while (pck->next && pck->size < req_size);
+
+    if (pck >= &heappool.ckend)
+        goto ALLOC_FAIL;
+
+    ret_addr = (uint8_t*)pck + sizeof(heapchunk_t);
+    memset(ret_addr, 0, alloc_size);
+    pck->prev->next = pck->next;
+    pck->next->prev = pck->prev;
+
+    if (pck->size - req_size >= sizeof(heapchunk_t)) {
+        new_pck = (heapchunk_t*)((uint8_t*)pck + req_size);
+        new_pck->size = pck->size - req_size;
+
+        pck = &heappool.ckstart;
+        while (pck->next != &heappool.ckend && new_pck->size > pck->next->size) {
+            pck = pck->next;
+        }
+
+        new_pck->prev = pck;
+        new_pck->next = pck->next;
+        pck->next->prev = new_pck;
+        pck->next = new_pck;
+    }
+    heappool.avail_size -= req_size;
+    spinlock_unlock(heappool.lock_dev);
+
+    return (void*)ret_addr;
+
+ALLOC_FAIL:
+    spinlock_unlock(heappool.lock_dev);
+    return 0;
+}
+
+void kfree(void* pointer)
+{
+    heapchunk_t* pck = 0;
+    heapchunk_t* free_pck = 0;
+
+    if (!pointer)
+        return;
+
+    spinlock_lock(heappool.lock_dev);
+    free_pck = (heapchunk_t *)((uint8_t*)pointer - sizeof(heapchunk_t));
+
+    pck = &heappool.ckstart;
+    while (free_pck->size > pck->next->size) {
+        pck = pck->next;
+    }
+    free_pck->prev = pck;
+    free_pck->next = pck->next;
+    pck->next->prev = free_pck;
+    pck->next = free_pck;
+
+    heappool.avail_size += free_pck->size;
+    spinlock_unlock(heappool.lock_dev);
+}
