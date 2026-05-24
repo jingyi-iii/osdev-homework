@@ -1,8 +1,8 @@
 #ifndef INIT_H
 #define INIT_H
 
-#include "kernel/process.h"
+#include "kernel/thread.h"
 
-void init_process(void);
+void init_thread(void);
 
 #endif

@@ -1,6 +1,6 @@
 #include "drivers/kb_driver.h"
 #include "drivers/log_driver.h"
-#include "kernel/process.h"
+#include "kernel/thread.h"
 
 static void kb_read2(const char* data, size_t size)
 {
@@ -10,7 +10,7 @@ static void kb_read2(const char* data, size_t size)
     KLOG("kbdev2");
 }
 
-void timer_process2(void)
+void timer_thread2(void)
 {
     const char* ptr_msg = "Timer interrupt triggered modification:    \0";
     uint16_t* ptr_gbuf = (uint16_t*)0xb8000;
@@ -22,9 +22,9 @@ void timer_process2(void)
     for ( ;; ) {
         count++;
         if (count == 200000) {
-            proc_block(0);
+            thread_block(0);
         } else if (count >= 400000) {
-            proc_unblock(0);
+            thread_unblock(0);
             count = 0;
         }
 

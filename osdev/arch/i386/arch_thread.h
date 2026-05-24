@@ -1,5 +1,5 @@
-#ifndef __ARCH_PROCESS_H
-#define __ARCH_PROCESS_H
+#ifndef __ARCH_THREAD_H
+#define __ARCH_THREAD_H
 
 #include "arch_protm.h"
 #include "mm/heap.h"
@@ -54,22 +54,22 @@ typedef struct tss {
     uint16_t iobase;
 } __attribute__((packed)) tss_t;
 
-typedef void (*proc_entry_t)(void);
+typedef void (*thread_entry_t)(void);
 
-typedef enum proc_priv {
-    PROC_PRIV_KERNEL = 0,
-    PROC_PRIV_USER,
-} proc_priv;
+typedef enum thread_priv {
+    THREAD_PRIV_KERNEL = 0,
+    THREAD_PRIV_USER,
+} thread_priv;
 
-typedef struct arch_proc_context {
+typedef struct arch_thread_context {
     regs_t*         regs;
     uint32_t        ldts[4];    // 64 bits for each ldt entry
     void*           stack;
     uint8_t         ring;
-} arch_proc_context;
+} arch_thread_context;
 
 int tss_init(void);
-int arch_proc_context_init(arch_proc_context* context, proc_entry_t entry, proc_priv priv);
-void arch_proc_context_release(arch_proc_context* context);
-int arch_proc_restore_context(arch_proc_context* context);
+int arch_thread_context_init(arch_thread_context* context, thread_entry_t entry, thread_priv priv);
+void arch_thread_context_release(arch_thread_context* context);
+int arch_thread_restore_context(arch_thread_context* context);
 #endif

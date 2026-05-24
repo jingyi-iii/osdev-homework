@@ -1,16 +1,16 @@
 #include "kernel/init.h"
 #include "drivers/terminal_driver.h"
 
-/* Demo process entry points (defined in demo/) */
-extern void timer_process(void);
-extern void timer_process2(void);
+/* Demo thread entry points (defined in demo/) */
+extern void timer_thread(void);
+extern void timer_thread2(void);
 
-void init_process(void)
+void init_thread(void)
 {
     terminal_flush(0);
 
-    proc_create(PROC_PRIV_KERNEL, timer_process);
-    proc_create(PROC_PRIV_USER, timer_process2);
+    thread_create(THREAD_PRIV_KERNEL, timer_thread);
+    thread_create(THREAD_PRIV_USER, timer_thread2);
 
-    proc_exit(0);
+    thread_exit(0);
 }

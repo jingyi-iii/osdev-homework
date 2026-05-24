@@ -1,7 +1,7 @@
 #include "lib/module.h"
 #include "drivers/log_driver.h"
 #include "drivers/kb_driver.h"
-#include "kernel/process.h"
+#include "kernel/thread.h"
 #include "kernel/init.h"
 #include "drivers/platform_devices.h"
 
@@ -45,6 +45,6 @@ void kernel_start_noirq(void)
     log_init();
     kb_init();
     kernel_do_initcalls();
-    proc_create(PROC_PRIV_KERNEL, init_process);
+    thread_create(THREAD_PRIV_KERNEL, init_thread);
 }
 

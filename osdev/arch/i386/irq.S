@@ -12,7 +12,7 @@
         jnz     1f
 
         # from kernel
-        movl    curr_context,   %esi
+        movl    curr_thread_ctx,   %esi
         testl   %esi,           %esi
         jz      1f
         movl    %esp,           (%esi)
@@ -26,7 +26,7 @@
 .endm
 
 .macro RESTORE_REGS_AND_SWITCH_USER_STACK
-        movl    curr_context,   %esi
+        movl    curr_thread_ctx,   %esi
         movl    (%esi),         %esp
 
         popl    %gs

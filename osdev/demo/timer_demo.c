@@ -1,13 +1,13 @@
 #include "drivers/kb_driver.h"
 #include "drivers/log_driver.h"
-#include "kernel/process.h"
+#include "kernel/thread.h"
 
 static void kb_read(const char* data, size_t size)
 {
     KLOG("%s", data, size);
 }
 
-void timer_process(void)
+void timer_thread(void)
 {
     const char* ptr_msg = "Timer interrupt triggered modification: \0";
     uint16_t* ptr_gbuf = (uint16_t*)0xb8000;
@@ -23,12 +23,12 @@ void timer_process(void)
         }
 
         *ptr_gbuf = (0xe << 8) | ((*ptr_gbuf + 1) & 0xff);
-        proc_yield();
+        thread_yield();
 
         count++;
         if (count >= 10) {
             count = 0;
-            proc_exit(2);
+            thread_exit(2);
         }
 
         timer_delay_ms(1000); // Delay for 1 second

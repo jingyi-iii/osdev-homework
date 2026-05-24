@@ -47,7 +47,7 @@ knl32_entry:
 
         call    kernel_start_noirq
 
-        movl    curr_context,   %eax
+        movl    curr_thread_ctx,   %eax
         movl    (%eax),         %esp
         popl    %gs
         popl    %fs
