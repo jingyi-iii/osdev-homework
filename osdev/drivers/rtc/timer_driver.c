@@ -140,6 +140,94 @@ int timer_read_time_str(char* buf, size_t size)
     return 19;
 }
 
+/* ---- PIT (8253/8254) based delay support ---- */
+
+#define PIT_CHANNEL2    0x42
+#define PIT_COMMAND     0x43
+#define PIT_PPI_PORT    0x61
+
+/* PIT base frequency: 1.193182 MHz */
+#define PIT_FREQUENCY   1193182
+
+/* Read-back command: latch status for channel 2 (bits 7-6=11, bit 5=0, bit 4=1, bit 3=1) */
+#define PIT_RB_CH2_STATUS  0xEC
+
+/*
+ * Program PIT channel 2 for a one-shot delay of `ticks` PIT cycles.
+ * Uses mode 0 (interrupt on terminal count) and polls the OUT pin
+ * via the read-back status command.
+ */
+static void pit_delay_ticks(uint16_t ticks)
+{
+    struct platform_bus_ops* ops = platform_device_get_ops(timer_device.plat_dev);
+    if (!ops)
+        return;
+
+    /* Enable PIT channel 2 gate via PPI port B (bit 0).
+     * Save original state so we can restore it. */
+    uint8_t ppi_save = (uint8_t)ops->in_port8(PIT_PPI_PORT);
+    ops->out_port8(PIT_PPI_PORT, ppi_save | 0x01);
+
+    /* Program channel 2: mode 0 (one-shot), binary, lo/hi bytes */
+    ops->out_port8(PIT_COMMAND, 0xB0);
+    ops->out_port8(PIT_CHANNEL2, ticks & 0xFF);
+    ops->out_port8(PIT_CHANNEL2, (ticks >> 8) & 0xFF);
+
+    /* Poll OUT pin via read-back status until terminal count is reached.
+     * In mode 0, OUT goes high when the counter reaches 0 and stays high. */
+    do {
+        ops->out_port8(PIT_COMMAND, PIT_RB_CH2_STATUS);
+        /* First read from channel port after status latch returns the status byte */
+    } while (!(ops->in_port8(PIT_CHANNEL2) & 0x80));
+
+    /* Restore PPI port B to original state */
+    ops->out_port8(PIT_PPI_PORT, ppi_save);
+}
+
+void timer_delay_ms(uint32_t ms)
+{
+    if (ms == 0)
+        return;
+
+    /* ticks = frequency * ms / 1000,  keep within uint32_t range */
+    uint32_t ticks = (uint32_t)(((uint64_t)PIT_FREQUENCY * ms) / 1000);
+
+    while (ticks > 0) {
+        uint16_t chunk;
+        if (ticks > 65535) {
+            chunk = 65535;
+            ticks -= 65535;
+        } else {
+            chunk = (uint16_t)ticks;
+            ticks = 0;
+        }
+        pit_delay_ticks(chunk);
+    }
+}
+
+void timer_delay_us(uint32_t us)
+{
+    if (us == 0)
+        return;
+
+    /* ticks = frequency * us / 1000000, minimum 1 tick (~0.84 us) */
+    uint32_t ticks = (uint32_t)(((uint64_t)PIT_FREQUENCY * us) / 1000000);
+    if (ticks == 0)
+        ticks = 1;
+
+    while (ticks > 0) {
+        uint16_t chunk;
+        if (ticks > 65535) {
+            chunk = 65535;
+            ticks -= 65535;
+        } else {
+            chunk = (uint16_t)ticks;
+            ticks = 0;
+        }
+        pit_delay_ticks(chunk);
+    }
+}
+
 static int timer_probe(struct device* dev)
 {
     struct platform_device* device = to_platform_device(dev);

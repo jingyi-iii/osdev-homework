@@ -54,4 +54,10 @@ void timer_get_time(rtc_time_t* time);
 /* Returns number of bytes written, or -1 on error */
 int timer_read_time_str(char* buf, size_t size);
 
+/* Busy-wait delay using PIT channel 2 (one-shot mode).
+ * timer_delay_ms: delay in milliseconds (max ~55ms per shot, loops for longer)
+ * timer_delay_us: delay in microseconds (min ~1us resolution via PIT) */
+void timer_delay_ms(uint32_t ms);
+void timer_delay_us(uint32_t us);
+
 #endif

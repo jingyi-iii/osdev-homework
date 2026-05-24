@@ -30,6 +30,8 @@ void timer_process(void)
             count = 0;
             proc_exit(2);
         }
+
+        timer_delay_ms(1000); // Delay for 1 second
     }
 
     while (1);
