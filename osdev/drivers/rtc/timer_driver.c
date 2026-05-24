@@ -4,7 +4,7 @@
 #include "lib/module.h"
 
 struct timer_device {
-    struct platform_device plat_dev;
+    struct platform_device* plat_dev;
     spinlock* lock;
     uint16_t cmos_addr;
     uint16_t cmos_data;
@@ -12,12 +12,6 @@ struct timer_device {
 };
 
 struct timer_device timer_device = {
-    .plat_dev = {
-        .dev = {
-            .name = "timer",
-            .type = "timer",
-        },
-    },
     .lock = NULL,
     .cmos_addr = 0x70,
     .cmos_data = 0x71,
@@ -27,7 +21,7 @@ struct timer_device timer_device = {
 static uint8_t timer_read_reg(struct timer_device* dev, uint8_t reg)
 {
     uint8_t value = 0;
-    struct platform_bus_ops* ops = platform_device_get_ops(&dev->plat_dev);
+    struct platform_bus_ops* ops = platform_device_get_ops(dev->plat_dev);
     if (!ops || !ops->out_port8 || !ops->in_port8)
         return 0;
 
@@ -149,21 +143,21 @@ int timer_read_time_str(char* buf, size_t size)
 static int timer_probe(struct device* dev)
 {
     struct platform_device* device = to_platform_device(dev);
-    struct timer_device* timer_dev = container_of(device, struct timer_device, plat_dev);
 
-    timer_dev->lock = spinlock_alloc();
-    timer_dev->cmos_addr = 0x70;
-    timer_dev->cmos_data = 0x71;
+    timer_device.plat_dev = device;
+    timer_device.lock = spinlock_alloc();
+    timer_device.cmos_addr = 0x70;
+    timer_device.cmos_data = 0x71;
 
     return 0;
 }
 
 static int timer_remove(struct device *dev)
 {
-    struct platform_device* device = to_platform_device(dev);
-    struct timer_device* timer_dev = container_of(device, struct timer_device, plat_dev);
+    (void)dev;
 
-    spinlock_release(timer_dev->lock);
+    spinlock_release(timer_device.lock);
+    timer_device.lock = NULL;
 
     return 0;
 }
@@ -187,7 +181,6 @@ static void timer_syscall_handler(void* context)
 void timer_init(void)
 {
     platform_driver_register(&timer_driver);
-    platform_device_register(&timer_device.plat_dev.dev);
 
     /* Register timer syscall for RING3 access */
     int ret = irq_request(&timer_scall, "timer_syscall", 100,
@@ -205,7 +198,6 @@ void timer_exit(void)
     }
 
     platform_driver_unregister(&timer_driver);
-    platform_device_unregister(&timer_device.plat_dev.dev);
 }
 
 module_init(timer_init);

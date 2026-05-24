@@ -35,7 +35,6 @@
 #define VGA_BUF_ADDR   0xB8000
 
 struct terminal_device {
-    struct platform_device plat_dev;
     struct platform_bus_ops* bus_ops;
     spinlock* lock;
     uint16_t* vga_buffer;
@@ -45,18 +44,6 @@ struct terminal_device {
 };
 
 static struct terminal_device term_device = {
-    .plat_dev = {
-        .dev = {
-            .name = "terminal",
-            .type = "terminal",
-        },
-        .num_res = 1,
-        .resources[0] = {
-            .type = PLAT_RES_MEM,
-            .mem.addr = VGA_BUF_ADDR,
-            .mem.size = VGA_WIDTH * VGA_HEIGHT * 2,
-        },
-    },
     .lock = NULL,
     .vga_buffer = (uint16_t*)VGA_BUF_ADDR,
     .curr_row = 0,
@@ -432,7 +419,6 @@ static void terminal_kb_handler(const char* data, size_t size)
 void terminal_init(void)
 {
     platform_driver_register(&terminal_driver);
-    platform_device_register(&term_device.plat_dev.dev);
 
     cursor_init();
 
@@ -445,7 +431,6 @@ void terminal_init(void)
 void terminal_exit(void)
 {
     platform_driver_unregister(&terminal_driver);
-    platform_device_unregister(&term_device.plat_dev.dev);
 }
 
 module_init(terminal_init);

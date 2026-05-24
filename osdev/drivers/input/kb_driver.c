@@ -154,25 +154,12 @@ struct kb_listener {
 
 struct kb_device {
     kbuf buf;                           /* circular input buffer        */
-    struct platform_device plat_dev;    /* platform device structure    */
     list_node listener_list;            /* registered callback list     */
     spinlock* lock;                     /* protects listener_list       */
     irq* irq;                           /* keyboard IRQ descriptor      */
 };
 
 struct kb_device kb_device = {
-    .plat_dev = {
-        .dev = {
-            .name = "keyboard",
-            .type = "keyboard",
-        },
-        .num_res = 1,
-        .resources[0] = {
-            .type = PLAT_RES_IRQ,
-            .irq.major = KEYBOARD_IRQ_NO,
-            .irq.minor = 0,
-        },
-    },
 };
 
 /* ===========================================================
@@ -393,7 +380,6 @@ void kb_init(void)
     KLOG("kb_init");
 
     platform_driver_register(&kb_driver);
-    platform_device_register(&kb_device.plat_dev.dev);
 }
 
 void kb_exit(void)

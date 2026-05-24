@@ -3,6 +3,7 @@
 #include "drivers/kb_driver.h"
 #include "kernel/process.h"
 #include "kernel/init.h"
+#include "drivers/platform_devices.h"
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -39,6 +40,8 @@ static void kernel_do_exitcalls(void)
 void kernel_start_noirq(void)
 {
     platform_bus_init();
+    platform_devices_init();
+
     log_init();
     kb_init();
     kernel_do_initcalls();
