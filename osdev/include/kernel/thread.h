@@ -19,6 +19,8 @@ typedef struct thread_ctrl_config {
     thread_entry_t entry;
 } thread_ctrl_config;
 
+typedef struct pcb pcb;
+
 /* Thread Control Block */
 typedef struct tcb {
     arch_thread_context context;
@@ -27,6 +29,7 @@ typedef struct tcb {
     thread_state        state;
     list_node           tcb_node;
     spinlock*           sp_lock;
+    pcb*                parent;
 } tcb;
 
 int32_t thread_create(thread_priv priv, thread_entry_t entry);
