@@ -27,7 +27,7 @@ typedef struct tcb {
     thread_entry_t      entry;
     int32_t             tid;
     thread_state        state;
-    list_node           tcb_node;
+    list_node           this_node;
     spinlock*           sp_lock;
     pcb*                parent;
 } tcb;

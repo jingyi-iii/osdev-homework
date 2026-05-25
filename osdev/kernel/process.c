@@ -3,7 +3,10 @@
 
 static pcb *proc_head = 0;
 
-int proc_create(thread_entry_t main_thread_entry, proc_priv priv)
+int32_t create(pcb* parent, thread_priv priv, thread_entry_t entry);
+void delete(int32_t tid);
+
+int proc_create(proc_priv priv, thread_entry_t main_thread_entry)
 {
     static uint32_t pid = 0;
 
@@ -32,9 +35,7 @@ int proc_create(thread_entry_t main_thread_entry, proc_priv priv)
         list_add(&proc->this_node, &proc_head->this_node);
     }
 
-    // create main thread for the process here
-
-    return 0;
+    return create(proc, priv, main_thread_entry);
 }
 
 void proc_exit(int32_t pid)
@@ -49,12 +50,12 @@ void proc_exit(int32_t pid)
 
         spinlock_lock(proc->sp_lock);
         list_for_each(tcb_node, &proc->tcbs) {
-            tcb* thread = list_entry(tcb_node, tcb, tcb_node);
+            tcb* thread = list_entry(tcb_node, tcb, this_node);
             if (!thread)
                 continue;
 
             spinlock_lock(thread->sp_lock);
-            // delete thread here
+            delete(thread->tid);
             spinlock_unlock(thread->sp_lock);
         }
         spinlock_unlock(proc->sp_lock);
@@ -76,7 +77,7 @@ int proc_block(int32_t pid)
         spinlock_unlock(proc->sp_lock);
 
         list_for_each(tcb_node, &proc->tcbs) {
-            tcb* thread = list_entry(tcb_node, tcb, tcb_node);
+            tcb* thread = list_entry(tcb_node, tcb, this_node);
             if (!thread)
                 continue;
 
@@ -104,7 +105,7 @@ int proc_unblock(int32_t pid)
         spinlock_unlock(proc->sp_lock);
 
         list_for_each(tcb_node, &proc->tcbs) {
-            tcb* thread = list_entry(tcb_node, tcb, tcb_node);
+            tcb* thread = list_entry(tcb_node, tcb, this_node);
             if (!thread)
                 continue;
 

@@ -16,10 +16,15 @@ enum thread_ctrl {
 
 static tcb *thread_run = 0;
 
-static int32_t create(thread_priv priv, thread_entry_t entry)
+int32_t create(pcb* parent, thread_priv priv, thread_entry_t entry)
 {
     tcb* thread = 0;
     static uint32_t tid = 0;
+
+    // if (!parent) {
+    //     KLOG("failed to create thread without parent process");
+    //     return -1;
+    // }
 
     KLOG("adding thread, tid %d", tid);
 
@@ -34,10 +39,8 @@ static int32_t create(thread_priv priv, thread_entry_t entry)
         kfree(thread);
         return -22;
     }
-    thread->tid = tid++;
-    thread->state = TS_READY;
 
-    list_init(&thread->tcb_node);
+    list_init(&thread->this_node);
     thread->sp_lock = spinlock_alloc();
     if (!thread->sp_lock) {
         KLOG("failed to alloc spin lock for tcb");
@@ -53,16 +56,21 @@ static int32_t create(thread_priv priv, thread_entry_t entry)
         spinlock_unlock(thread->sp_lock);
     } else {
         spinlock_lock(thread_run->sp_lock);
-        list_add(&thread->tcb_node, &thread_run->tcb_node);
+        list_add(&thread->this_node, &thread_run->this_node);
         spinlock_unlock(thread_run->sp_lock);
     }
+
+    thread->tid = tid++;
+    thread->state = TS_READY;
+    // thread->parent = parent;
+    // list_add(&thread->this_node, &parent->tcbs);
 
     KLOG("add thread, tid %d", thread->tid);
 
     return thread->tid;
 }
 
-static void delete(int32_t tid)
+void delete(int32_t tid)
 {
     tcb* thread = 0;
 
@@ -70,8 +78,8 @@ static void delete(int32_t tid)
         return;
     
     if (thread_run->tid != tid) {
-        list_for_each(node, &thread_run->tcb_node) {
-            tcb* thread = list_entry(node, tcb, tcb_node);
+        list_for_each(node, &thread_run->this_node) {
+            tcb* thread = list_entry(node, tcb, this_node);
             if (!thread)
                 continue;
 
@@ -79,14 +87,14 @@ static void delete(int32_t tid)
                 spinlock_lock(thread->sp_lock);
                 arch_thread_context_release(&thread->context);
                 spinlock_unlock(thread->sp_lock);
-                list_del(&thread->tcb_node);
+                list_del(&thread->this_node);
                 spinlock_release(thread->sp_lock);
                 kfree(thread);
                 break;
             }
         }
     } else {
-        thread = list_entry(list_next(&thread_run->tcb_node), tcb, tcb_node);
+        thread = list_entry(list_next(&thread_run->this_node), tcb, this_node);
         if (thread == thread_run) {
             KLOG("no more thread to run after deleting thread with tid %d", tid);
             return;
@@ -94,7 +102,7 @@ static void delete(int32_t tid)
 
         spinlock_lock(thread_run->sp_lock);
         arch_thread_context_release(&thread_run->context);
-        list_del(&thread_run->tcb_node);
+        list_del(&thread_run->this_node);
         spinlock_unlock(thread_run->sp_lock);
 
         tcb* old = thread_run;
@@ -103,6 +111,76 @@ static void delete(int32_t tid)
         spinlock_release(old->sp_lock);
         kfree(old);
         return;
+    }
+}
+
+void block(int32_t tid)
+{
+    if (!thread_run)
+        return;
+
+    list_for_each(node, &thread_run->this_node) {
+        tcb* t = list_entry(node, tcb, this_node);
+        if (!t || t->tid != tid)
+            continue;
+
+        spinlock_lock(t->sp_lock);
+        t->state = TS_PENDING;
+        spinlock_unlock(t->sp_lock);
+
+        if (t == thread_run) {
+            tcb* next = thread_run;
+            do {
+                next = list_entry(list_next(&next->this_node), tcb, this_node);
+            } while (next != thread_run && next->state != TS_READY);
+
+            if (next != thread_run && next->state == TS_READY) {
+                spinlock_lock(next->sp_lock);
+                arch_thread_restore_context(&next->context);
+                spinlock_unlock(next->sp_lock);
+                thread_run = next;
+            }
+        }
+        break;
+        spinlock_unlock(t->sp_lock);
+    }
+}
+
+void unblock(int32_t tid)
+{
+    if (!thread_run)
+        return;
+
+    list_for_each(node, &thread_run->this_node) {
+        tcb* t = list_entry(node, tcb, this_node);
+        if (!t || t->tid != tid)
+            continue;
+
+        spinlock_lock(t->sp_lock);
+        if (t->tid == tid) {
+            t->state = TS_READY;
+            spinlock_unlock(t->sp_lock);
+            break;
+        }
+        spinlock_unlock(t->sp_lock);
+    }
+}
+
+void yield(void)
+{
+    if (!thread_run)
+        return;
+
+    tcb* next = thread_run;
+    do {
+        next = list_entry(list_next(&next->this_node), tcb, this_node);
+    } while (next != thread_run && next->state != TS_READY);
+
+    if (next != thread_run && next->state == TS_READY) {
+        spinlock_lock(next->sp_lock);
+        arch_thread_restore_context(&next->context);
+        spinlock_unlock(next->sp_lock);
+        thread_run = next;
     }
 }
 
@@ -118,7 +196,7 @@ static void schedule_isr(void* p)
 
     tcb* first = thread_run;
     while (1) {
-        thread_run = list_entry(list_next(&thread_run->tcb_node), tcb, tcb_node);
+        thread_run = list_entry(list_next(&thread_run->this_node), tcb, this_node);
         if (thread_run->state == TS_READY)
             break;
         if (thread_run == first)
@@ -135,66 +213,19 @@ static void syscall_isr(void* data)
 
     switch (config->cmd) {
     case THREAD_CTRL_CREATE:
-        config->tid = create(config->priv, config->entry);
+        config->tid = create(0, config->priv, config->entry);
         break;
     case THREAD_CTRL_DELETE:
         delete(config->tid);
         break;
-    case THREAD_CTRL_YIELD: {
-        tcb* next = thread_run;
-        do {
-            next = list_entry(list_next(&next->tcb_node), tcb, tcb_node);
-        } while (next != thread_run && next->state != TS_READY);
-
-        if (next != thread_run && next->state == TS_READY) {
-            spinlock_lock(next->sp_lock);
-            arch_thread_restore_context(&next->context);
-            spinlock_unlock(next->sp_lock);
-            thread_run = next;
-        }
+    case THREAD_CTRL_YIELD:
+        yield();
         break;
-    }
     case THREAD_CTRL_BLOCK:
-        list_for_each(node, &thread_run->tcb_node) {
-            tcb* t = list_entry(node, tcb, tcb_node);
-            if (!t || t->tid != config->tid)
-                continue;
-
-            spinlock_lock(t->sp_lock);
-            t->state = TS_PENDING;
-            spinlock_unlock(t->sp_lock);
-
-            if (t == thread_run) {
-                tcb* next = thread_run;
-                do {
-                    next = list_entry(list_next(&next->tcb_node), tcb, tcb_node);
-                } while (next != thread_run && next->state != TS_READY);
-
-                if (next != thread_run && next->state == TS_READY) {
-                    spinlock_lock(next->sp_lock);
-                    arch_thread_restore_context(&next->context);
-                    spinlock_unlock(next->sp_lock);
-                    thread_run = next;
-                }
-            }
-            break;
-            spinlock_unlock(t->sp_lock);
-        }
+        block(config->tid);
         break;
     case THREAD_CTRL_UNBLOCK:
-        list_for_each(node, &thread_run->tcb_node) {
-            tcb* t = list_entry(node, tcb, tcb_node);
-            if (!t || t->tid != config->tid)
-                continue;
-
-            spinlock_lock(t->sp_lock);
-            if (t->tid == config->tid) {
-                t->state = TS_READY;
-                spinlock_unlock(t->sp_lock);
-                break;
-            }
-            spinlock_unlock(t->sp_lock);
-        }
+        unblock(config->tid);
         break;
     default:
         break;
