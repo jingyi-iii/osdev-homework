@@ -1,16 +1,17 @@
 #include "kernel/process.h"
 #include "drivers/log_driver.h"
+#include "kernel/thread.h"
 
-static pcb *proc_head = 0;
+static struct pcb *proc_head = 0;
 
-int32_t create(pcb* parent, thread_priv priv, thread_entry_t entry);
+int32_t create(struct pcb* parent, thread_priv priv, thread_entry_t entry);
 void delete(int32_t tid);
 
 int proc_create(proc_priv priv, thread_entry_t main_thread_entry)
 {
     static uint32_t pid = 0;
 
-    pcb* proc = (pcb*)kmalloc(sizeof(pcb));
+    struct pcb* proc = (struct pcb*)kmalloc(sizeof(struct pcb));
     if (!proc) {
         KLOG("failed to alloc memory for pcb");
         return -1;
@@ -35,7 +36,7 @@ int proc_create(proc_priv priv, thread_entry_t main_thread_entry)
         list_add(&proc->this_node, &proc_head->this_node);
     }
 
-    return create(proc, priv, main_thread_entry);
+    return create(proc, (thread_priv)priv, main_thread_entry);
 }
 
 void proc_exit(int32_t pid)
@@ -44,13 +45,13 @@ void proc_exit(int32_t pid)
         return;
 
     list_for_each(node, &proc_head->this_node) {
-        pcb* proc = list_entry(node, pcb, this_node);
+        struct pcb* proc = list_entry(node, struct pcb, this_node);
         if (!proc || proc->pid != pid)
             continue;
 
         spinlock_lock(proc->sp_lock);
         list_for_each(tcb_node, &proc->tcbs) {
-            tcb* thread = list_entry(tcb_node, tcb, this_node);
+            struct tcb* thread = list_entry(tcb_node, struct tcb, proc_node);
             if (!thread)
                 continue;
 
@@ -68,7 +69,7 @@ int proc_block(int32_t pid)
         return -1;
 
     list_for_each(node, &proc_head->this_node) {
-        pcb* proc = list_entry(node, pcb, this_node);
+        struct pcb* proc = list_entry(node, struct pcb, this_node);
         if (!proc || proc->pid != pid)
             continue;
 
@@ -77,7 +78,7 @@ int proc_block(int32_t pid)
         spinlock_unlock(proc->sp_lock);
 
         list_for_each(tcb_node, &proc->tcbs) {
-            tcb* thread = list_entry(tcb_node, tcb, this_node);
+            struct tcb* thread = list_entry(tcb_node, struct tcb, proc_node);
             if (!thread)
                 continue;
 
@@ -96,7 +97,7 @@ int proc_unblock(int32_t pid)
         return -1;
 
     list_for_each(node, &proc_head->this_node) {
-        pcb* proc = list_entry(node, pcb, this_node);
+        struct pcb* proc = list_entry(node, struct pcb, this_node);
         if (!proc || proc->pid != pid)
             continue;
 
@@ -105,7 +106,7 @@ int proc_unblock(int32_t pid)
         spinlock_unlock(proc->sp_lock);
 
         list_for_each(tcb_node, &proc->tcbs) {
-            tcb* thread = list_entry(tcb_node, tcb, this_node);
+            struct tcb* thread = list_entry(tcb_node, struct tcb, proc_node);
             if (!thread)
                 continue;
 

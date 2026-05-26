@@ -5,6 +5,7 @@
 #include "lib/list.h"
 #include "arch_thread.h"
 #include "sync/spinlock.h"
+#include "kernel/process.h"
 
 typedef enum thread_run_state {
     TS_NULL = 0,
@@ -19,7 +20,7 @@ typedef struct thread_ctrl_config {
     thread_entry_t entry;
 } thread_ctrl_config;
 
-typedef struct pcb pcb;
+struct pcb;
 
 /* Thread Control Block */
 typedef struct tcb {
@@ -27,9 +28,10 @@ typedef struct tcb {
     thread_entry_t      entry;
     int32_t             tid;
     thread_state        state;
-    list_node           this_node;
+    list_node           this_node;   /* node in global scheduling list */
+    list_node           proc_node;   /* node in parent->tcbs list */
     spinlock*           sp_lock;
-    pcb*                parent;
+    struct pcb*         parent;
 } tcb;
 
 int32_t thread_create(thread_priv priv, thread_entry_t entry);

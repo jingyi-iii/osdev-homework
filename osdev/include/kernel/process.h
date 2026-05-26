@@ -4,7 +4,8 @@
 #include <stdint.h>
 #include "lib/list.h"
 #include "sync/spinlock.h"
-#include "kernel/thread.h"
+
+typedef void (*thread_entry_t)(void);
 
 typedef enum proc_priv {
     PROC_PRIV_KERNEL = 0,
@@ -27,5 +28,10 @@ typedef struct pcb {
     list_node           tcbs;
     spinlock*           sp_lock;
 } pcb;
+
+int proc_create(proc_priv priv, thread_entry_t main_thread_entry);
+void proc_exit(int32_t pid);
+int proc_block(int32_t pid);
+int proc_unblock(int32_t pid);
 
 #endif

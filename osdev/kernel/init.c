@@ -1,5 +1,6 @@
 #include "kernel/init.h"
 #include "drivers/terminal_driver.h"
+#include "kernel/process.h"
 
 /* Demo thread entry points (defined in demo/) */
 extern void timer_thread(void);
@@ -9,8 +10,8 @@ void init_thread(void)
 {
     terminal_flush(0);
 
-    thread_create(THREAD_PRIV_KERNEL, timer_thread);
-    thread_create(THREAD_PRIV_USER, timer_thread2);
+    proc_create(PROC_PRIV_KERNEL, timer_thread);
+    proc_create(PROC_PRIV_USER, timer_thread2);
 
-    thread_exit(0);
+    while (1);
 }

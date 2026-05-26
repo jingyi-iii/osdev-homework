@@ -4,6 +4,7 @@
 #include "kernel/thread.h"
 #include "kernel/init.h"
 #include "drivers/platform_devices.h"
+#include "kernel/process.h"
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -45,6 +46,6 @@ void kernel_start_noirq(void)
     log_init();
     kb_init();
     kernel_do_initcalls();
-    thread_create(THREAD_PRIV_KERNEL, init_thread);
+    proc_create(PROC_PRIV_KERNEL, init_thread);
 }
 

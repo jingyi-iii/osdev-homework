@@ -21,10 +21,10 @@ int32_t create(pcb* parent, thread_priv priv, thread_entry_t entry)
     tcb* thread = 0;
     static uint32_t tid = 0;
 
-    // if (!parent) {
-    //     KLOG("failed to create thread without parent process");
-    //     return -1;
-    // }
+    if (!parent) {
+        KLOG("failed to create thread without parent process");
+        return -1;
+    }
 
     KLOG("adding thread, tid %d", tid);
 
@@ -41,6 +41,7 @@ int32_t create(pcb* parent, thread_priv priv, thread_entry_t entry)
     }
 
     list_init(&thread->this_node);
+    list_init(&thread->proc_node);
     thread->sp_lock = spinlock_alloc();
     if (!thread->sp_lock) {
         KLOG("failed to alloc spin lock for tcb");
@@ -48,6 +49,9 @@ int32_t create(pcb* parent, thread_priv priv, thread_entry_t entry)
         kfree(thread);
         return -1;
     }
+
+    thread->parent = parent;
+    list_add(&thread->proc_node, &parent->tcbs);
 
     if (!thread_run) {    // the first thread
         spinlock_lock(thread->sp_lock);
@@ -62,8 +66,6 @@ int32_t create(pcb* parent, thread_priv priv, thread_entry_t entry)
 
     thread->tid = tid++;
     thread->state = TS_READY;
-    // thread->parent = parent;
-    // list_add(&thread->this_node, &parent->tcbs);
 
     KLOG("add thread, tid %d", thread->tid);
 
@@ -88,6 +90,7 @@ void delete(int32_t tid)
                 arch_thread_context_release(&thread->context);
                 spinlock_unlock(thread->sp_lock);
                 list_del(&thread->this_node);
+                list_del(&thread->proc_node);
                 spinlock_release(thread->sp_lock);
                 kfree(thread);
                 break;
@@ -103,6 +106,7 @@ void delete(int32_t tid)
         spinlock_lock(thread_run->sp_lock);
         arch_thread_context_release(&thread_run->context);
         list_del(&thread_run->this_node);
+        list_del(&thread_run->proc_node);
         spinlock_unlock(thread_run->sp_lock);
 
         tcb* old = thread_run;
@@ -213,7 +217,7 @@ static void syscall_isr(void* data)
 
     switch (config->cmd) {
     case THREAD_CTRL_CREATE:
-        config->tid = create(0, config->priv, config->entry);
+        config->tid = create(thread_run->parent, config->priv, config->entry);
         break;
     case THREAD_CTRL_DELETE:
         delete(config->tid);
