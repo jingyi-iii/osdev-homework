@@ -1,7 +1,7 @@
 #include "lib/module.h"
 #include "drivers/log_driver.h"
 #include "drivers/kb_driver.h"
-#include "kernel/thread.h"
+#include "kernel/process.h"
 #include "kernel/init.h"
 #include "drivers/platform_devices.h"
 #include "kernel/process.h"

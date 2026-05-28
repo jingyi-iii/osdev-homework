@@ -1,6 +1,6 @@
 #include "drivers/kb_driver.h"
 #include "drivers/log_driver.h"
-#include "kernel/thread.h"
+#include "kernel/process.h"
 
 static void kb_read(const char* data, size_t size)
 {
