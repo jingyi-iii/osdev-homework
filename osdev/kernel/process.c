@@ -6,18 +6,22 @@
 #include "drivers/log_driver.h"
 #include "kernel/irq.h"
 
-enum thread_ctrl {
+enum proc_thread_ctrl {
     THREAD_CTRL_CREATE = 0,
     THREAD_CTRL_DELETE,
     THREAD_CTRL_YIELD,
     THREAD_CTRL_BLOCK,
     THREAD_CTRL_UNBLOCK,
+    PROC_CTRL_CREATE,
+    PROC_CTRL_EXIT,
+    PROC_CTRL_BLOCK,
+    PROC_CTRL_UNBLOCK,
 };
 
 static tcb *thread_run = 0;
 static struct pcb *proc_head = 0;
 
-int32_t create(pcb* parent, thread_priv priv, thread_entry_t entry)
+static int32_t t_create(pcb* parent, thread_priv priv, thread_entry_t entry)
 {
     tcb* thread = 0;
     static uint32_t tid = 0;
@@ -73,7 +77,7 @@ int32_t create(pcb* parent, thread_priv priv, thread_entry_t entry)
     return thread->tid;
 }
 
-void delete(int32_t tid)
+static void t_delete(int32_t tid)
 {
     tcb* thread = 0;
 
@@ -119,7 +123,7 @@ void delete(int32_t tid)
     }
 }
 
-void block(int32_t tid)
+static void t_block(int32_t tid)
 {
     if (!thread_run)
         return;
@@ -151,7 +155,7 @@ void block(int32_t tid)
     }
 }
 
-void unblock(int32_t tid)
+static void t_unblock(int32_t tid)
 {
     if (!thread_run)
         return;
@@ -171,7 +175,7 @@ void unblock(int32_t tid)
     }
 }
 
-void yield(void)
+static void t_yield(void)
 {
     if (!thread_run)
         return;
@@ -189,130 +193,7 @@ void yield(void)
     }
 }
 
-static void schedule_isr(void* p)
-{
-    (void)p;
-    static uint32_t timeslice = 0;
-
-    timeslice++;
-    if (timeslice < 5 || !thread_run)
-        return;
-    timeslice = 0;
-
-    tcb* first = thread_run;
-    while (1) {
-        thread_run = list_entry(list_next(&thread_run->this_node), tcb, this_node);
-        if (thread_run->state == TS_READY)
-            break;
-        if (thread_run == first)
-            return;
-    }
-    spinlock_lock(thread_run->sp_lock);
-    arch_thread_restore_context(&thread_run->context);
-    spinlock_unlock(thread_run->sp_lock);
-}
-
-static void syscall_isr(void* data)
-{
-    thread_ctrl_config *config = (thread_ctrl_config*)data;
-
-    switch (config->cmd) {
-    case THREAD_CTRL_CREATE:
-        config->tid = create(thread_run->parent, config->priv, config->entry);
-        break;
-    case THREAD_CTRL_DELETE:
-        delete(config->tid);
-        break;
-    case THREAD_CTRL_YIELD:
-        yield();
-        break;
-    case THREAD_CTRL_BLOCK:
-        block(config->tid);
-        break;
-    case THREAD_CTRL_UNBLOCK:
-        unblock(config->tid);
-        break;
-    default:
-        break;
-    }
-}
-
-void thread_yield(void)
-{
-    thread_ctrl_config config = {0};
-    config.cmd = THREAD_CTRL_YIELD;
-
-    arch_syscall(0, &config);
-}
-
-void thread_block(int32_t tid)
-{
-    thread_ctrl_config config = {0};
-    config.cmd = THREAD_CTRL_BLOCK;
-    config.tid = tid;
-
-    arch_syscall(0, &config);  
-}
-
-void thread_unblock(int32_t tid)
-{
-    thread_ctrl_config config = {0};
-    config.cmd = THREAD_CTRL_UNBLOCK;
-    config.tid = tid;
-
-    arch_syscall(0, &config);
-}
-
-int32_t thread_create(thread_priv priv, thread_entry_t entry)
-{
-    thread_ctrl_config config = {0};
-    config.cmd = THREAD_CTRL_CREATE;
-    config.priv = priv;
-    config.entry = entry;
-
-    arch_syscall(0, &config);
-
-    return config.tid;
-}
-
-void thread_exit(int32_t tid)
-{
-    thread_ctrl_config config = {0};
-    config.cmd = THREAD_CTRL_DELETE;
-    config.tid = tid;
-
-    arch_syscall(0, &config);
-}
-
-static irq* tcb_irq = 0;
-static irq* tcb_scall = 0;
-
-static void thread_evn_init(void)
-{
-    tss_init();
-    irq_request(&tcb_irq, "tmr", TIMER_IRQ_NO, 0, schedule_isr, 0);
-    if (tcb_irq)
-        irq_unmask(tcb_irq);
-
-    irq_request(&tcb_scall, "thread_syscall", 100, 0, syscall_isr, 0);
-    if (tcb_scall)
-        irq_unmask(tcb_scall);
-}
-
-static void thread_evn_exit(void)
-{
-    if (tcb_irq) {
-        irq_mask(tcb_irq);
-        irq_release(tcb_irq);
-    }
-
-    if (tcb_scall) {
-        irq_mask(tcb_scall);
-        irq_release(tcb_scall);
-    }
-}
-
-int proc_create(proc_priv priv, thread_entry_t main_thread_entry)
+int p_create(proc_priv priv, thread_entry_t main_thread_entry)
 {
     static uint32_t pid = 0;
 
@@ -341,10 +222,10 @@ int proc_create(proc_priv priv, thread_entry_t main_thread_entry)
         list_add(&proc->this_node, &proc_head->this_node);
     }
 
-    return create(proc, (thread_priv)priv, main_thread_entry);
+    return t_create(proc, (thread_priv)priv, main_thread_entry);
 }
 
-void proc_exit(int32_t pid)
+void p_exit(int32_t pid)
 {
     if (!proc_head)
         return;
@@ -361,14 +242,14 @@ void proc_exit(int32_t pid)
                 continue;
 
             spinlock_lock(thread->sp_lock);
-            delete(thread->tid);
+            t_delete(thread->tid);
             spinlock_unlock(thread->sp_lock);
         }
         spinlock_unlock(proc->sp_lock);
     }
 }
 
-int proc_block(int32_t pid)
+int p_block(int32_t pid)
 {
     if (!proc_head)
         return -1;
@@ -396,7 +277,7 @@ int proc_block(int32_t pid)
     return 0;
 }
 
-int proc_unblock(int32_t pid)
+int p_unblock(int32_t pid)
 {
     if (!proc_head)
         return -1;
@@ -424,5 +305,182 @@ int proc_unblock(int32_t pid)
     return 0;
 }
 
-module_init(thread_evn_init);
-module_exit(thread_evn_exit);
+static void schedule_isr(void* p)
+{
+    (void)p;
+    static uint32_t timeslice = 0;
+
+    timeslice++;
+    if (timeslice < 5 || !thread_run)
+        return;
+    timeslice = 0;
+
+    tcb* first = thread_run;
+    while (1) {
+        thread_run = list_entry(list_next(&thread_run->this_node), tcb, this_node);
+        if (thread_run->state == TS_READY)
+            break;
+        if (thread_run == first)
+            return;
+    }
+    spinlock_lock(thread_run->sp_lock);
+    arch_thread_restore_context(&thread_run->context);
+    spinlock_unlock(thread_run->sp_lock);
+}
+
+static void syscall_isr(void* data)
+{
+    proc_thread_ctrl_config *config = (proc_thread_ctrl_config*)data;
+
+    switch (config->cmd) {
+    case THREAD_CTRL_CREATE:
+        config->tid = t_create(thread_run->parent, config->priv, config->entry);
+        break;
+    case THREAD_CTRL_DELETE:
+        t_delete(config->tid);
+        break;
+    case THREAD_CTRL_YIELD:
+        t_yield();
+        break;
+    case THREAD_CTRL_BLOCK:
+        t_block(config->tid);
+        break;
+    case THREAD_CTRL_UNBLOCK:
+        t_unblock(config->tid);
+        break;
+    case PROC_CTRL_CREATE:
+        config->pid = p_create((proc_priv)config->priv, config->entry);
+        break;
+    case PROC_CTRL_EXIT:
+        p_exit(config->pid);
+        break;
+    case PROC_CTRL_BLOCK:
+        p_block(config->pid);
+        break;
+    case PROC_CTRL_UNBLOCK:
+        p_unblock(config->pid);
+        break;
+    default:
+        break;
+    }
+}
+
+static irq* schedule_irq = 0;
+static irq* syscall_irq = 0;
+
+static void proc_env_init(void)
+{
+    tss_init();
+    irq_request(&schedule_irq, "tmr", TIMER_IRQ_NO, 0, schedule_isr, 0);
+    if (schedule_irq)
+        irq_unmask(schedule_irq);
+
+    irq_request(&syscall_irq, "proc_syscall", 100, 0, syscall_isr, 0);
+    if (syscall_irq)
+        irq_unmask(syscall_irq);
+}
+
+static void proc_env_exit(void)
+{
+    if (schedule_irq) {
+        irq_mask(schedule_irq);
+        irq_release(schedule_irq);
+    }
+
+    if (syscall_irq) {
+        irq_mask(syscall_irq);
+        irq_release(syscall_irq);
+    }
+}
+
+/* Syscall Interfaces */
+void thread_yield(void)
+{
+    proc_thread_ctrl_config config = {0};
+    config.cmd = THREAD_CTRL_YIELD;
+
+    arch_syscall(0, &config);
+}
+
+void thread_block(int32_t tid)
+{
+    proc_thread_ctrl_config config = {0};
+    config.cmd = THREAD_CTRL_BLOCK;
+    config.tid = tid;
+
+    arch_syscall(0, &config);  
+}
+
+void thread_unblock(int32_t tid)
+{
+    proc_thread_ctrl_config config = {0};
+    config.cmd = THREAD_CTRL_UNBLOCK;
+    config.tid = tid;
+
+    arch_syscall(0, &config);
+}
+
+int32_t thread_create(thread_priv priv, thread_entry_t entry)
+{
+    proc_thread_ctrl_config config = {0};
+    config.cmd = THREAD_CTRL_CREATE;
+    config.priv = priv;
+    config.entry = entry;
+
+    arch_syscall(0, &config);
+
+    return config.tid;
+}
+
+void thread_exit(int32_t tid)
+{
+    proc_thread_ctrl_config config = {0};
+    config.cmd = THREAD_CTRL_DELETE;
+    config.tid = tid;
+
+    arch_syscall(0, &config);
+}
+
+void proc_create(proc_priv priv, thread_entry_t entry)
+{
+    proc_thread_ctrl_config config = {0};
+    config.cmd = PROC_CTRL_CREATE;
+    config.priv = priv;
+    config.entry = entry;
+
+    arch_syscall(0, &config);
+}
+
+void proc_exit(int32_t pid)
+{
+    proc_thread_ctrl_config config = {0};
+    config.cmd = PROC_CTRL_EXIT;
+    config.pid = pid;
+
+    arch_syscall(0, &config);
+}
+
+int proc_block(int32_t pid)
+{
+    proc_thread_ctrl_config config = {0};
+    config.cmd = PROC_CTRL_BLOCK;
+    config.pid = pid;
+
+    arch_syscall(0, &config);
+
+    return 0;
+}
+
+int proc_unblock(int32_t pid)
+{
+    proc_thread_ctrl_config config = {0};
+    config.cmd = PROC_CTRL_UNBLOCK;
+    config.pid = pid;
+
+    arch_syscall(0, &config);
+
+    return 0;
+}
+
+module_init(proc_env_init);
+module_exit(proc_env_exit);

@@ -14,12 +14,13 @@ typedef enum thread_run_state {
     TS_PENDING,
 } thread_state;
 
-typedef struct thread_ctrl_config {
+typedef struct proc_thread_ctrl_config {
     uint8_t cmd;
+    int32_t pid;    // out param for create, in param for delete, block and unblock
     int32_t tid;    // out param for create, in param for delete, block and unblock
     thread_priv priv;
     thread_entry_t entry;
-} thread_ctrl_config;
+} proc_thread_ctrl_config;
 
 typedef enum proc_priv {
     PROC_PRIV_KERNEL = 0,
@@ -42,6 +43,7 @@ typedef struct pcb {
     list_node           tcbs;
     spinlock*           sp_lock;
 } pcb;
+
 /* Thread Control Block */
 typedef struct tcb {
     arch_thread_context context;
@@ -54,13 +56,17 @@ typedef struct tcb {
     struct pcb*         parent;
 } tcb;
 
-int32_t thread_create(thread_priv priv, thread_entry_t entry);
 void thread_exit(int32_t tid);
 void thread_yield(void);
 void thread_block(int32_t tid);
 void thread_unblock(int32_t tid);
 
-int proc_create(proc_priv priv, thread_entry_t main_thread_entry);
+int p_create(proc_priv priv, thread_entry_t main_thread_entry);
+void p_exit(int32_t pid);
+int p_block(int32_t pid);
+int p_unblock(int32_t pid);
+
+void proc_create(proc_priv priv, thread_entry_t entry);
 void proc_exit(int32_t pid);
 int proc_block(int32_t pid);
 int proc_unblock(int32_t pid);

@@ -46,6 +46,6 @@ void kernel_start_noirq(void)
     log_init();
     kb_init();
     kernel_do_initcalls();
-    proc_create(PROC_PRIV_KERNEL, init_thread);
+    p_create(PROC_PRIV_KERNEL, init_thread);
 }
 
