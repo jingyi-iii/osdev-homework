@@ -38,7 +38,7 @@ static void kernel_do_exitcalls(void)
     }
 }
 
-void kernel_start_noirq(void)
+void kernel_start(void)
 {
     platform_bus_init();
     platform_devices_init();
@@ -46,6 +46,6 @@ void kernel_start_noirq(void)
     log_init();
     kb_init();
     kernel_do_initcalls();
-    p_create(PROC_PRIV_KERNEL, init_thread);
+    proc_create(PROC_PRIV_KERNEL, init_thread);
 }
 

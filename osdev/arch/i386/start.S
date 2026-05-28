@@ -45,7 +45,7 @@ knl32_entry:
         call    arch_init_irq
         cli
 
-        call    kernel_start_noirq
+        call    kernel_start
 
         movl    curr_thread_ctx,   %eax
         movl    (%eax),         %esp

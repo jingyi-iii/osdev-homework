@@ -10,8 +10,8 @@ void init_thread(void)
 {
     terminal_flush(0);
 
-    p_create(PROC_PRIV_KERNEL, timer_thread);
-    p_create(PROC_PRIV_USER, timer_thread2);
+    proc_create(PROC_PRIV_KERNEL, timer_thread);
+    proc_create(PROC_PRIV_USER, timer_thread2);
 
     while (1);
 }

@@ -193,7 +193,7 @@ static void t_yield(void)
     }
 }
 
-int p_create(proc_priv priv, thread_entry_t main_thread_entry)
+static int p_create(proc_priv priv, thread_entry_t main_thread_entry)
 {
     static uint32_t pid = 0;
 
@@ -225,7 +225,7 @@ int p_create(proc_priv priv, thread_entry_t main_thread_entry)
     return t_create(proc, (thread_priv)priv, main_thread_entry);
 }
 
-void p_exit(int32_t pid)
+static void p_exit(int32_t pid)
 {
     if (!proc_head)
         return;
@@ -249,7 +249,7 @@ void p_exit(int32_t pid)
     }
 }
 
-int p_block(int32_t pid)
+static int p_block(int32_t pid)
 {
     if (!proc_head)
         return -1;
@@ -277,7 +277,7 @@ int p_block(int32_t pid)
     return 0;
 }
 
-int p_unblock(int32_t pid)
+static int p_unblock(int32_t pid)
 {
     if (!proc_head)
         return -1;

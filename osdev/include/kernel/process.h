@@ -61,11 +61,6 @@ void thread_yield(void);
 void thread_block(int32_t tid);
 void thread_unblock(int32_t tid);
 
-int p_create(proc_priv priv, thread_entry_t main_thread_entry);
-void p_exit(int32_t pid);
-int p_block(int32_t pid);
-int p_unblock(int32_t pid);
-
 void proc_create(proc_priv priv, thread_entry_t entry);
 void proc_exit(int32_t pid);
 int proc_block(int32_t pid);
