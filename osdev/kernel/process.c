@@ -230,7 +230,7 @@ static void p_exit(int32_t pid)
     if (!proc_head)
         return;
 
-    list_for_each(node, &proc_head->this_node) {
+    list_for_each(node, proc_head->this_node.prev) {
         struct pcb* proc = list_entry(node, struct pcb, this_node);
         if (!proc || proc->pid != pid)
             continue;

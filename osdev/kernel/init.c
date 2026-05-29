@@ -14,5 +14,4 @@ void init_thread(void)
     proc_create(PROC_PRIV_USER, timer_thread2);
 
     proc_exit(0);
-    while (1);
 }
