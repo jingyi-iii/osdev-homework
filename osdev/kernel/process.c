@@ -19,7 +19,11 @@ enum proc_thread_ctrl {
 };
 
 static tcb *thread_run = 0;
-static struct pcb *proc_head = 0;
+
+static list_node proc_head = {
+    .prev = &proc_head,
+    .next = &proc_head,
+};
 
 static int32_t t_create(pcb* parent, thread_priv priv, thread_entry_t entry)
 {
@@ -216,21 +220,13 @@ static int p_create(proc_priv priv, thread_entry_t main_thread_entry)
     list_init(&proc->this_node);
     list_init(&proc->tcbs);
 
-    if (!proc_head) {
-        proc_head = proc;
-    } else {
-        list_add(&proc->this_node, &proc_head->this_node);
-    }
-
+    list_add(&proc->this_node, &proc_head);
     return t_create(proc, (thread_priv)priv, main_thread_entry);
 }
 
 static void p_exit(int32_t pid)
 {
-    if (!proc_head)
-        return;
-
-    list_for_each(node, proc_head->this_node.prev) {
+    list_for_each(node, &proc_head) {
         struct pcb* proc = list_entry(node, struct pcb, this_node);
         if (!proc || proc->pid != pid)
             continue;
@@ -252,10 +248,7 @@ static void p_exit(int32_t pid)
 
 static int p_block(int32_t pid)
 {
-    if (!proc_head)
-        return -1;
-
-    list_for_each(node, &proc_head->this_node) {
+    list_for_each(node, &proc_head) {
         struct pcb* proc = list_entry(node, struct pcb, this_node);
         if (!proc || proc->pid != pid)
             continue;
@@ -280,10 +273,7 @@ static int p_block(int32_t pid)
 
 static int p_unblock(int32_t pid)
 {
-    if (!proc_head)
-        return -1;
-
-    list_for_each(node, &proc_head->this_node) {
+    list_for_each(node, &proc_head) {
         struct pcb* proc = list_entry(node, struct pcb, this_node);
         if (!proc || proc->pid != pid)
             continue;
