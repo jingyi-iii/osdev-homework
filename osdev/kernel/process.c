@@ -236,16 +236,17 @@ static void p_exit(int32_t pid)
             continue;
 
         spinlock_lock(proc->sp_lock);
-        list_for_each(tcb_node, &proc->tcbs) {
-            struct tcb* thread = list_entry(tcb_node, struct tcb, proc_node);
-            if (!thread)
-                continue;
-
-            spinlock_lock(thread->sp_lock);
+        while (!list_empty(&proc->tcbs)) {
+            list_node* pos = proc->tcbs.next;
+            struct tcb* thread = list_entry(pos, struct tcb, proc_node);
             t_delete(thread->tid);
-            spinlock_unlock(thread->sp_lock);
         }
         spinlock_unlock(proc->sp_lock);
+
+        list_del(&proc->this_node);
+        spinlock_release(proc->sp_lock);
+        kfree(proc);
+        break;
     }
 }
 
