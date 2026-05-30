@@ -3,15 +3,13 @@
 #include "kernel/process.h"
 
 /* Demo thread entry points (defined in demo/) */
-extern void timer_thread(void);
-extern void timer_thread2(void);
+extern void snake_thread(void);
 
 void init_thread(void)
 {
     terminal_flush(0);
 
-    proc_create(PROC_PRIV_KERNEL, timer_thread);
-    proc_create(PROC_PRIV_USER, timer_thread2);
+    proc_create(PROC_PRIV_KERNEL, snake_thread);
 
     proc_exit(0);
 }
