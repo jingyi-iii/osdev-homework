@@ -54,6 +54,15 @@ static const struct platform_device_desc device_table[] = {
             { .type = PLAT_RES_MEM, .mem = { .addr = 0xB8000, .size = 80 * 25 * 2 } },
         },
     },
+    {
+        .name = "framebuffer",
+        .type = "framebuffer",
+        .num_res = 2,
+        .resources = {
+            { .type = PLAT_RES_MEM, .mem = { .addr = 0xA0000, .size = 320 * 200 } },
+            { .type = PLAT_RES_IO,  .io  = { .base = 0x3D4, .size = 2 } },
+        },
+    },
 };
 
 static const int device_count = sizeof(device_table) / sizeof(device_table[0]);
