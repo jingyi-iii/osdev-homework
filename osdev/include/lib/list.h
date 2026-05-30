@@ -53,4 +53,7 @@ static inline int list_empty(list_node* head)
 #define list_for_each(pos, head) \
     for (list_node* pos = (head)->next; pos != (head); pos = pos->next)
 
+#define DECLARE_HEAD_NODE(name) \
+    list_node name = { .prev = &name, .next = &name }
+
 #endif

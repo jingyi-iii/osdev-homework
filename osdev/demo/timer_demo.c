@@ -28,7 +28,7 @@ void timer_thread(void)
         count++;
         if (count >= 10) {
             count = 0;
-            thread_exit(2);
+            proc_exit(2);
         }
 
         timer_delay_ms(1000); // Delay for 1 second

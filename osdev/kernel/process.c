@@ -18,12 +18,31 @@ enum proc_thread_ctrl {
     PROC_CTRL_UNBLOCK,
 };
 
+static DECLARE_HEAD_NODE(proc_head);
+static DECLARE_HEAD_NODE(thread_head);
 static tcb *thread_run = 0;
 
-static list_node proc_head = {
-    .prev = &proc_head,
-    .next = &proc_head,
-};
+static tcb* find_next_runnable(tcb* current)
+{
+    if (!current)
+        return 0;
+
+    /* search from current->next to end of list */
+    for (list_node* pos = list_next(&current->this_node); pos != &thread_head; pos = pos->next) {
+        tcb* t = list_entry(pos, tcb, this_node);
+        if (t->state == TS_READY)
+            return t;
+    }
+
+    /* wrap around: from list head to current */
+    for (list_node* pos = thread_head.next; pos != &current->this_node; pos = pos->next) {
+        tcb* t = list_entry(pos, tcb, this_node);
+        if (t->state == TS_READY)
+            return t;
+    }
+
+    return 0;
+}
 
 static int32_t t_create(pcb* parent, thread_priv priv, thread_entry_t entry)
 {
@@ -61,20 +80,17 @@ static int32_t t_create(pcb* parent, thread_priv priv, thread_entry_t entry)
 
     thread->parent = parent;
     list_add(&thread->proc_node, &parent->tcbs);
+    list_add(&thread->this_node, &thread_head);
+
+    thread->tid = tid++;
+    thread->state = TS_READY;
 
     if (!thread_run) {    // the first thread
         spinlock_lock(thread->sp_lock);
         thread_run = thread;
-        arch_thread_restore_context(&thread_run->context);
+        arch_thread_restore_context(&thread->context);
         spinlock_unlock(thread->sp_lock);
-    } else {
-        spinlock_lock(thread_run->sp_lock);
-        list_add(&thread->this_node, &thread_run->this_node);
-        spinlock_unlock(thread_run->sp_lock);
     }
-
-    thread->tid = tid++;
-    thread->state = TS_READY;
 
     KLOG("add thread, tid %d", thread->tid);
 
@@ -83,31 +99,35 @@ static int32_t t_create(pcb* parent, thread_priv priv, thread_entry_t entry)
 
 static void t_delete(int32_t tid)
 {
-    tcb* thread = 0;
-
     if (!thread_run)
         return;
-    
-    if (thread_run->tid != tid) {
-        list_for_each(node, &thread_run->this_node) {
-            tcb* thread = list_entry(node, tcb, this_node);
-            if (!thread)
-                continue;
 
-            if (thread->tid == tid) {
-                spinlock_lock(thread->sp_lock);
-                arch_thread_context_release(&thread->context);
-                spinlock_unlock(thread->sp_lock);
-                list_del(&thread->this_node);
-                list_del(&thread->proc_node);
-                spinlock_release(thread->sp_lock);
-                kfree(thread);
-                break;
-            }
+    /* find the target thread */
+    tcb* target = 0;
+    list_for_each(node, &thread_head) {
+        tcb* t = list_entry(node, tcb, this_node);
+        if (t->tid == tid) {
+            target = t;
+            break;
         }
+    }
+
+    if (!target)
+        return;
+
+    if (target != thread_run) {
+        /* deleting a non-running thread */
+        spinlock_lock(target->sp_lock);
+        arch_thread_context_release(&target->context);
+        spinlock_unlock(target->sp_lock);
+        list_del(&target->this_node);
+        list_del(&target->proc_node);
+        spinlock_release(target->sp_lock);
+        kfree(target);
     } else {
-        thread = list_entry(list_next(&thread_run->this_node), tcb, this_node);
-        if (thread == thread_run) {
+        /* deleting the running thread: switch to next runnable first */
+        tcb* next = find_next_runnable(thread_run);
+        if (!next) {
             KLOG("no more thread to run after deleting thread with tid %d", tid);
             return;
         }
@@ -119,11 +139,10 @@ static void t_delete(int32_t tid)
         spinlock_unlock(thread_run->sp_lock);
 
         tcb* old = thread_run;
-        thread_run = thread;
-        arch_thread_restore_context(&thread->context);
+        thread_run = next;
+        arch_thread_restore_context(&next->context);
         spinlock_release(old->sp_lock);
         kfree(old);
-        return;
     }
 }
 
@@ -132,7 +151,7 @@ static void t_block(int32_t tid)
     if (!thread_run)
         return;
 
-    list_for_each(node, &thread_run->this_node) {
+    list_for_each(node, &thread_head) {
         tcb* t = list_entry(node, tcb, this_node);
         if (!t || t->tid != tid)
             continue;
@@ -142,20 +161,15 @@ static void t_block(int32_t tid)
         spinlock_unlock(t->sp_lock);
 
         if (t == thread_run) {
-            tcb* next = thread_run;
-            do {
-                next = list_entry(list_next(&next->this_node), tcb, this_node);
-            } while (next != thread_run && next->state != TS_READY);
-
-            if (next != thread_run && next->state == TS_READY) {
+            tcb* next = find_next_runnable(thread_run);
+            if (next) {
                 spinlock_lock(next->sp_lock);
+                thread_run = next;
                 arch_thread_restore_context(&next->context);
                 spinlock_unlock(next->sp_lock);
-                thread_run = next;
             }
         }
         break;
-        spinlock_unlock(t->sp_lock);
     }
 }
 
@@ -164,18 +178,15 @@ static void t_unblock(int32_t tid)
     if (!thread_run)
         return;
 
-    list_for_each(node, &thread_run->this_node) {
+    list_for_each(node, &thread_head) {
         tcb* t = list_entry(node, tcb, this_node);
         if (!t || t->tid != tid)
             continue;
 
         spinlock_lock(t->sp_lock);
-        if (t->tid == tid) {
-            t->state = TS_READY;
-            spinlock_unlock(t->sp_lock);
-            break;
-        }
+        t->state = TS_READY;
         spinlock_unlock(t->sp_lock);
+        break;
     }
 }
 
@@ -184,16 +195,12 @@ static void t_yield(void)
     if (!thread_run)
         return;
 
-    tcb* next = thread_run;
-    do {
-        next = list_entry(list_next(&next->this_node), tcb, this_node);
-    } while (next != thread_run && next->state != TS_READY);
-
-    if (next != thread_run && next->state == TS_READY) {
+    tcb* next = find_next_runnable(thread_run);
+    if (next) {
         spinlock_lock(next->sp_lock);
+        thread_run = next;
         arch_thread_restore_context(&next->context);
         spinlock_unlock(next->sp_lock);
-        thread_run = next;
     }
 }
 
@@ -306,17 +313,13 @@ static void schedule_isr(void* p)
         return;
     timeslice = 0;
 
-    tcb* first = thread_run;
-    while (1) {
-        thread_run = list_entry(list_next(&thread_run->this_node), tcb, this_node);
-        if (thread_run->state == TS_READY)
-            break;
-        if (thread_run == first)
-            return;
+    tcb* next = find_next_runnable(thread_run);
+    if (next) {
+        spinlock_lock(next->sp_lock);
+        thread_run = next;
+        arch_thread_restore_context(&next->context);
+        spinlock_unlock(next->sp_lock);
     }
-    spinlock_lock(thread_run->sp_lock);
-    arch_thread_restore_context(&thread_run->context);
-    spinlock_unlock(thread_run->sp_lock);
 }
 
 static void syscall_isr(void* data)
@@ -362,7 +365,7 @@ static irq* syscall_irq = 0;
 static void proc_env_init(void)
 {
     tss_init();
-    irq_request(&schedule_irq, "tmr", TIMER_IRQ_NO, 0, schedule_isr, 0);
+    irq_request(&schedule_irq, "proc_tmr", TIMER_IRQ_NO, 0, schedule_isr, 0);
     if (schedule_irq)
         irq_unmask(schedule_irq);
 
