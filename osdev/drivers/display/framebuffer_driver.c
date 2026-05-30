@@ -438,6 +438,8 @@ static int framebuffer_probe(struct device* dev)
     /* Clear the screen */
     gfx_clear(GFX_GREEN);
 
+    gfx_write("hello world", 0, 0, GFX_WHITE, GFX_GREEN);
+
     return 0;
 }
 
@@ -669,5 +671,5 @@ static void framebuffer_module_exit(void)
     platform_driver_unregister(&framebuffer_driver);
 }
 
-// module_init(framebuffer_module_init);
-// module_exit(framebuffer_module_exit);
+module_init(framebuffer_module_init);
+module_exit(framebuffer_module_exit);
