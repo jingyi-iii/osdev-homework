@@ -337,5 +337,5 @@ void snake_thread(void)
     extern int game_exited_flag;
     game_exited_flag = 1;
 
-    proc_exit(0);
+    proc_exit(proc_get_pid());
 }

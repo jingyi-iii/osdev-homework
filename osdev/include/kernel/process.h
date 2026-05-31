@@ -65,5 +65,6 @@ void proc_create(proc_priv priv, thread_entry_t entry);
 void proc_exit(int32_t pid);
 int proc_block(int32_t pid);
 int proc_unblock(int32_t pid);
+int proc_get_pid(void);
 
 #endif

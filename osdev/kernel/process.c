@@ -476,5 +476,10 @@ int proc_unblock(int32_t pid)
     return 0;
 }
 
+int proc_get_pid(void)
+{
+    return thread_run ? thread_run->parent->pid : -1;
+}
+
 module_init(proc_env_init);
 module_exit(proc_env_exit);
