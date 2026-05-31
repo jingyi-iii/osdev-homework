@@ -208,29 +208,38 @@ static uint8_t parse(uint8_t code)
     static int lshift = 0;
     static int rshift = 0;
     static int isCapsLocked = 0;
+    static int e0_prefix = 0;
     int isPressed = 0;
     uint8_t key = 0;
+
+    /* Handle E0 / E1 extended-key prefixes */
     switch (code) {
     case 0xe1:
-        break;
+        /* Pause/Break sends a long sequence; ignore for now */
+        return 0;
     case 0xe0:
-        break;
+        e0_prefix = 1;
+        return 0;
     default:
         break;
-    }    
-    
-    isPressed = (code & FLAG_BREAK ? 0 : 1);
-    if (lshift || rshift) {
-        if (!isCapsLocked)
-            key = keymap[(code & 0x7f) * MAP_COLS + 1];
-        else
-            key = keymap[(code & 0x7f) * MAP_COLS];
-    } else {
-        if (!isCapsLocked)
-            key = keymap[(code & 0x7f) * MAP_COLS];
-        else
-            key = keymap[(code & 0x7f) * MAP_COLS + 1];
     }
+
+    isPressed = (code & FLAG_BREAK ? 0 : 1);
+
+    /* Select keymap column: 0=normal, 1=shifted, 2=E0-extended */
+    int col = 0;
+    if (e0_prefix) {
+        col = 2;                /* E0-extended column */
+        e0_prefix = 0;
+    } else if (lshift || rshift) {
+        col = 1;                /* shifted column */
+    }
+
+    /* Caps Lock inverts the shift state for letter keys */
+    if (isCapsLocked)
+        col = (col == 0) ? 1 : 0;
+
+    key = keymap[(code & 0x7f) * MAP_COLS + col];
     
     switch (key) {
     case SHIFT_L:

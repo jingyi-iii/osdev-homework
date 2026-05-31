@@ -3,13 +3,13 @@
 #include "kernel/process.h"
 
 /* Demo thread entry points (defined in demo/) */
-extern void snake_thread(void);
+extern void airplane_thread(void);
 
 void init_thread(void)
 {
     terminal_flush(0);
 
-    proc_create(PROC_PRIV_KERNEL, snake_thread);
+    proc_create(PROC_PRIV_KERNEL, airplane_thread);
 
     proc_exit(0);
 }

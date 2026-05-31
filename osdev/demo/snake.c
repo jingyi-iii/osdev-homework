@@ -103,16 +103,16 @@ static void snake_kb_handler(const char* data, size_t size)
     char key = data[0];
 
     switch (key) {
-    case 'w': case 'W':
+    case 'w': case 'W': case UP:
         if (dir != DIR_DOWN)  dir = DIR_UP;
         break;
-    case 's': case 'S':
+    case 's': case 'S': case DOWN:
         if (dir != DIR_UP)    dir = DIR_DOWN;
         break;
-    case 'a': case 'A':
+    case 'a': case 'A': case LEFT:
         if (dir != DIR_RIGHT) dir = DIR_LEFT;
         break;
-    case 'd': case 'D':
+    case 'd': case 'D': case RIGHT:
         if (dir != DIR_LEFT)  dir = DIR_RIGHT;
         break;
     case 'q': case 'Q':
