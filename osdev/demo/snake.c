@@ -333,5 +333,9 @@ void snake_thread(void)
     KLOG("snake_thread exiting, score=%d", score);
 
     kb_unregister_callback(snake_kb_handler);
+
+    extern int game_exited_flag;
+    game_exited_flag = 1;
+
     proc_exit(0);
 }

@@ -658,5 +658,9 @@ void airplane_thread(void)
     KLOG("airplane_thread exiting, score=%d", score);
 
     kb_unregister_callback(airplane_kb_handler);
+
+    extern int game_exited_flag;
+    game_exited_flag = 1;
+
     proc_exit(0);
 }

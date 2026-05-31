@@ -479,6 +479,12 @@ void gfx_exit(void)
     platform_driver_unregister(&graphics_driver);
 }
 
+void gfx_switch_to_mode(void)
+{
+    vga_set_mode_0x13(gfx_dev.bus_ops);
+    gfx_clear(GFX_BLACK);
+}
+
 void gfx_clear(uint8_t color)
 {
     struct graphics_device* dev = &gfx_dev;

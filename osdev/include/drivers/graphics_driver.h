@@ -50,6 +50,9 @@ void gfx_init(void);
 /* Switch back to text mode */
 void gfx_exit(void);
 
+/* Switch (back) to graphics mode 0x13 from text mode */
+void gfx_switch_to_mode(void);
+
 /* Clear the entire screen with a color */
 void gfx_clear(uint8_t color);
 
