@@ -3,9 +3,9 @@ GRUB_DIR := $(OUT_DIR)iso/boot/grub
 OBJS_DIR := $(OUT_DIR)objs/
 INC_DIRS := -Iinclude -Iarch/i386
 
-ASMSRCS  := $(shell find . -type f -name '*.S' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*")
-CSRCS    := $(shell find . -type f -name '*.c' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*")
-CXXSRCS  := $(shell find . -type f -name '*.cpp' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*")
+ASMSRCS  := $(shell find . -type f -name '*.S' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*")
+CSRCS    := $(shell find . -type f -name '*.c' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*")
+CXXSRCS  := $(shell find . -type f -name '*.cpp' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*")
 COBJS    := $(patsubst %.c,   $(OBJS_DIR)%.c.o,   $(CSRCS))
 CXXOBJS  := $(patsubst %.cpp, $(OBJS_DIR)%.cpp.o, $(CXXSRCS))
 ASMOBJS  := $(patsubst %.S,   $(OBJS_DIR)%.S.o,   $(ASMSRCS))
@@ -47,7 +47,7 @@ $(OBJS_DIR)%.S.o: %.S
 	@mkdir -p $(@D)
 	$(AS) $(ASFLAGS) $< -o $@
 
-$(OUT_DIR) $(GRUB_DIR):
+$(OUT_DIR) $(GRUB_DIR) $(OBJS_DIR):
 	@mkdir -p $@
 
 all: $(TARGET_ISO)
@@ -61,9 +61,19 @@ run: $(TARGET_ISO)
 run_debug: $(TARGET_BIN)
 	qemu-system-i386 -s -S -kernel $(TARGET_BIN) -serial file:serial.log
 
+# --- Simple bootloader (no GRUB, bare metal) ---
+BOOTLOADER_BIN := $(OUT_DIR)bootloader.bin
+
+$(BOOTLOADER_BIN): bootloader/boot.S bootloader/linker.ld | $(OUT_DIR) $(OBJS_DIR)
+	$(AS) --32 $< -o $(OBJS_DIR)bootloader.o
+	$(ARCH)ld -m elf_i386 -T bootloader/linker.ld $(OBJS_DIR)bootloader.o -o $@
+
+run_boot: $(BOOTLOADER_BIN)
+	qemu-system-i386 -drive format=raw,file=$(BOOTLOADER_BIN)
+
 clean:
 	@rm -rf $(OUT_DIR)
 	@rm -rf *.log
 
-.PHONY: all env run clean
+.PHONY: all env run run_boot clean
 

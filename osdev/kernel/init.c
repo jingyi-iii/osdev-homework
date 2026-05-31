@@ -62,7 +62,7 @@ void init_thread(void)
 
         /* Wait for user to choose a game */
         while (menu_choice == 0) {
-            timer_delay_ms(50);
+            // timer_delay_ms(50);
             thread_yield();
         }
 
