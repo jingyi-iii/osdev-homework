@@ -296,11 +296,11 @@ static void draw_game_over_screen(void)
 
     gfx_write(msg1,
               (size_t)(col1 > 0 ? col1 : 1),
-              (size_t)(GRID_H / 2 - 1),
+              (size_t)(GFX_ROWS / 2 - 1),
               CLR_GAMEOVER, GFX_BLACK);
     gfx_write(msg2,
               (size_t)(col2 > 0 ? col2 : 1),
-              (size_t)(GRID_H / 2 + 1),
+              (size_t)(GFX_ROWS / 2 + 1),
               GFX_WHITE, GFX_BLACK);
 }
 

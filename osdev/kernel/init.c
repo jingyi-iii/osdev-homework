@@ -77,7 +77,6 @@ void init_thread(void)
         /* Wait for the game to quit (user presses Q),
          * then loop back and redraw the menu. */
         while (!game_exited_flag) {
-            timer_delay_ms(100);
             thread_yield();
         }
     }

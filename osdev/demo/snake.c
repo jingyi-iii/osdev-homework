@@ -187,12 +187,12 @@ static void draw_game_over(void)
 {
     const char* msg1 = "GAME OVER";
     const char* msg2 = "R:Restart  Q:Quit";
-    int col1 = (int)((GRID_W - 8) / 2);
+    int col1 = (int)((GRID_W - 9) / 2);
     int col2 = (int)((GRID_W - 17) / 2);
 
-    gfx_write(msg1, (size_t)(col1 > 0 ? col1 : 1), (size_t)(GRID_H / 2 - 1),
+    gfx_write(msg1, (size_t)(col1 > 0 ? col1 : 1), (size_t)(GFX_ROWS / 2 - 1),
               CLR_GAMEOVER, CLR_BG);
-    gfx_write(msg2, (size_t)(col2 > 0 ? col2 : 1), (size_t)(GRID_H / 2 + 1),
+    gfx_write(msg2, (size_t)(col2 > 0 ? col2 : 1), (size_t)(GFX_ROWS / 2 + 1),
               GFX_WHITE, CLR_BG);
 }
 
