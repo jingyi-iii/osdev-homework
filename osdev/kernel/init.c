@@ -7,8 +7,9 @@
 /* Demo thread entry points (defined in demo/) */
 extern void snake_thread(void);
 extern void airplane_thread(void);
+extern void breakout_thread(void);
 
-/* Menu state: 0 = waiting, 1 = snake, 2 = airplane */
+/* Menu state: 0 = waiting, 1 = snake, 2 = airplane, 3 = breakout */
 static int menu_choice = 0;
 
 /* Set by a game thread when the user presses Q to quit.
@@ -24,6 +25,7 @@ static void menu_kb_handler(const char* data, size_t size)
     char key = data[0];
     if (key == '1') menu_choice = 1;
     if (key == '2') menu_choice = 2;
+    if (key == '3') menu_choice = 3;
 }
 
 static void draw_menu(void)
@@ -44,10 +46,15 @@ static void draw_menu(void)
     gfx_write("     Shoot, dodge, survive!", 4, 7,
               GFX_DARK_GREY, GFX_BLACK);
 
-    /* Separator + prompt */
-    gfx_write("----------------------------------------", 0, 9,
+    /* Option 3 — Breakout */
+    gfx_write("[3]  BREAKOUT", 4, 9, GFX_LIGHT_MAGENTA, GFX_BLACK);
+    gfx_write("     Break all the bricks!", 4, 10,
               GFX_DARK_GREY, GFX_BLACK);
-    gfx_write("    Press  1  or  2  to select a game", 3, 10,
+
+    /* Separator + prompt */
+    gfx_write("----------------------------------------", 0, 12,
+              GFX_DARK_GREY, GFX_BLACK);
+    gfx_write("   Press 1, 2 or 3 to select a game", 3, 13,
               GFX_WHITE, GFX_BLACK);
 }
 
@@ -70,8 +77,10 @@ void init_thread(void)
 
         if (menu_choice == 1) {
             proc_create(PROC_PRIV_KERNEL, snake_thread);
-        } else {
+        } else if (menu_choice == 2) {
             proc_create(PROC_PRIV_KERNEL, airplane_thread);
+        } else {
+            proc_create(PROC_PRIV_KERNEL, breakout_thread);
         }
 
         /* Wait for the game to quit (user presses Q),
