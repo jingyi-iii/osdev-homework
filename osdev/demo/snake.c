@@ -1,7 +1,7 @@
 /*******************************************************************************
  *                                                                             *
  *    Snake Game — A classic snake game running as a kernel process.           *
- *                 Rendered via framebuffer_driver (VGA mode 0x13),            *
+ *                 Rendered via graphics_driver (VGA mode 0x13),              *
  *                 controlled via kb_driver keyboard callbacks.                *
  *                                                                             *
  *    Controls:  W/A/S/D  —  move Up/Left/Down/Right                          *
@@ -10,7 +10,7 @@
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/framebuffer_driver.h"
+#include "drivers/graphics_driver.h"
 #include "drivers/kb_driver.h"
 #include "drivers/log_driver.h"
 #include "drivers/timer_driver.h"

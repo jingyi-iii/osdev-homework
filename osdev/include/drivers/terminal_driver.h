@@ -48,6 +48,9 @@ void terminal_putchar(char c);
 
 typedef void (*terminal_cmd_fn)(const char* args);
 int terminal_register_cmd(const char* name, terminal_cmd_fn callback);
+
+/* Switch display back to VGA text mode 0x03 (80×25) */
+void terminal_switch_to_text_mode(void);
 void terminal_unregister_cmd(const char* name);
 
 #endif /* TERMINAL_DRIVER_H */

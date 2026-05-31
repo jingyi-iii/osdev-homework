@@ -55,8 +55,8 @@ static const struct platform_device_desc device_table[] = {
         },
     },
     {
-        .name = "framebuffer",
-        .type = "framebuffer",
+        .name = "graphics",
+        .type = "graphics",
         .num_res = 2,
         .resources = {
             { .type = PLAT_RES_MEM, .mem = { .addr = 0xA0000, .size = 320 * 200 } },

@@ -54,6 +54,8 @@ static struct terminal_device term_device = {
 /************************************************************************/
 /*                      Hardware Cursor Control                         */
 /************************************************************************/
+static size_t input_len = 0;
+
 #define VGA_CRT_ADDR    0x3D4
 #define VGA_CRT_DATA    0x3D5
 
@@ -72,6 +74,123 @@ static void cursor_init(void)
     ops->out_port8(VGA_CRT_DATA, 0x0F);
 }
 
+/************************************************************************/
+/*               VGA Text-Mode (Mode 0x03) Switching                    */
+/************************************************************************/
+
+/*
+ * VGA register values for text mode 0x03 (80×25, 16 colors).
+ * These restore the default VGA text-mode state after graphics mode.
+ */
+
+/* Sequencer registers for mode 0x03 */
+static const uint8_t seq_0x03[] = {
+    0x03, 0x00, 0x03, 0x00, 0x02
+};
+
+/* CRT Controller registers for mode 0x03 */
+static const uint8_t crtc_0x03[] = {
+    0x5F, 0x4F, 0x50, 0x82, 0x55, 0x81, 0xBF, 0x1F,
+    0x00, 0x4F, 0x0D, 0x0E, 0x00, 0x00, 0x00, 0x50,
+    0x9C, 0x0E, 0x8F, 0x28, 0x1F, 0x96, 0xB9, 0xA3,
+    0xFF
+};
+
+/* Graphics Controller registers for mode 0x03 */
+static const uint8_t gc_0x03[] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x0E, 0x0F, 0xFF
+};
+
+/* Attribute Controller registers for mode 0x03 (16 palette + mode ctrl) */
+static const uint8_t ac_0x03[] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+    0x0C
+};
+
+/*
+ * Additional VGA ports needed for mode switching (same as graphics driver).
+ */
+#define VGA_MISC_WRITE  0x3C2
+#define VGA_SEQ_ADDR    0x3C4
+#define VGA_SEQ_DATA    0x3C5
+#define VGA_GC_ADDR     0x3CE
+#define VGA_GC_DATA     0x3CF
+#define VGA_AC_ADDR     0x3C0
+#define VGA_AC_DATA     0x3C0
+#define VGA_DAC_MASK    0x3C6
+#define VGA_DAC_WRITE   0x3C8
+#define VGA_DAC_DATA    0x3C9
+
+static void vga_write_regs(struct platform_bus_ops* ops,
+                           uint16_t addr_port, uint16_t data_port,
+                           const uint8_t* regs, size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        ops->out_port8(addr_port, (uint8_t)i);
+        ops->out_port8(data_port, regs[i]);
+    }
+}
+
+static void vga_set_text_mode(struct platform_bus_ops* ops)
+{
+    if (!ops) return;
+
+    /* 1. Reset attribute flip-flop */
+    ops->in_port8(0x3DA);
+
+    /* 2. Set Misc Output Register for 28 MHz dot clock, text mode */
+    ops->out_port8(VGA_MISC_WRITE, 0x67);
+
+    /* 3. Disable sequencer during reprogramming */
+    ops->out_port8(VGA_SEQ_ADDR, 0x00);
+    ops->out_port8(VGA_SEQ_DATA, 0x01);
+
+    /* 4. Program Sequencer registers */
+    vga_write_regs(ops, VGA_SEQ_ADDR, VGA_SEQ_DATA, seq_0x03, 5);
+
+    /* 5. Re-enable sequencer */
+    ops->out_port8(VGA_SEQ_ADDR, 0x00);
+    ops->out_port8(VGA_SEQ_DATA, 0x03);
+
+    /* 6. Unlock CRTC */
+    ops->out_port8(VGA_CRT_ADDR, 0x11);
+    ops->out_port8(VGA_CRT_DATA,
+                   (uint8_t)(ops->in_port8(VGA_CRT_DATA) & 0x7F));
+
+    /* 7. Program CRTC registers */
+    vga_write_regs(ops, VGA_CRT_ADDR, VGA_CRT_DATA, crtc_0x03, 25);
+
+    /* 8. Program Graphics Controller registers */
+    vga_write_regs(ops, VGA_GC_ADDR, VGA_GC_DATA, gc_0x03, 9);
+
+    /* 9. Program Attribute Controller registers */
+    ops->in_port8(0x3DA);
+    for (size_t i = 0; i < 17; i++) {
+        ops->out_port8(VGA_AC_ADDR, (uint8_t)i);
+        ops->out_port8(VGA_AC_DATA, ac_0x03[i]);
+    }
+    /* Re-enable video output */
+    ops->out_port8(VGA_AC_ADDR, 0x20);
+
+    /* 10. Set DAC palette for text mode (standard 16-color palette) */
+    {
+        static const uint8_t text_palette[16][3] = {
+            {0x00,0x00,0x00},{0x00,0x00,0x2A},{0x00,0x2A,0x00},{0x00,0x2A,0x2A},
+            {0x2A,0x00,0x00},{0x2A,0x00,0x2A},{0x2A,0x15,0x00},{0x2A,0x2A,0x2A},
+            {0x15,0x15,0x15},{0x15,0x15,0x3F},{0x15,0x3F,0x15},{0x15,0x3F,0x3F},
+            {0x3F,0x15,0x15},{0x3F,0x15,0x3F},{0x3F,0x3F,0x15},{0x3F,0x3F,0x3F},
+        };
+        ops->out_port8(VGA_DAC_MASK, 0xFF);
+        ops->out_port8(VGA_DAC_WRITE, 0);
+        for (int i = 0; i < 16; i++) {
+            ops->out_port8(VGA_DAC_DATA, text_palette[i][0]);
+            ops->out_port8(VGA_DAC_DATA, text_palette[i][1]);
+            ops->out_port8(VGA_DAC_DATA, text_palette[i][2]);
+        }
+    }
+}
+
 static void cursor_update(size_t row, size_t col)
 {
     struct platform_bus_ops* ops = term_device.bus_ops;
@@ -84,6 +203,44 @@ static void cursor_update(size_t row, size_t col)
     ops->out_port8(VGA_CRT_DATA, (uint8_t)(pos >> 8));
     ops->out_port8(VGA_CRT_ADDR, 0x0F);
     ops->out_port8(VGA_CRT_DATA, (uint8_t)(pos & 0xFF));
+}
+
+/*
+ * Switch the display back to text mode (VGA mode 0x03) and reinitialize
+ * the terminal state (clear screen, reset cursor, restore input prompt).
+ */
+void terminal_switch_to_text_mode(void)
+{
+    struct platform_bus_ops* ops = term_device.bus_ops;
+    if (!ops)
+        return;
+
+    spinlock_lock(term_device.lock);
+
+    /* Reprogram VGA registers for text mode 0x03 */
+    vga_set_text_mode(ops);
+
+    /* Reinitialize hardware cursor */
+    cursor_init();
+
+    /* Clear the VGA text buffer and reset terminal state */
+    term_device.curr_row = 0;
+    term_device.curr_col = 0;
+    term_device.curr_color = to_vga_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+
+    for (size_t y = 0; y < VGA_HEIGHT; y++) {
+        for (size_t x = 0; x < VGA_WIDTH; x++) {
+            const size_t index = y * VGA_WIDTH + x;
+            term_device.vga_buffer[index] = to_vga_char(' ', term_device.curr_color);
+        }
+    }
+
+    cursor_update(term_device.curr_row, term_device.curr_col);
+    spinlock_unlock(term_device.lock);
+
+    /* Reset input state and show prompt */
+    input_len = 0;
+    terminal_write("#: ");
 }
 
 /************************************************************************/
@@ -99,7 +256,6 @@ struct terminal_cmd_entry {
 };
 
 static char input_buf[CMD_BUF_SIZE];
-static size_t input_len = 0;
 static list_node cmd_registry;
 static spinlock* cmd_lock = NULL;
 static int cmd_ready = 0;
@@ -416,6 +572,13 @@ static void terminal_kb_handler(const char* data, size_t size)
 /************************************************************************/
 /*                      Init / Exit                                     */
 /************************************************************************/
+
+static void terminal_textmode_cmd(const char* args)
+{
+    (void)args;
+    terminal_switch_to_text_mode();
+}
+
 void terminal_init(void)
 {
     platform_driver_register(&terminal_driver);
@@ -426,6 +589,7 @@ void terminal_init(void)
     kb_register_callback(terminal_kb_handler);
 
     terminal_register_cmd("clear", terminal_flush);
+    terminal_register_cmd("textmode", terminal_textmode_cmd);
 }
 
 void terminal_exit(void)

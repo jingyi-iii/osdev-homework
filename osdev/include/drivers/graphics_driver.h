@@ -1,5 +1,5 @@
-#ifndef FRAMEBUFFER_DRIVER_H
-#define FRAMEBUFFER_DRIVER_H
+#ifndef GRAPHICS_DRIVER_H
+#define GRAPHICS_DRIVER_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -41,7 +41,7 @@ enum gfx_color {
 };
 
 /************************************************************************/
-/*                    Framebuffer Public API                            */
+/*                    Graphics Public API                               */
 /************************************************************************/
 
 /* Initialize graphics mode (switch from text to mode 0x13) */
@@ -77,4 +77,4 @@ void gfx_get_cursor(size_t* col, size_t* row);
 /* Set cursor position */
 void gfx_set_cursor(size_t col, size_t row);
 
-#endif /* FRAMEBUFFER_DRIVER_H */
+#endif /* GRAPHICS_DRIVER_H */

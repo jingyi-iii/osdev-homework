@@ -1,7 +1,7 @@
 #include "drivers/kb_driver.h"
 #include "drivers/log_driver.h"
 #include "kernel/process.h"
-#include "drivers/framebuffer_driver.h"
+#include "drivers/graphics_driver.h"
 
 static void kb_read2(const char* data, size_t size)
 {

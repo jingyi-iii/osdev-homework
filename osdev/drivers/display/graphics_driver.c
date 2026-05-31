@@ -1,7 +1,7 @@
 /*******************************************************************************
  *                                                                             *
- *    Framebuffer Driver — VGA Mode 0x13 Graphics, Pixel Operations,           *
- *                          Bitmap Font Rendering & Terminal Emulation         *
+ *    Graphics Driver — VGA Mode 0x13 Graphics, Pixel Operations,              *
+ *                       Bitmap Font Rendering & Terminal Emulation            *
  *                                                                             *
  *    AI-IMPLEMENTED  ·  NO HUMAN REVIEW REQUIRED                              *
  *                                                                             *
@@ -32,7 +32,7 @@
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/framebuffer_driver.h"
+#include "drivers/graphics_driver.h"
 #include "sync/spinlock.h"
 #include "lib/module.h"
 #include "mm/heap.h"
@@ -69,7 +69,7 @@
 #define VGA_MISC_READ   0x3CC
 #define VGA_MISC_WRITE  0x3C2
 
-struct framebuffer_device {
+struct graphics_device {
     struct platform_bus_ops* bus_ops;
     spinlock* lock;
     uint8_t* fb;            /* framebuffer pointer (0xA0000) */
@@ -79,7 +79,7 @@ struct framebuffer_device {
     uint8_t   curr_bg;      /* current background color */
 };
 
-static struct framebuffer_device gfx_dev = {
+static struct graphics_device gfx_dev = {
     .lock     = NULL,
     .fb       = (uint8_t*)GFX_BUF_ADDR,
     .curr_col = 0,
@@ -421,7 +421,7 @@ static void vga_set_mode_0x13(struct platform_bus_ops* ops)
 /*                      Driver Probe / Remove                           */
 /************************************************************************/
 
-static int framebuffer_probe(struct device* dev)
+static int graphics_probe(struct device* dev)
 {
     struct platform_device* pdev = to_platform_device(dev);
     gfx_dev.bus_ops = platform_device_get_ops(pdev);
@@ -443,7 +443,7 @@ static int framebuffer_probe(struct device* dev)
     return 0;
 }
 
-static int framebuffer_remove(struct device* dev)
+static int graphics_remove(struct device* dev)
 {
     (void)dev;
 
@@ -459,29 +459,29 @@ static int framebuffer_remove(struct device* dev)
     return 0;
 }
 
-static struct driver framebuffer_driver = {
-    .type   = "framebuffer",
-    .probe  = framebuffer_probe,
-    .remove = framebuffer_remove,
+static struct driver graphics_driver = {
+    .type   = "graphics",
+    .probe  = graphics_probe,
+    .remove = graphics_remove,
 };
 
 /************************************************************************/
-/*                    Framebuffer Public API                            */
+/*                    Graphics Public API                               */
 /************************************************************************/
 
 void gfx_init(void)
 {
-    platform_driver_register(&framebuffer_driver);
+    platform_driver_register(&graphics_driver);
 }
 
 void gfx_exit(void)
 {
-    platform_driver_unregister(&framebuffer_driver);
+    platform_driver_unregister(&graphics_driver);
 }
 
 void gfx_clear(uint8_t color)
 {
-    struct framebuffer_device* dev = &gfx_dev;
+    struct graphics_device* dev = &gfx_dev;
 
     spinlock_lock(dev->lock);
 
@@ -501,7 +501,7 @@ void gfx_put_pixel(size_t x, size_t y, uint8_t color)
     if (x >= GFX_WIDTH || y >= GFX_HEIGHT)
         return;
 
-    struct framebuffer_device* dev = &gfx_dev;
+    struct graphics_device* dev = &gfx_dev;
 
     spinlock_lock(dev->lock);
     dev->fb[y * GFX_WIDTH + x] = color;
@@ -514,7 +514,7 @@ void gfx_fill_rect(size_t x, size_t y, size_t w, size_t h, uint8_t color)
     if (x + w > GFX_WIDTH)  w = GFX_WIDTH  - x;
     if (y + h > GFX_HEIGHT) h = GFX_HEIGHT - y;
 
-    struct framebuffer_device* dev = &gfx_dev;
+    struct graphics_device* dev = &gfx_dev;
 
     spinlock_lock(dev->lock);
 
@@ -537,7 +537,7 @@ void gfx_put_char(char c, size_t col, size_t row, uint8_t fg, uint8_t bg)
     if (c < 32 || c > 126)
         c = ' ';
 
-    struct framebuffer_device* dev = &gfx_dev;
+    struct graphics_device* dev = &gfx_dev;
 
     spinlock_lock(dev->lock);
 
@@ -581,7 +581,7 @@ void gfx_write(const char* str, size_t col, size_t row, uint8_t fg, uint8_t bg)
 
 void gfx_scroll(uint8_t bg)
 {
-    struct framebuffer_device* dev = &gfx_dev;
+    struct graphics_device* dev = &gfx_dev;
 
     spinlock_lock(dev->lock);
 
@@ -606,7 +606,7 @@ void gfx_scroll(uint8_t bg)
 
 void gfx_putchar(char c)
 {
-    struct framebuffer_device* dev = &gfx_dev;
+    struct graphics_device* dev = &gfx_dev;
 
     spinlock_lock(dev->lock);
 
@@ -661,15 +661,15 @@ void gfx_set_cursor(size_t col, size_t row)
 /*                      Module Init / Exit                              */
 /************************************************************************/
 
-static void framebuffer_module_init(void)
+static void graphics_module_init(void)
 {
-    platform_driver_register(&framebuffer_driver);
+    platform_driver_register(&graphics_driver);
 }
 
-static void framebuffer_module_exit(void)
+static void graphics_module_exit(void)
 {
-    platform_driver_unregister(&framebuffer_driver);
+    platform_driver_unregister(&graphics_driver);
 }
 
-module_init(framebuffer_module_init);
-module_exit(framebuffer_module_exit);
+module_init(graphics_module_init);
+module_exit(graphics_module_exit);
