@@ -15,10 +15,6 @@ enum arch_seltype {
     SELTYPE_END   = 6,
 };
 
-enum error_type {
-    EINVALID = 1,
-};
-
 void arch_switch_pm(void);
 void arch_switch_rm(void);
 uint16_t arch_get_sel(enum arch_seltype type);

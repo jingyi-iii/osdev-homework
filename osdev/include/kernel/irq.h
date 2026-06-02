@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "lib/list.h"
 #include "sync/spinlock.h"
+#include "kernel/errno.h"
 
 #define IRQ_ANY_MINOR  UINT32_MAX
 

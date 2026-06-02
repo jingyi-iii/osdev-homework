@@ -51,7 +51,7 @@ static int32_t t_create(pcb* parent, thread_priv priv, thread_entry_t entry)
 
     if (!parent) {
         KLOG("failed to create thread without parent process");
-        return -1;
+        return E_INVAL;
     }
 
     KLOG("adding thread, tid %d", tid);
@@ -59,13 +59,13 @@ static int32_t t_create(pcb* parent, thread_priv priv, thread_entry_t entry)
     thread = (tcb*)kmalloc(sizeof(tcb));
     if (!thread) {
         KLOG("failed to alloc memory for tcb");
-        return -1;
+        return E_NOMEM;
     }
 
     if (arch_thread_context_init(&thread->context, entry, priv)) {
         KLOG("failed to init thread context");
         kfree(thread);
-        return -22;
+        return E_THREAD_CREATE;
     }
 
     list_init(&thread->this_node);
@@ -75,7 +75,7 @@ static int32_t t_create(pcb* parent, thread_priv priv, thread_entry_t entry)
         KLOG("failed to alloc spin lock for tcb");
         arch_thread_context_release(&thread->context);
         kfree(thread);
-        return -1;
+        return E_LIMIT;
     }
 
     thread->parent = parent;
@@ -211,14 +211,14 @@ static int p_create(proc_priv priv, thread_entry_t main_thread_entry)
     struct pcb* proc = (struct pcb*)kmalloc(sizeof(struct pcb));
     if (!proc) {
         KLOG("failed to alloc memory for pcb");
-        return -1;
+        return E_NOMEM;
     }
 
     proc->sp_lock = spinlock_alloc();
     if (!proc->sp_lock) {
         KLOG("failed to alloc spin lock for pcb");
         kfree(proc);
-        return -1;
+        return E_LIMIT;
     }
 
     proc->pid = pid++;

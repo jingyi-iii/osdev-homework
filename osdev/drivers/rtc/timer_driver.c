@@ -107,7 +107,7 @@ void timer_get_time(rtc_time_t* time)
 int timer_read_time_str(char* buf, size_t size)
 {
     if (!buf || size == 0)
-        return -1;
+        return E_INVAL;
 
     timer_update_rtc_time(&timer_device);
     rtc_time_t* t = &timer_device.cached_time;

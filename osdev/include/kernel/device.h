@@ -2,6 +2,7 @@
 #define DEVICE_H
 
 #include "kernel/driver.h"
+#include "kernel/errno.h"
 
 enum dev_state {
     DEV_UNREGISTERED,

@@ -45,7 +45,7 @@ static int log_probe(struct device* dev)
     if (!g_log_device) {
         g_log_device = (struct log_device*)kmalloc(sizeof(struct log_device));
         if (!g_log_device) {
-            return -1;
+            return E_NOMEM;
         }
     }
 
@@ -71,7 +71,7 @@ static int log_probe(struct device* dev)
 
         // Check if serial is faulty (i.e: not same byte as sent)
         if(ops->in_port8(g_log_device->io_port + 0) != 0xAE) {
-            return -1;
+            return E_DEV_FAULT;
         }
 
         // If serial is not faulty set it in normal operation mode

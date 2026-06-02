@@ -5,6 +5,7 @@
 #include "arch_thread.h"
 #include "lib/list.h"
 #include "sync/spinlock.h"
+#include "kernel/errno.h"
 
 typedef void (*thread_entry_t)(void);
 

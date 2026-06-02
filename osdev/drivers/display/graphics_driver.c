@@ -428,7 +428,7 @@ static int graphics_probe(struct device* dev)
 
     gfx_dev.lock = spinlock_alloc();
     if (!gfx_dev.lock)
-        return -1;
+        return E_LIMIT;
 
     gfx_dev.fb = (uint8_t*)GFX_BUF_ADDR;
 

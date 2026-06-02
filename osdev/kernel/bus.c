@@ -19,22 +19,22 @@ static int driver_matches(struct bus *bus, struct driver *drv, struct device *de
 static int try_bind_and_probe(struct bus *bus, struct driver *drv, struct device *dev)
 {
     if (!drv || !dev)
-        return -1;
+        return E_INVAL;
 
     if (dev->driver != NULL)
-        return -1;
+        return E_BUSY;
 
     if (!driver_matches(bus, drv, dev))
-        return -1;
+        return E_DRV_NOTFOUND;
 
     if (!drv->probe)
-        return -1;
+        return E_DRV_PROBE;
 
     dev->driver = drv;
     int ret = drv->probe(dev);
     if (ret != 0) {
         dev->driver = NULL;
-        return -1;
+        return E_DRV_PROBE;
     }
 
     return 0;
@@ -43,7 +43,7 @@ static int try_bind_and_probe(struct bus *bus, struct driver *drv, struct device
 static int unbind_driver_from_device(struct driver *drv, struct device *dev)
 {
     if (!drv || !dev || dev->driver != drv)
-        return -1;
+        return E_INVAL;
 
     if (drv->remove)
         drv->remove(dev);
@@ -55,7 +55,7 @@ static int unbind_driver_from_device(struct driver *drv, struct device *dev)
 int bus_register_driver(struct bus *bus, struct driver *drv)
 {
     if (!bus || !drv)
-        return -1;
+        return E_INVAL;
 
     spinlock_lock(bus->splock);
     list_add(&drv->drv_node, &bus->drivers);
@@ -75,7 +75,7 @@ int bus_register_driver(struct bus *bus, struct driver *drv)
 int bus_unregister_driver(struct bus *bus, struct driver *drv)
 {
     if (!bus || !drv)
-        return -1;
+        return E_INVAL;
 
     spinlock_lock(bus->splock);
     list_for_each(node, &bus->devices) {
@@ -92,7 +92,7 @@ int bus_unregister_driver(struct bus *bus, struct driver *drv)
 int bus_add_device(struct bus *bus, struct device *dev)
 {
     if (!bus || !dev)
-        return -1;
+        return E_INVAL;
 
     spinlock_lock(bus->splock);
     dev->state = DEV_REGISTERED;
@@ -111,7 +111,7 @@ int bus_add_device(struct bus *bus, struct device *dev)
 int bus_remove_device(struct bus *bus, struct device *dev)
 {
     if (!bus || !dev || dev->bus != bus)
-        return -1;
+        return E_INVAL;
 
     spinlock_lock(bus->splock);
     if (dev->driver)

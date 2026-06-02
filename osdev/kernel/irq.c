@@ -9,11 +9,11 @@ static irqline* irqlines[IDT_ENTRIES] = {0};
 static int irqline_alloc(uint32_t major, irqline **out)
 {
     if (!out)
-        return -1;
+        return E_INVAL;
 
     irqline *line = (irqline*)kmalloc(sizeof(irqline));
     if (!line)
-        return -1;
+        return E_NOMEM;
 
     line->major = major;
     line->enabled = 0;
@@ -28,7 +28,7 @@ static int irqline_alloc(uint32_t major, irqline **out)
 static int irqline_free(irqline *line)
 {
     if (!line)
-        return -1;
+        return E_INVAL;
 
     spinlock_release(line->sp_lock);
     kfree(line);
@@ -38,7 +38,7 @@ static int irqline_free(irqline *line)
 static int irqline_mask(struct irqline* line)
 {
     if (!line)
-        return -1;
+        return E_INVAL;
 
     int disable = 1;
 
@@ -62,7 +62,7 @@ static int irqline_mask(struct irqline* line)
 static int irqline_unmask(struct irqline* line)
 {
     if (!line)
-        return -1;
+        return E_INVAL;
 
     list_for_each(each, &line->irqs) {
         irq* p = list_entry(each, irq, node);
@@ -80,7 +80,7 @@ static int irqline_unmask(struct irqline* line)
 static int irqline_add_irq(struct irqline* line, struct irq* p)
 {
     if (!line || !p)
-        return -1;
+        return E_INVAL;
 
     spinlock_lock(line->sp_lock);
     list_add(&p->node, &line->irqs);
@@ -92,7 +92,7 @@ static int irqline_add_irq(struct irqline* line, struct irq* p)
 static int irqline_remove_irq(struct irqline* line, struct irq* p)
 {
     if (!line || !p)
-        return -1;
+        return E_INVAL;
 
     spinlock_lock(line->sp_lock);
     list_del(&p->node);
@@ -104,7 +104,7 @@ static int irqline_remove_irq(struct irqline* line, struct irq* p)
 static int irqline_remove_all(struct irqline* line)
 {
     if (!line)
-        return -1;
+        return E_INVAL;
 
     spinlock_lock(line->sp_lock);
     list_for_each(node, &line->irqs) {
@@ -118,7 +118,7 @@ static int irqline_remove_all(struct irqline* line)
 static int irqline_init(irqline** out_line, uint32_t major)
 {
     if (!out_line || major >= IDT_ENTRIES)
-        return -1;
+        return E_INVAL;
 
     return irqline_alloc(major, out_line);
 }
@@ -184,11 +184,11 @@ static int irq_alloc(uint32_t major, uint32_t minor, const char *name,
     void *context, irq_handler_fn handler, irq **out)
 {
     if (!out)
-        return -1;
+        return E_INVAL;
 
     irq *p = (irq*)kmalloc(sizeof(irq));
     if (!p)
-        return -1;
+        return E_NOMEM;
 
     p->name = name;
     p->context = context;
@@ -198,7 +198,7 @@ static int irq_alloc(uint32_t major, uint32_t minor, const char *name,
     p->enabled = 0;
     p->sp_lock = spinlock_alloc();
     if (!p->sp_lock)
-        return -1;
+        return E_LIMIT;
 
     list_init(&p->node);
 
@@ -220,7 +220,7 @@ int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
                     irq_handler_fn cb, void* cb_param)
 {
     if (!out || major >= IDT_ENTRIES)
-        return -1;
+        return E_INVAL;
 
     int ret = 0;
     int minor_existed = 0;
@@ -228,15 +228,15 @@ int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
     if (minor == IRQ_ANY_MINOR) {
         if (!irqlines[major]) {
             if (irqline_init(&irqlines[major], major) != 0)
-                return -1;
+                return E_IRQ_NOTAVAIL;
         }
         if (!irqlines[major])
-            return -1;
+            return E_INTERNAL;
 
         minor = irqline_find_free_minor(irqlines[major]);
         if (minor == IRQ_ANY_MINOR) {
             KLOG("%s: no free minor on major %d", __FUNCTION__, major);
-            return -1;
+            return E_IRQ_NOTAVAIL;
         }
     }
 
@@ -246,7 +246,7 @@ int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
 
     if (!irqlines[major]) {
         if (irqline_init(&irqlines[major], major) && irqlines[major])
-            return -1;
+            return E_INTERNAL;
     }
     if (irqlines[major]) {
         list_for_each(each, &irqlines[major]->irqs) {
@@ -261,7 +261,7 @@ int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
             KLOG("%s: initialization failed - minor %d already exists", __FUNCTION__, minor);
             irq_release(*out);
             *out = 0;
-            return -1;
+            return E_IRQ_INUSE;
         }
 
         irqline_add_irq(irqlines[major], *out);
@@ -285,7 +285,7 @@ void irq_release(irq *p)
 int irq_mask(struct irq* p)
 {
     if (!p)
-        return -1;
+        return E_INVAL;
 
     spinlock_lock(p->sp_lock);
     p->enabled = 0;
@@ -300,7 +300,7 @@ int irq_mask(struct irq* p)
 int irq_unmask(struct irq* p)
 {
     if (!p)
-        return -1;
+        return E_INVAL;
 
     spinlock_lock(p->sp_lock);
     p->enabled = 1;

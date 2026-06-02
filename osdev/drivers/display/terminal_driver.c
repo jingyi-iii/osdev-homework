@@ -302,7 +302,7 @@ static int terminal_probe(struct device* dev)
 
     term_device.lock = spinlock_alloc();
     if (!term_device.lock)
-        return -1;
+        return E_LIMIT;
 
     term_device.vga_buffer = (uint16_t*)VGA_BUF_ADDR;
 
@@ -445,16 +445,16 @@ void terminal_putchar(char c)
 int terminal_register_cmd(const char* name, terminal_cmd_fn callback)
 {
     if (!name || !callback)
-        return -1;
+        return E_INVAL;
 
     cmd_init();
     if (!cmd_ready)
-        return -1;
+        return E_NOTREADY;
 
     struct terminal_cmd_entry* entry =
         (struct terminal_cmd_entry*)kmalloc(sizeof(*entry));
     if (!entry)
-        return -1;
+        return E_NOMEM;
 
     size_t nlen = str_len(name, CMD_NAME_MAX - 1);
     for (size_t i = 0; i < nlen; i++)

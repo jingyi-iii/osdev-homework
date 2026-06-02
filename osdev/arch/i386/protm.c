@@ -1,4 +1,5 @@
 #include "arch_protm.h"
+#include "kernel/errno.h"
 
 #define GDT_MAX_COUNT   (255)
 static uint64_t gdt[GDT_MAX_COUNT] = { 0 };
@@ -75,7 +76,7 @@ uint16_t arch_get_sel(enum arch_seltype type)
 uint64_t arch_get_desc(enum arch_seltype type)
 {
     if (type < SELTYPE_START || type > SELTYPE_END)
-        return -EINVALID;
+        return E_INVAL;
 
     return gdt[type];
 }
@@ -83,7 +84,7 @@ uint64_t arch_get_desc(enum arch_seltype type)
 int arch_set_desc(enum arch_seltype type, uint64_t val)
 {
     if (type < SELTYPE_START || type > SELTYPE_END)
-        return -EINVALID;
+        return E_INVAL;
 
     gdt[type] = val;
     return 0;

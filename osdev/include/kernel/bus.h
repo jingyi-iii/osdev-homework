@@ -4,6 +4,7 @@
 #include "lib/list.h"
 #include "kernel/device.h"
 #include "kernel/driver.h"
+#include "kernel/errno.h"
 #include "sync/spinlock.h"
 
 struct bus {

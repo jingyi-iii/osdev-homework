@@ -1,4 +1,5 @@
 #include "sync/spinlock.h"
+#include "kernel/errno.h"
 
 #define SPIN_LOCK_MAX_COUNT (1024)
 
@@ -28,7 +29,7 @@ void spinlock_release(spinlock* lock)
 int spinlock_lock(spinlock* lock)
 {
     if (!lock)
-        return -1;
+        return E_INVAL;
 
     while (__atomic_exchange_n(&lock->state, LOCK_LOCKED,
                                __ATOMIC_ACQUIRE) == LOCK_LOCKED) {
@@ -41,7 +42,7 @@ int spinlock_lock(spinlock* lock)
 int spinlock_trylock(spinlock *lock)
 {
     if (!lock)
-        return -1;
+        return E_INVAL;
 
     int expected = LOCK_UNLOCKED;
     return !__atomic_compare_exchange_n(&lock->state, &expected, LOCK_LOCKED,
@@ -51,7 +52,7 @@ int spinlock_trylock(spinlock *lock)
 int spinlock_unlock(spinlock *lock)
 {
     if (!lock)
-        return -1;
+        return E_INVAL;
 
     __atomic_store_n(&lock->state, LOCK_UNLOCKED, __ATOMIC_RELEASE);
     return 0;

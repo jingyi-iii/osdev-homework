@@ -1,5 +1,6 @@
 #include "arch_thread.h"
 #include "lib/string.h"
+#include "kernel/errno.h"
 
 #ifndef KLOG
 #define KLOG(x) 
@@ -18,7 +19,7 @@ int tss_init(void)
     tss_sel = arch_get_sel(TSS);
     if (!tss_sel) {
         KLOG("failed to get TSS selector");
-        return -1;
+        return E_INTERNAL;
     }
 
     tss.ss0 = arch_get_sel(SYS_DATA);
@@ -51,7 +52,7 @@ int arch_thread_context_init(arch_thread_context* context, thread_entry_t entry,
 
     if (!context) {
         KLOG("thread context is null");
-        return -22;
+        return E_INVAL;
     }
 
     // exec/read code segment, 0 ~ 0xfffff
@@ -64,7 +65,7 @@ int arch_thread_context_init(arch_thread_context* context, thread_entry_t entry,
     context->stack = kmalloc(0x1000);    // 4KB stack
     if (!context->stack) {
         KLOG("failed to alloc thread stack");
-        return -1;
+        return E_NOMEM;
     }
     context->regs = (regs_t*)((uint8_t*)context->stack + 0x1000 - sizeof(regs_t));
     context->regs->cs = 0x0 | 0x4 | ring;
@@ -95,7 +96,7 @@ void arch_thread_context_release(arch_thread_context* context)
 int arch_thread_restore_context(arch_thread_context* context)
 {
     if (!context)
-        return -22;
+        return E_INVAL;
 
     if (context->ring)
         tss.esp0 = (uint32_t)context->regs + sizeof(regs_t);

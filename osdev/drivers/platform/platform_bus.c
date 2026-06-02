@@ -57,10 +57,10 @@ static struct bus platform_bus = {0};
 static int platform_match(struct driver *drv, struct device *dev)
 {
     if (!drv || !dev)
-        return -1;
+        return E_INVAL;
 
     if (!drv->type || !dev->type)
-        return -1;
+        return E_INVAL;
 
     return strcmp(drv->type, dev->type);
 }
@@ -79,7 +79,7 @@ void platform_bus_init(void)
 int platform_driver_register(struct driver* drv)
 {
     if (!drv)
-        return -1;
+        return E_INVAL;
 
     return bus_register_driver(&platform_bus, drv);
 }
@@ -87,7 +87,7 @@ int platform_driver_register(struct driver* drv)
 int platform_device_register(struct device* dev)
 {
     if (!dev)
-        return -1;
+        return E_INVAL;
 
     return bus_add_device(&platform_bus, dev);
 }
@@ -95,7 +95,7 @@ int platform_device_register(struct device* dev)
 int platform_driver_unregister(struct driver* drv)
 {
     if (!drv)
-        return -1;
+        return E_INVAL;
     
     return bus_unregister_driver(&platform_bus, drv);
 }
@@ -103,7 +103,7 @@ int platform_driver_unregister(struct driver* drv)
 int platform_device_unregister(struct device* dev)
 {
     if (!dev)
-        return -1;
+        return E_INVAL;
 
     return bus_remove_device(&platform_bus, dev);
 }

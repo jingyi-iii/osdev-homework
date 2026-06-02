@@ -346,11 +346,11 @@ static int kb_remove(struct device *dev)
 int kb_register_callback(kb_callback_fn cb)
 {
     if (!cb)
-        return -1;
+        return E_INVAL;
 
     struct kb_listener* lsn = (struct kb_listener*)kmalloc(sizeof(*lsn));
     if (!lsn)
-        return -1;
+        return E_NOMEM;
 
     lsn->cb = cb;
 

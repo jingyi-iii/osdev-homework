@@ -2,6 +2,7 @@
 #define DRIVER_H
 
 #include "lib/list.h"
+#include "kernel/errno.h"
 
 struct device;
 struct driver {
