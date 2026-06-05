@@ -23,6 +23,11 @@ static DECLARE_HEAD_NODE(thread_head);
 static tcb *thread_run = 0;
 static spinlock* schedule_lock = 0;
 
+/*
+ * find_next_runnable - find the next runnable thread starting from @current.
+ * Caller MUST hold schedule_lock.
+ * Returns the next TS_READY thread, or NULL if none found.
+ */
 static tcb* find_next_runnable(tcb* current)
 {
     if (!current)
@@ -88,24 +93,23 @@ static int32_t t_create(pcb* parent, thread_priv priv, thread_entry_t entry)
     }
 
     thread->parent = parent;
+    thread->tid = tid++;
+
+    spinlock_lock(schedule_lock);
 
     spinlock_lock(parent->sp_lock);
     list_add(&thread->proc_node, &parent->tcbs);
     spinlock_unlock(parent->sp_lock);
 
-    spinlock_lock(schedule_lock);
     list_add(&thread->this_node, &thread_head);
-    spinlock_unlock(schedule_lock);
-
-    thread->tid = tid++;
     thread->state = TS_READY;
 
     if (!thread_run) {    // the first thread
-        spinlock_lock(schedule_lock);
         thread_run = thread;
         arch_thread_restore_context(&thread->context);
-        spinlock_unlock(schedule_lock);
     }
+
+    spinlock_unlock(schedule_lock);
 
     KLOG("add thread, tid %d", thread->tid);
 
@@ -117,6 +121,8 @@ static void t_delete(int32_t tid)
     if (!thread_run)
         return;
 
+    spinlock_lock(schedule_lock);
+
     /* find the target thread */
     tcb* target = 0;
     list_for_each(node, &thread_head) {
@@ -127,8 +133,10 @@ static void t_delete(int32_t tid)
         }
     }
 
-    if (!target)
+    if (!target) {
+        spinlock_unlock(schedule_lock);
         return;
+    }
 
     if (target != thread_run) {
         /* deleting a non-running thread */
@@ -136,13 +144,18 @@ static void t_delete(int32_t tid)
         arch_thread_context_release(&target->context);
         spinlock_unlock(target->sp_lock);
 
-        spinlock_lock(schedule_lock);
         list_del(&target->this_node);
-        spinlock_unlock(schedule_lock);
 
+        /*
+         * Keep schedule_lock held across proc_node removal so that
+         * proc->tcbs is always modified under schedule_lock protection.
+         * Lock ordering: schedule_lock -> parent->sp_lock.
+         */
         spinlock_lock(target->parent->sp_lock);
         list_del(&target->proc_node);
         spinlock_unlock(target->parent->sp_lock);
+
+        spinlock_unlock(schedule_lock);
 
         spinlock_release(target->sp_lock);
         kfree(target);
@@ -151,18 +164,25 @@ static void t_delete(int32_t tid)
         tcb* next = find_next_runnable(thread_run);
         if (!next) {
             KLOG("no more thread to run after deleting thread with tid %d", tid);
+            spinlock_unlock(schedule_lock);
             return;
         }
 
-        spinlock_lock(schedule_lock);
-
-        arch_thread_context_release(&thread_run->context);
-        list_del(&thread_run->this_node);
-        list_del(&thread_run->proc_node);
-
         tcb* old = thread_run;
         thread_run = next;
+
+        /*
+         * Switch curr_thread_ctx to the next thread BEFORE freeing the old
+         * thread's stack.  This closes the window where curr_thread_ctx pointed
+         * to freed memory in case a nested exception fires.
+         */
         arch_thread_restore_context(&next->context);
+
+        /* Now safe to release the old thread's resources */
+        arch_thread_context_release(&old->context);
+        list_del(&old->this_node);
+        list_del(&old->proc_node);
+
         spinlock_release(old->sp_lock);
         kfree(old);
 
@@ -174,6 +194,8 @@ static void t_block(int32_t tid)
 {
     if (!thread_run)
         return;
+
+    spinlock_lock(schedule_lock);
 
     list_for_each(node, &thread_head) {
         tcb* t = list_entry(node, tcb, this_node);
@@ -187,20 +209,22 @@ static void t_block(int32_t tid)
         if (t == thread_run) {
             tcb* next = find_next_runnable(thread_run);
             if (next) {
-                spinlock_lock(schedule_lock);
                 thread_run = next;
                 arch_thread_restore_context(&next->context);
-                spinlock_unlock(schedule_lock);
             }
         }
         break;
     }
+
+    spinlock_unlock(schedule_lock);
 }
 
 static void t_unblock(int32_t tid)
 {
     if (!thread_run)
         return;
+
+    spinlock_lock(schedule_lock);
 
     list_for_each(node, &thread_head) {
         tcb* t = list_entry(node, tcb, this_node);
@@ -212,6 +236,8 @@ static void t_unblock(int32_t tid)
         spinlock_unlock(t->sp_lock);
         break;
     }
+
+    spinlock_unlock(schedule_lock);
 }
 
 static void t_yield(void)
@@ -219,13 +245,15 @@ static void t_yield(void)
     if (!thread_run)
         return;
 
+    spinlock_lock(schedule_lock);
+
     tcb* next = find_next_runnable(thread_run);
     if (next) {
-        spinlock_lock(schedule_lock);
         thread_run = next;
         arch_thread_restore_context(&next->context);
-        spinlock_unlock(schedule_lock);
     }
+
+    spinlock_unlock(schedule_lock);
 }
 
 static int p_create(proc_priv priv, thread_entry_t main_thread_entry)
@@ -260,31 +288,91 @@ static int p_create(proc_priv priv, thread_entry_t main_thread_entry)
 
 static void p_exit(int32_t pid)
 {
+    struct pcb* found = 0;
+    int self_in_proc = 0;
+
+    spinlock_lock(schedule_lock);
+
     list_for_each(node, &proc_head) {
         struct pcb* proc = list_entry(node, struct pcb, this_node);
         if (!proc || proc->pid != pid)
             continue;
 
-        spinlock_lock(proc->sp_lock);
+        found = proc;
+
+        /* Check if the calling thread belongs to this process */
+        if (thread_run && thread_run->parent == proc)
+            self_in_proc = 1;
+
+        /*
+         * Delete all threads belonging to this process.
+         * schedule_lock protects both thread_head and proc->tcbs
+         * (t_create and t_delete also hold schedule_lock when
+         * modifying proc->tcbs).  t->sp_lock is acquired only for
+         * context release; proc->sp_lock is not needed here because
+         * schedule_lock already serializes proc->tcbs accesses.
+         */
         while (!list_empty(&proc->tcbs)) {
             list_node* pos = proc->tcbs.next;
             struct tcb* thread = list_entry(pos, struct tcb, proc_node);
-            t_delete(thread->tid);
+
+            if (thread == thread_run) {
+                /*
+                 * Deleting the currently running thread:
+                 * must switch to another thread first.
+                 */
+                tcb* next = find_next_runnable(thread_run);
+                if (!next) {
+                    KLOG("no more thread to run during proc exit, pid %d", pid);
+                    break;
+                }
+
+                tcb* old = thread_run;
+                thread_run = next;
+                arch_thread_restore_context(&next->context);
+
+                arch_thread_context_release(&old->context);
+                list_del(&old->this_node);
+                list_del(&old->proc_node);
+                spinlock_release(old->sp_lock);
+                kfree(old);
+            } else {
+                spinlock_lock(thread->sp_lock);
+                arch_thread_context_release(&thread->context);
+                spinlock_unlock(thread->sp_lock);
+
+                list_del(&thread->this_node);
+                list_del(&thread->proc_node);
+
+                spinlock_release(thread->sp_lock);
+                kfree(thread);
+            }
         }
-        spinlock_unlock(proc->sp_lock);
 
-        spinlock_lock(schedule_lock);
         list_del(&proc->this_node);
-        spinlock_unlock(schedule_lock);
-
-        spinlock_release(proc->sp_lock);
-        kfree(proc);
         break;
     }
+
+    spinlock_unlock(schedule_lock);
+
+    if (found) {
+        spinlock_release(found->sp_lock);
+        kfree(found);
+    }
+
+    /*
+     * If we just deleted our own thread, it will never return here —
+     * arch_thread_restore_context switched to the next thread.
+     * If we reach this point, we were not deleting our own thread,
+     * or we already switched away and this code is unreachable.
+     */
+    (void)self_in_proc;
 }
 
 static int p_block(int32_t pid)
 {
+    spinlock_lock(schedule_lock);
+
     list_for_each(node, &proc_head) {
         struct pcb* proc = list_entry(node, struct pcb, this_node);
         if (!proc || proc->pid != pid)
@@ -294,6 +382,11 @@ static int p_block(int32_t pid)
         proc->state = PS_PENDING;
         spinlock_unlock(proc->sp_lock);
 
+        /*
+         * Iterate proc->tcbs under schedule_lock protection.
+         * Only t->sp_lock is acquired per thread (never nested with
+         * proc->sp_lock) to avoid ABBA deadlock with t_delete.
+         */
         list_for_each(tcb_node, &proc->tcbs) {
             struct tcb* thread = list_entry(tcb_node, struct tcb, proc_node);
             if (!thread)
@@ -303,13 +396,18 @@ static int p_block(int32_t pid)
             thread->state = TS_PENDING;
             spinlock_unlock(thread->sp_lock);
         }
+
+        break;
     }
 
+    spinlock_unlock(schedule_lock);
     return 0;
 }
 
 static int p_unblock(int32_t pid)
 {
+    spinlock_lock(schedule_lock);
+
     list_for_each(node, &proc_head) {
         struct pcb* proc = list_entry(node, struct pcb, this_node);
         if (!proc || proc->pid != pid)
@@ -319,6 +417,11 @@ static int p_unblock(int32_t pid)
         proc->state = PS_READY;
         spinlock_unlock(proc->sp_lock);
 
+        /*
+         * Iterate proc->tcbs under schedule_lock protection.
+         * Only t->sp_lock is acquired per thread (never nested with
+         * proc->sp_lock) to avoid ABBA deadlock with t_delete.
+         */
         list_for_each(tcb_node, &proc->tcbs) {
             struct tcb* thread = list_entry(tcb_node, struct tcb, proc_node);
             if (!thread)
@@ -328,8 +431,11 @@ static int p_unblock(int32_t pid)
             thread->state = TS_READY;
             spinlock_unlock(thread->sp_lock);
         }
+
+        break;
     }
 
+    spinlock_unlock(schedule_lock);
     return 0;
 }
 
@@ -339,26 +445,44 @@ static void schedule_isr(void* p)
     static uint32_t timeslice = 0;
 
     timeslice++;
-    if (timeslice < 5 || !thread_run)
+    if (timeslice < 5)
         return;
+
+    spinlock_lock(schedule_lock);
+
+    if (!thread_run) {
+        spinlock_unlock(schedule_lock);
+        return;
+    }
+
     timeslice = 0;
 
     tcb* next = find_next_runnable(thread_run);
     if (next) {
-        spinlock_lock(schedule_lock);
         thread_run = next;
         arch_thread_restore_context(&next->context);
-        spinlock_unlock(schedule_lock);
     }
+
+    spinlock_unlock(schedule_lock);
 }
 
 static void syscall_isr(void* data)
 {
     proc_thread_ctrl_config *config = (proc_thread_ctrl_config*)data;
+    tcb* cur;
+
+    /*
+     * Read thread_run into a local variable under schedule_lock to prevent
+     * a race with schedule_isr on another CPU.
+     */
+    spinlock_lock(schedule_lock);
+    cur = thread_run;
+    spinlock_unlock(schedule_lock);
 
     switch (config->cmd) {
     case THREAD_CTRL_CREATE:
-        config->tid = t_create(thread_run->parent, config->priv, config->entry);
+        if (cur)
+            config->tid = t_create(cur->parent, config->priv, config->entry);
         break;
     case THREAD_CTRL_DELETE:
         t_delete(config->tid);
@@ -517,7 +641,8 @@ int proc_unblock(int32_t pid)
 
 int proc_get_pid(void)
 {
-    return thread_run ? thread_run->parent->pid : -1;
+    tcb* cur = thread_run;
+    return cur ? cur->parent->pid : -1;
 }
 
 module_init(proc_env_init);
