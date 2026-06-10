@@ -47,7 +47,7 @@ knl32_entry:
 
         call    kernel_start
 
-        movl    curr_thread_ctx,   %eax
+        movl    curr_task_ctx,   %eax
         movl    (%eax),         %esp
         popl    %gs
         popl    %fs

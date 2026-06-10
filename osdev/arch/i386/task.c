@@ -1,4 +1,4 @@
-#include "arch_thread.h"
+#include "arch_task.h"
 #include "lib/string.h"
 #include "kernel/errno.h"
 
@@ -7,7 +7,7 @@
 #endif
 
 static volatile tss_t tss = {0};
-volatile arch_thread_context* curr_thread_ctx = 0;
+volatile arch_task_context* curr_task_ctx = 0;
 
 // TSS is only used to provide ss0 and esp0 when entering ring0 from non-ring0
 int tss_init(void)
@@ -36,7 +36,7 @@ int tss_init(void)
     return 0;
 }
 
-static inline void ldt_reload(arch_thread_context* context)
+static inline void ldt_reload(arch_task_context* context)
 {
     if (!context)
         return;
@@ -46,12 +46,12 @@ static inline void ldt_reload(arch_thread_context* context)
     arch_reload_ldt(arch_get_sel(LDT));
 }
 
-int arch_thread_context_init(arch_thread_context* context, thread_entry_t entry, thread_priv priv)
+int arch_task_context_init(arch_task_context* context, task_entry_t entry, task_priv priv)
 {
-    uint8_t ring = priv == THREAD_PRIV_KERNEL ? 0 : 3;
+    uint8_t ring = priv == TASK_PRIV_KERNEL ? 0 : 3;
 
     if (!context) {
-        KLOG("thread context is null");
+        KLOG("task context is null");
         return E_INVAL;
     }
 
@@ -64,7 +64,7 @@ int arch_thread_context_init(arch_thread_context* context, thread_entry_t entry,
 
     context->stack = kmalloc(0x1000);    // 4KB stack
     if (!context->stack) {
-        KLOG("failed to alloc thread stack");
+        KLOG("failed to alloc task stack");
         return E_NOMEM;
     }
     context->regs = (regs_t*)((uint8_t*)context->stack + 0x1000 - sizeof(regs_t));
@@ -82,7 +82,7 @@ int arch_thread_context_init(arch_thread_context* context, thread_entry_t entry,
     return 0;
 }
 
-void arch_thread_context_release(arch_thread_context* context)
+void arch_task_context_release(arch_task_context* context)
 {
     if (!context)
         return;
@@ -90,17 +90,17 @@ void arch_thread_context_release(arch_thread_context* context)
     if (context->stack)
         kfree(context->stack);
 
-    memset(context, 0, sizeof(arch_thread_context));
+    memset(context, 0, sizeof(arch_task_context));
 }
 
-int arch_thread_restore_context(arch_thread_context* context)
+int arch_task_restore_context(arch_task_context* context)
 {
     if (!context)
         return E_INVAL;
 
     if (context->ring)
         tss.esp0 = (uint32_t)context->regs + sizeof(regs_t);
-    curr_thread_ctx = context;
-    ldt_reload(curr_thread_ctx);
+    curr_task_ctx = context;
+    ldt_reload(curr_task_ctx);
     return 0;
 }

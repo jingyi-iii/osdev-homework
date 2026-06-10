@@ -2,12 +2,10 @@
 #define PROCESS_H
 
 #include <stdint.h>
-#include "arch_thread.h"
+#include "arch_task.h"
 #include "lib/list.h"
 #include "sync/spinlock.h"
 #include "kernel/errno.h"
-
-typedef void (*thread_entry_t)(void);
 
 typedef enum thread_run_state {
     TS_NULL = 0,
@@ -19,8 +17,8 @@ typedef struct proc_thread_ctrl_config {
     uint8_t cmd;
     int32_t pid;    // out param for create, in param for delete, block and unblock
     int32_t tid;    // out param for create, in param for delete, block and unblock
-    thread_priv priv;
-    thread_entry_t entry;
+    task_priv priv;
+    task_entry_t entry;
 } proc_thread_ctrl_config;
 
 typedef enum proc_priv {
@@ -47,8 +45,8 @@ typedef struct pcb {
 
 /* Thread Control Block */
 typedef struct tcb {
-    arch_thread_context context;
-    thread_entry_t      entry;
+    arch_task_context context;
+    task_entry_t      entry;
     int32_t             tid;
     thread_state        state;
     list_node           this_node;   /* node in global scheduling list */
@@ -62,7 +60,7 @@ void thread_yield(void);
 void thread_block(int32_t tid);
 void thread_unblock(int32_t tid);
 
-void proc_create(proc_priv priv, thread_entry_t entry);
+void proc_create(proc_priv priv, task_entry_t entry);
 void proc_exit(int32_t pid);
 int proc_block(int32_t pid);
 int proc_unblock(int32_t pid);

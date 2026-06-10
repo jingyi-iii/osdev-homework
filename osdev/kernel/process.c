@@ -58,7 +58,7 @@ static tcb* find_next_runnable(tcb* current)
     return 0;
 }
 
-static int32_t t_create(pcb* parent, thread_priv priv, thread_entry_t entry)
+static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
 {
     tcb* thread = 0;
     static uint32_t tid = 0;
@@ -76,7 +76,7 @@ static int32_t t_create(pcb* parent, thread_priv priv, thread_entry_t entry)
         return E_NOMEM;
     }
 
-    if (arch_thread_context_init(&thread->context, entry, priv)) {
+    if (arch_task_context_init(&thread->context, entry, priv)) {
         KLOG("failed to init thread context");
         kfree(thread);
         return E_THREAD_CREATE;
@@ -87,7 +87,7 @@ static int32_t t_create(pcb* parent, thread_priv priv, thread_entry_t entry)
     thread->sp_lock = spinlock_alloc();
     if (!thread->sp_lock) {
         KLOG("failed to alloc spin lock for tcb");
-        arch_thread_context_release(&thread->context);
+        arch_task_context_release(&thread->context);
         kfree(thread);
         return E_LIMIT;
     }
@@ -106,7 +106,7 @@ static int32_t t_create(pcb* parent, thread_priv priv, thread_entry_t entry)
 
     if (!thread_run) {    // the first thread
         thread_run = thread;
-        arch_thread_restore_context(&thread->context);
+        arch_task_restore_context(&thread->context);
     }
 
     spinlock_unlock(schedule_lock);
@@ -141,7 +141,7 @@ static void t_delete(int32_t tid)
     if (target != thread_run) {
         /* deleting a non-running thread */
         spinlock_lock(target->sp_lock);
-        arch_thread_context_release(&target->context);
+        arch_task_context_release(&target->context);
         spinlock_unlock(target->sp_lock);
 
         list_del(&target->this_node);
@@ -172,14 +172,14 @@ static void t_delete(int32_t tid)
         thread_run = next;
 
         /*
-         * Switch curr_thread_ctx to the next thread BEFORE freeing the old
-         * thread's stack.  This closes the window where curr_thread_ctx pointed
+         * Switch curr_task_ctx to the next thread BEFORE freeing the old
+         * thread's stack.  This closes the window where curr_task_ctx pointed
          * to freed memory in case a nested exception fires.
          */
-        arch_thread_restore_context(&next->context);
+        arch_task_restore_context(&next->context);
 
         /* Now safe to release the old thread's resources */
-        arch_thread_context_release(&old->context);
+        arch_task_context_release(&old->context);
         list_del(&old->this_node);
         list_del(&old->proc_node);
 
@@ -210,7 +210,7 @@ static void t_block(int32_t tid)
             tcb* next = find_next_runnable(thread_run);
             if (next) {
                 thread_run = next;
-                arch_thread_restore_context(&next->context);
+                arch_task_restore_context(&next->context);
             }
         }
         break;
@@ -250,13 +250,13 @@ static void t_yield(void)
     tcb* next = find_next_runnable(thread_run);
     if (next) {
         thread_run = next;
-        arch_thread_restore_context(&next->context);
+        arch_task_restore_context(&next->context);
     }
 
     spinlock_unlock(schedule_lock);
 }
 
-static int p_create(proc_priv priv, thread_entry_t main_thread_entry)
+static int p_create(proc_priv priv, task_entry_t main_thread_entry)
 {
     static uint32_t pid = 0;
 
@@ -283,7 +283,7 @@ static int p_create(proc_priv priv, thread_entry_t main_thread_entry)
     list_add(&proc->this_node, &proc_head);
     spinlock_unlock(schedule_lock);
 
-    return t_create(proc, (thread_priv)priv, main_thread_entry);
+    return t_create(proc, (task_priv)priv, main_thread_entry);
 }
 
 static void p_exit(int32_t pid)
@@ -329,16 +329,16 @@ static void p_exit(int32_t pid)
 
                 tcb* old = thread_run;
                 thread_run = next;
-                arch_thread_restore_context(&next->context);
+                arch_task_restore_context(&next->context);
 
-                arch_thread_context_release(&old->context);
+                arch_task_context_release(&old->context);
                 list_del(&old->this_node);
                 list_del(&old->proc_node);
                 spinlock_release(old->sp_lock);
                 kfree(old);
             } else {
                 spinlock_lock(thread->sp_lock);
-                arch_thread_context_release(&thread->context);
+                arch_task_context_release(&thread->context);
                 spinlock_unlock(thread->sp_lock);
 
                 list_del(&thread->this_node);
@@ -362,7 +362,7 @@ static void p_exit(int32_t pid)
 
     /*
      * If we just deleted our own thread, it will never return here —
-     * arch_thread_restore_context switched to the next thread.
+     * arch_task_restore_context switched to the next thread.
      * If we reach this point, we were not deleting our own thread,
      * or we already switched away and this code is unreachable.
      */
@@ -460,7 +460,7 @@ static void schedule_isr(void* p)
     tcb* next = find_next_runnable(thread_run);
     if (next) {
         thread_run = next;
-        arch_thread_restore_context(&next->context);
+        arch_task_restore_context(&next->context);
     }
 
     spinlock_unlock(schedule_lock);
@@ -577,7 +577,7 @@ void thread_unblock(int32_t tid)
     arch_syscall(0, &config);
 }
 
-int32_t thread_create(thread_priv priv, thread_entry_t entry)
+int32_t thread_create(task_priv priv, task_entry_t entry)
 {
     proc_thread_ctrl_config config = {0};
     config.cmd = THREAD_CTRL_CREATE;
@@ -598,7 +598,7 @@ void thread_exit(int32_t tid)
     arch_syscall(0, &config);
 }
 
-void proc_create(proc_priv priv, thread_entry_t entry)
+void proc_create(proc_priv priv, task_entry_t entry)
 {
     proc_thread_ctrl_config config = {0};
     config.cmd = PROC_CTRL_CREATE;

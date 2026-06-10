@@ -1,5 +1,5 @@
-#ifndef __ARCH_THREAD_H
-#define __ARCH_THREAD_H
+#ifndef __ARCH_TASK_H
+#define __ARCH_TASK_H
 
 #include "arch_protm.h"
 #include "mm/heap.h"
@@ -54,22 +54,22 @@ typedef struct tss {
     uint16_t iobase;
 } __attribute__((packed)) tss_t;
 
-typedef void (*thread_entry_t)(void);
+typedef void (*task_entry_t)(void);
 
-typedef enum thread_priv {
-    THREAD_PRIV_KERNEL = 0,
-    THREAD_PRIV_USER,
-} thread_priv;
+typedef enum task_priv {
+    TASK_PRIV_KERNEL = 0,
+    TASK_PRIV_USER,
+} task_priv;
 
-typedef struct arch_thread_context {
+typedef struct arch_task_context {
     regs_t*         regs;
     uint32_t        ldts[4];    // 64 bits for each ldt entry
     void*           stack;
     uint8_t         ring;
-} arch_thread_context;
+} arch_task_context;
 
 int tss_init(void);
-int arch_thread_context_init(arch_thread_context* context, thread_entry_t entry, thread_priv priv);
-void arch_thread_context_release(arch_thread_context* context);
-int arch_thread_restore_context(arch_thread_context* context);
+int arch_task_context_init(arch_task_context* context, task_entry_t entry, task_priv priv);
+void arch_task_context_release(arch_task_context* context);
+int arch_task_restore_context(arch_task_context* context);
 #endif
