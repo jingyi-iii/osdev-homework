@@ -405,8 +405,10 @@ void terminal_write(const char* str)
     if (!str)
         return;
 
-    struct terminal_device* dev = &term_device;
-    terminal_write_at_str(str, dev->curr_color, dev->curr_col, dev->curr_row);
+    while (*str) {
+        terminal_putchar(*str);
+        str++;
+    }
 }
 
 void terminal_putchar(char c)

@@ -677,5 +677,5 @@ static void graphics_module_exit(void)
     platform_driver_unregister(&graphics_driver);
 }
 
-module_init(graphics_module_init);
-module_exit(graphics_module_exit);
+// module_init(graphics_module_init);
+// module_exit(graphics_module_exit);

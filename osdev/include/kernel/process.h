@@ -55,6 +55,7 @@ typedef struct tcb {
     struct pcb*         parent;
 } tcb;
 
+int32_t thread_create(task_priv priv, task_entry_t entry);
 void thread_exit(int32_t tid);
 void thread_yield(void);
 void thread_block(int32_t tid);
