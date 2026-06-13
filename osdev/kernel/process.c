@@ -5,6 +5,7 @@
 #include "lib/string.h"
 #include "drivers/log_driver.h"
 #include "kernel/irq.h"
+#include "kernel/mailbox.h"
 
 enum proc_thread_ctrl {
     THREAD_CTRL_CREATE = 0,
@@ -19,9 +20,9 @@ enum proc_thread_ctrl {
 };
 
 static DECLARE_HEAD_NODE(proc_head);
-static DECLARE_HEAD_NODE(thread_head);
+DECLARE_HEAD_NODE(thread_head);
 static tcb *thread_run = 0;
-static spinlock* schedule_lock = 0;
+spinlock* schedule_lock = 0;
 
 /*
  * find_next_runnable - find the next runnable thread starting from @current.
@@ -110,6 +111,10 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
     }
 
     spinlock_unlock(schedule_lock);
+    
+#ifdef PROCESS_SUPPORT_MAILBOX
+    thread->mailbox = mailbox_alloc(thread->parent->pid, thread->tid);
+#endif
 
     KLOG("add thread, tid %d", thread->tid);
 
@@ -158,6 +163,9 @@ static void t_delete(int32_t tid)
         spinlock_unlock(schedule_lock);
 
         spinlock_release(target->sp_lock);
+#ifdef PROCESS_SUPPORT_MAILBOX
+        mailbox_release(target->mailbox);
+#endif
         kfree(target);
     } else {
         /* deleting the running thread: switch to next runnable first */
@@ -184,6 +192,9 @@ static void t_delete(int32_t tid)
         list_del(&old->proc_node);
 
         spinlock_release(old->sp_lock);
+#ifdef PROCESS_SUPPORT_MAILBOX
+        mailbox_release(old->mailbox);
+#endif
         kfree(old);
 
         spinlock_unlock(schedule_lock);
@@ -596,6 +607,30 @@ void thread_exit(int32_t tid)
     config.tid = tid;
 
     arch_syscall(0, &config);
+}
+
+int thread_get_tid(void)
+{
+    tcb* cur = thread_run;
+    return cur ? cur->tid : -1;
+}
+
+tcb* thread_get_by_tid(int32_t tid)
+{
+    tcb* target = 0;
+
+    spinlock_lock(schedule_lock);
+
+    list_for_each(node, &thread_head) {
+        tcb* t = list_entry(node, tcb, this_node);
+        if (t->tid == tid) {
+            target = t;
+            break;
+        }
+    }
+
+    spinlock_unlock(schedule_lock);
+    return target;
 }
 
 void proc_create(proc_priv priv, task_entry_t entry)

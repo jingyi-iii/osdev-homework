@@ -7,6 +7,8 @@
 #include "sync/spinlock.h"
 #include "kernel/errno.h"
 
+#define PROCESS_SUPPORT_MAILBOX
+
 typedef enum thread_run_state {
     TS_NULL = 0,
     TS_READY,
@@ -46,13 +48,16 @@ typedef struct pcb {
 /* Thread Control Block */
 typedef struct tcb {
     arch_task_context context;
-    task_entry_t      entry;
+    task_entry_t        entry;
     int32_t             tid;
     thread_state        state;
     list_node           this_node;   /* node in global scheduling list */
     list_node           proc_node;   /* node in parent->tcbs list */
     spinlock*           sp_lock;
     struct pcb*         parent;
+#ifdef PROCESS_SUPPORT_MAILBOX
+    struct mailbox*     mailbox;
+#endif
 } tcb;
 
 int32_t thread_create(task_priv priv, task_entry_t entry);
@@ -60,11 +65,17 @@ void thread_exit(int32_t tid);
 void thread_yield(void);
 void thread_block(int32_t tid);
 void thread_unblock(int32_t tid);
+int thread_get_tid(void);
+tcb* thread_get_by_tid(int32_t tid);
 
 void proc_create(proc_priv priv, task_entry_t entry);
 void proc_exit(int32_t pid);
 int proc_block(int32_t pid);
 int proc_unblock(int32_t pid);
 int proc_get_pid(void);
+
+/* Exported for mailbox broadcast — must be held when iterating thread_head */
+extern list_node thread_head;
+extern spinlock* schedule_lock;
 
 #endif
