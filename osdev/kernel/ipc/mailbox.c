@@ -2,8 +2,11 @@
 #include "mm/heap.h"
 #include "lib/string.h"
 #include "kernel/errno.h"
+#include "arch_irq.h"
+#include "kernel/irq.h"
+#include "lib/module.h"
 
-mail* mailbox_alloc_mail(void)
+static mail* alloc_mail(void)
 {
     static size_t unique_id = 0;
 
@@ -25,7 +28,7 @@ mail* mailbox_alloc_mail(void)
     return m;
 }
 
-void mailbox_release_mail(mail* m)
+static void release_mail(mail* m)
 {
     if (m) {
         spinlock_lock(m->sp_lock);
@@ -41,7 +44,7 @@ void mailbox_release_mail(mail* m)
     }
 }
 
-mailbox* mailbox_alloc(int owner_pid, int owner_tid)
+mailbox* alloc_mailbox(int owner_pid, int owner_tid)
 {
     mailbox* mb = (mailbox*)kmalloc(sizeof(mailbox));
     if (!mb)
@@ -61,7 +64,7 @@ mailbox* mailbox_alloc(int owner_pid, int owner_tid)
     return mb;
 }
 
-void mailbox_release(mailbox* mb)
+void release_mailbox(mailbox* mb)
 {
     if (mb) {
         spinlock_lock(mb->sp_lock);
@@ -70,7 +73,7 @@ void mailbox_release(mailbox* mb)
         while (!list_empty(&mb->mails)) {
             mail* m = list_entry(mb->mails.prev, mail, this_node);
             list_del(&m->this_node);
-            mailbox_release_mail(m);
+            release_mail(m);
         }
 
         /* Release all registered handlers */
@@ -95,25 +98,32 @@ static int send_mail(mailbox* mb, mail* m)
     spinlock_lock(mb->sp_lock);
     if (!list_empty(&mb->handlers)) {
         /*
-         * Deliver to all registered handlers.
-         * Each handler is responsible for calling mailbox_release_mail(m)
-         * when it is done with the mail.
+         * Deliver to all registered handlers synchronously.
+         * Handlers run in ISR context and must NOT call release_mail().
+         * send_mail() releases one reference after all handlers return,
+         * consuming exactly one ref_count per mailbox delivery
+         * regardless of how many handlers are registered.
          */
         list_for_each(pos, &mb->handlers) {
             mailhander* mh = list_entry(pos, mailhander, this_node);
             if (mh->handler)
                 mh->handler(m);
         }
+        spinlock_unlock(mb->sp_lock);
+
+        /* All handlers have run; consume one reference for this delivery. */
+        release_mail(m);
+        return 0;
     } else {
         /* No handler: queue the mail for later retrieval via mailbox_listen */
         list_add(&m->this_node, &mb->mails);
+        spinlock_unlock(mb->sp_lock);
     }
-    spinlock_unlock(mb->sp_lock);
 
     return 0;
 }
 
-int mailbox_send(mail* m)
+static int send(mail* m)
 {
     if (!m)
         return -EINVAL;
@@ -121,28 +131,48 @@ int mailbox_send(mail* m)
     if (m->receiver_pid == MAIL_ANY_PID || m->receiver_tid == MAIL_ANY_TID) {
         /*
          * Broadcast: deliver to all threads that have a mailbox.
-         * ref_count tracks how many deliveries are outstanding.
-         * Each handler must call mailbox_release_mail() to decrement.
+         * ref_count tracks how many deliveries are outstanding:
+         *   - one per handler-having mailbox (consumed by send_mail)
+         *   - one for the sender (consumed by release_mail at end)
+         * Handlers run synchronously and must NOT call release_mail().
          * For threads without handlers, a clone is queued instead.
          */
-        int recipients = 0;
+        int handler_recipients = 0;
+        int has_any_mailbox = 0;
 
         spinlock_lock(schedule_lock);
 
-        /* First pass: count threads with mailboxes */
+        /*
+         * First pass: count only threads whose mailboxes have handlers.
+         * Threads without handlers receive clones, which are independent
+         * and do not affect the original mail's ref_count.
+         */
         list_for_each(node, &thread_head) {
             tcb* t = list_entry(node, tcb, this_node);
-            if (t && t->mailbox)
-                recipients++;
+            if (!t || !t->mailbox)
+                continue;
+
+            has_any_mailbox = 1;
+
+            spinlock_lock(t->mailbox->sp_lock);
+            if (!list_empty(&t->mailbox->handlers))
+                handler_recipients++;
+            spinlock_unlock(t->mailbox->sp_lock);
         }
 
-        if (recipients == 0) {
+        if (!has_any_mailbox) {
             spinlock_unlock(schedule_lock);
-            mailbox_release_mail(m);
+            release_mail(m);
             return 0;
         }
 
-        m->ref_count = recipients;
+        /*
+         * ref_count accounts for:
+         *   - one reference per handler-having mailbox (consumed by
+         *     send_mail's internal release_mail after handlers return)
+         *   - one extra reference for the sender (consumed by release_mail below)
+         */
+        m->ref_count = handler_recipients + 1;
 
         /* Second pass: deliver to each recipient */
         list_for_each(node, &thread_head) {
@@ -156,15 +186,17 @@ int mailbox_send(mail* m)
             spinlock_unlock(t->mailbox->sp_lock);
 
             if (has_handler) {
-                /* Handler will call mailbox_release_mail(m) → ref_count-- */
+                /* send_mail() calls handlers then release_mail(m) */
                 send_mail(t->mailbox, m);
             } else {
                 /*
                  * No handler: clone the mail so each queue gets its own copy.
                  * The clone has ref_count = 1; the listener's eventual
-                 * mailbox_release_mail will free it.
+                 * release_mail will free it.
+                 * The original mail's ref_count is unaffected — clones are
+                 * independent mail objects.
                  */
-                mail* clone = mailbox_alloc_mail();
+                mail* clone = alloc_mail();
                 if (clone) {
                     memcpy(clone->data, m->data, sizeof(m->data));
                     clone->data_size = m->data_size;
@@ -177,19 +209,17 @@ int mailbox_send(mail* m)
                     list_add(&clone->this_node, &t->mailbox->mails);
                     spinlock_unlock(t->mailbox->sp_lock);
                 }
-                /* One fewer outstanding reference for the original mail */
-                m->ref_count--;
             }
         }
 
         spinlock_unlock(schedule_lock);
 
         /* Release the sender's reference */
-        mailbox_release_mail(m);
+        release_mail(m);
     } else {
         tcb* receiver = thread_get_by_tid(m->receiver_tid);
         if (!receiver || !receiver->mailbox) {
-            mailbox_release_mail(m);
+            release_mail(m);
             return E_NOTFOUND;
         }
         return send_mail(receiver->mailbox, m);
@@ -198,11 +228,11 @@ int mailbox_send(mail* m)
     return 0;
 }
 
-mail* mailbox_listen(mailbox* mb)
+static mail* try_get_mail(mailbox* mb)
 {
     if (!mb)
         return 0;
-    
+
     spinlock_lock(mb->sp_lock);
     if (list_empty(&mb->mails)) {
         spinlock_unlock(mb->sp_lock);
@@ -212,11 +242,28 @@ mail* mailbox_listen(mailbox* mb)
     mail* m = list_entry(mb->mails.prev, mail, this_node);
     list_del(&m->this_node);
     spinlock_unlock(mb->sp_lock);
-    
+
     return m;
 }
 
-int mailbox_register_handler(mailbox* mb, mail_handler handler)
+static mail* listen(mailbox* mb)
+{
+    if (!mb)
+        return 0;
+    
+    for ( ;; ) {
+        mail* m = try_get_mail(mb);
+        if (m)
+            return m;
+
+        /* No mail: yield to allow senders to run and deliver mails */
+        thread_yield();
+    }
+    
+    return 0;
+}
+
+static int register_handler(mailbox* mb, mail_handler handler)
 {
     if (!mb || !handler)
         return -EINVAL;
@@ -235,7 +282,7 @@ int mailbox_register_handler(mailbox* mb, mail_handler handler)
     return 0;
 }
 
-int mailbox_unregister_handler(mailbox* mb, mail_handler handler)
+static int unregister_handler(mailbox* mb, mail_handler handler)
 {
     if (!mb || !handler)
         return -EINVAL;
@@ -255,3 +302,155 @@ int mailbox_unregister_handler(mailbox* mb, mail_handler handler)
     return 0;
 }
 
+/*
+ * Mailbox syscall layer
+ */
+#define MAILBOX_SYSCALL_MINOR   (3)
+
+static irq* mailbox_syscall_irq = 0;
+
+static void mailbox_syscall_isr(void* data)
+{
+    mailbox_ctrl_config* config = (mailbox_ctrl_config*)data;
+    if (!config)
+        return;
+
+    switch (config->cmd) {
+    case MAILBOX_CTRL_SEND:
+        config->ret = send(config->m);
+        break;
+    case MAILBOX_CTRL_LISTEN:
+        config->m = listen(config->mb);
+        config->ret = (config->m != 0) ? 0 : -1;
+        break;
+    case MAILBOX_CTRL_REGISTER_HANDLER:
+        config->ret = register_handler(config->mb, config->handler);
+        break;
+    case MAILBOX_CTRL_UNREGISTER_HANDLER:
+        config->ret = unregister_handler(config->mb, config->handler);
+        break;
+    case MAILBOX_CTRL_ALLOC_MAIL:
+        config->m = alloc_mail();
+        config->ret = (config->m != 0) ? 0 : -ENOMEM;
+        break;
+    case MAILBOX_CTRL_RELEASE_MAIL:
+        release_mail(config->m);
+        config->ret = 0;
+        break;
+    case MAILBOX_CTRL_ALLOC:
+        config->mb = alloc_mailbox(config->pid, config->tid);
+        config->ret = (config->mb != 0) ? 0 : -ENOMEM;
+        break;
+    case MAILBOX_CTRL_RELEASE:
+        release_mailbox(config->mb);
+        config->ret = 0;
+        break;
+    default:
+        config->ret = -EINVAL;
+        break;
+    }
+}
+
+void mailbox_syscall_init(void)
+{
+    irq_request(&mailbox_syscall_irq, "mailbox_syscall", 100,
+                MAILBOX_SYSCALL_MINOR, mailbox_syscall_isr, 0);
+    if (mailbox_syscall_irq)
+        irq_unmask(mailbox_syscall_irq);
+}
+
+void mailbox_syscall_exit(void)
+{
+    if (mailbox_syscall_irq) {
+        irq_mask(mailbox_syscall_irq);
+        irq_release(mailbox_syscall_irq);
+        mailbox_syscall_irq = 0;
+    }
+}
+
+mail* mailbox_alloc_mail(void)
+{
+    mailbox_ctrl_config config = {0};
+    config.cmd = MAILBOX_CTRL_ALLOC_MAIL;
+
+    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+
+    return config.m;
+}
+
+void mailbox_release_mail(mail* m)
+{
+    mailbox_ctrl_config config = {0};
+    config.cmd = MAILBOX_CTRL_RELEASE_MAIL;
+    config.m = m;
+
+    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+}
+
+mailbox* mailbox_alloc(int owner_pid, int owner_tid)
+{
+    mailbox_ctrl_config config = {0};
+    config.cmd = MAILBOX_CTRL_ALLOC;
+    config.pid = owner_pid;
+    config.tid = owner_tid;
+
+    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+
+    return config.mb;
+}
+
+void mailbox_release(mailbox* mb)
+{
+    mailbox_ctrl_config config = {0};
+    config.cmd = MAILBOX_CTRL_RELEASE;
+    config.mb = mb;
+
+    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+}
+
+
+int mailbox_send(mail* m)
+{
+    mailbox_ctrl_config config = {0};
+    config.cmd = MAILBOX_CTRL_SEND;
+    config.m = m;
+
+    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+
+    return config.ret;
+}
+
+mail* mailbox_listen(mailbox* mb)
+{
+    mailbox_ctrl_config config = {0};
+    config.cmd = MAILBOX_CTRL_LISTEN;
+    config.mb = mb;
+
+    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+
+    return config.m;
+}
+
+int mailbox_register_handler(mailbox* mb, mail_handler handler)
+{
+    mailbox_ctrl_config config = {0};
+    config.cmd = MAILBOX_CTRL_REGISTER_HANDLER;
+    config.mb = mb;
+    config.handler = handler;
+
+    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+
+    return config.ret;
+}
+
+int mailbox_unregister_handler(mailbox* mb, mail_handler handler)
+{
+    mailbox_ctrl_config config = {0};
+    config.cmd = MAILBOX_CTRL_UNREGISTER_HANDLER;
+    config.mb = mb;
+    config.handler = handler;
+
+    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+
+    return config.ret;
+}

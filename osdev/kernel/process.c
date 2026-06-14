@@ -7,6 +7,9 @@
 #include "kernel/irq.h"
 #include "kernel/mailbox.h"
 
+extern mailbox* alloc_mailbox(int owner_pid, int owner_tid);
+extern void release_mailbox(mailbox* mb);
+
 enum proc_thread_ctrl {
     THREAD_CTRL_CREATE = 0,
     THREAD_CTRL_DELETE,
@@ -113,7 +116,7 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
     spinlock_unlock(schedule_lock);
     
 #ifdef PROCESS_SUPPORT_MAILBOX
-    thread->mailbox = mailbox_alloc(thread->parent->pid, thread->tid);
+    thread->mailbox = alloc_mailbox(thread->parent->pid, thread->tid);
 #endif
 
     KLOG("add thread, tid %d", thread->tid);
@@ -164,7 +167,7 @@ static void t_delete(int32_t tid)
 
         spinlock_release(target->sp_lock);
 #ifdef PROCESS_SUPPORT_MAILBOX
-        mailbox_release(target->mailbox);
+        release_mailbox(target->mailbox);
 #endif
         kfree(target);
     } else {
@@ -193,7 +196,7 @@ static void t_delete(int32_t tid)
 
         spinlock_release(old->sp_lock);
 #ifdef PROCESS_SUPPORT_MAILBOX
-        mailbox_release(old->mailbox);
+        release_mailbox(old->mailbox);
 #endif
         kfree(old);
 
@@ -543,6 +546,10 @@ static void proc_env_init(void)
     irq_request(&syscall_irq, "proc_syscall", 100, 0, syscall_isr, 0);
     if (syscall_irq)
         irq_unmask(syscall_irq);
+
+#ifdef PROCESS_SUPPORT_MAILBOX
+    mailbox_syscall_init();
+#endif
 }
 
 static void proc_env_exit(void)
@@ -559,6 +566,10 @@ static void proc_env_exit(void)
         irq_mask(syscall_irq);
         irq_release(syscall_irq);
     }
+
+#ifdef PROCESS_SUPPORT_MAILBOX
+    mailbox_syscall_exit();
+#endif
 }
 
 /* Syscall Interfaces */
