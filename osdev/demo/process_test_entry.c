@@ -17,8 +17,9 @@
 /* Test entry points (defined in demo/) */
 extern void thread_api_test_main(void);
 extern void process_api_test_main(void);
+extern void mailbox_api_test_main(void);
 
-/* Menu state: 0 = waiting, 1 = thread tests, 2 = process tests */
+/* Menu state: 0 = waiting, 1 = thread tests, 2 = process tests, 3 = mailbox tests */
 static volatile int menu_choice = 0;
 
 /*
@@ -30,9 +31,6 @@ static volatile int menu_choice = 0;
  */
 volatile int test_finished_flag = 0;
 
-/* ------------------------------------------------------------------ *
- *  Keyboard handler — intercepts '1' and '2' for menu navigation     *
- * ------------------------------------------------------------------ */
 static void menu_kb_handler(const char* data, size_t size)
 {
     (void)size;
@@ -41,6 +39,7 @@ static void menu_kb_handler(const char* data, size_t size)
     char key = data[0];
     if (key == '1') menu_choice = 1;
     if (key == '2') menu_choice = 2;
+    if (key == '3') menu_choice = 3;
 }
 
 /* ------------------------------------------------------------------ *
@@ -65,7 +64,12 @@ static void draw_menu(void)
     terminal_write("      proc_block / proc_unblock\n");
     terminal_write("      proc_get_pid\n");
     terminal_write("\n");
-    terminal_write("  Press 1 or 2 to select a test suite\n");
+    terminal_write("  [3] Mailbox API Test Suite\n");
+    terminal_write("      mailbox_send / mailbox_listen\n");
+    terminal_write("      mailbox_register_handler\n");
+    terminal_write("      broadcast (MAIL_ANY_TID)\n");
+    terminal_write("\n");
+    terminal_write("  Press 1, 2 or 3 to select a test suite\n");
 }
 
 /* ------------------------------------------------------------------ *
@@ -91,9 +95,12 @@ void process_test_main_thread(void)
         if (menu_choice == 1) {
             terminal_write("\n--- Launching Thread API Test Suite ---\n\n");
             proc_create(PROC_PRIV_KERNEL, thread_api_test_main);
-        } else {
+        } else if (menu_choice == 2) {
             terminal_write("\n--- Launching Process API Test Suite ---\n\n");
             proc_create(PROC_PRIV_KERNEL, process_api_test_main);
+        } else {
+            terminal_write("\n--- Launching Mailbox API Test Suite ---\n\n");
+            proc_create(PROC_PRIV_KERNEL, mailbox_api_test_main);
         }
 
         /*
