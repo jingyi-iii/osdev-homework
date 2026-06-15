@@ -44,7 +44,9 @@ void terminal_flush(const char* unused);
 void terminal_write_at(char chr, uint8_t color, size_t x, size_t y);
 void terminal_write_at_str(const char* str, uint8_t color, size_t x, size_t y);
 void terminal_write(const char* str);
+void terminal_write_color(const char* str, uint8_t color);
 void terminal_putchar(char c);
+size_t terminal_get_row(void);
 
 typedef void (*terminal_cmd_fn)(const char* args);
 int terminal_register_cmd(const char* name, terminal_cmd_fn callback);

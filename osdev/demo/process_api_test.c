@@ -54,16 +54,27 @@ static void term_write_int(const char* prefix, int val)
  * ------------------------------------------------------------------ */
 static void term_pass(const char* test_name)
 {
-    terminal_write("[PASS] ");
+    terminal_write_color("[PASS] ", to_vga_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
     terminal_write(test_name);
     terminal_write("\n");
 }
 
 static void term_fail(const char* test_name)
 {
-    terminal_write("[FAIL] ");
+    terminal_write_color("[FAIL] ", to_vga_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
     terminal_write(test_name);
     terminal_write("\n");
+}
+
+/* ------------------------------------------------------------------ *
+ *  Helper: flush screen if nearly full                                *
+ * ------------------------------------------------------------------ */
+static void check_flush(void)
+{
+    if (terminal_get_row() >= 12) {
+        timer_delay_ms(1500);
+        terminal_flush(0);
+    }
 }
 
 /* ================================================================== *
@@ -105,6 +116,8 @@ void process_api_test_main(void)
      * -------------------------------------------------------------- */
     int my_pid = -1;
     {
+        check_flush();
+        terminal_write("\n");
         my_pid = proc_get_pid();
         terminal_write("[TEST 1] proc_get_pid() => ");
         term_write_int("", my_pid);
@@ -112,12 +125,15 @@ void process_api_test_main(void)
             term_pass("proc_get_pid");
         else
             term_fail("proc_get_pid");
+        timer_delay_ms(1000);
     }
 
     /* -------------------------------------------------------------- *
      *  Test 2 — proc_create                                          *
      * -------------------------------------------------------------- */
     {
+        check_flush();
+        terminal_write("\n");
         terminal_write("[TEST 2] proc_create() — spawning child process...\n");
         proc_create(PROC_PRIV_KERNEL, child_proc_main);
 
@@ -127,9 +143,11 @@ void process_api_test_main(void)
         }
         term_write_int("[TEST 2] Child PID = ", g_child_pid);
         term_pass("proc_create");
+        timer_delay_ms(1000);
     }
 
     /* Let the child run a couple of iterations so we can see its output */
+    check_flush();
     terminal_write("[MAIN] Yielding to let child run a bit...\n");
     for (int i = 0; i < 3; i++) {
         thread_yield();
@@ -139,6 +157,8 @@ void process_api_test_main(void)
      *  Test 3 — proc_block                                           *
      * -------------------------------------------------------------- */
     {
+        check_flush();
+        terminal_write("\n");
         int cpid = g_child_pid;
         terminal_write("[TEST 3] proc_block() — blocking child process...\n");
         proc_block(cpid);
@@ -150,15 +170,19 @@ void process_api_test_main(void)
          */
         terminal_write("[TEST 3] Yielding: child should stay silent...\n");
         for (int i = 0; i < 4; i++) {
+            if (i == 2) check_flush();
             terminal_write("[MAIN] yield (child blocked)\n");
             thread_yield();
         }
+        timer_delay_ms(1000);
     }
 
     /* -------------------------------------------------------------- *
      *  Test 4 — proc_unblock                                         *
      * -------------------------------------------------------------- */
     {
+        check_flush();
+        terminal_write("\n");
         int cpid = g_child_pid;
         terminal_write("[TEST 4] proc_unblock() — unblocking child...\n");
         proc_unblock(cpid);
@@ -167,9 +191,11 @@ void process_api_test_main(void)
         /* Yield so the child can resume its iterations */
         terminal_write("[TEST 4] Yielding: child should resume...\n");
         for (int i = 0; i < 8; i++) {
+            if (i == 4) check_flush();
             terminal_write("[MAIN] yield\n");
             thread_yield();
         }
+        timer_delay_ms(1000);
     }
 
     /* -------------------------------------------------------------- *

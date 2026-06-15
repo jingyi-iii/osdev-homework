@@ -122,16 +122,27 @@ static void term_write_int(const char* prefix, int val)
 
 static void term_pass(const char* test_name)
 {
-    terminal_write("[PASS] ");
+    terminal_write_color("[PASS] ", to_vga_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
     terminal_write(test_name);
     terminal_write("\n");
 }
 
 static void term_fail(const char* test_name)
 {
-    terminal_write("[FAIL] ");
+    terminal_write_color("[FAIL] ", to_vga_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
     terminal_write(test_name);
     terminal_write("\n");
+}
+
+/* ------------------------------------------------------------------ *
+ *  Helper: flush screen if nearly full                                *
+ * ------------------------------------------------------------------ */
+static void check_flush(void)
+{
+    if (terminal_get_row() >= 12) {
+        timer_delay_ms(1500);
+        terminal_flush(0);
+    }
 }
 
 /* ================================================================== *
@@ -149,6 +160,8 @@ void mailbox_api_test_main(void)
      *  Test 1 — mailbox_alloc_mail / mailbox_release_mail             *
      * -------------------------------------------------------------- */
     {
+        check_flush();
+        terminal_write("\n");
         terminal_write("[TEST 1] mailbox_alloc_mail / mailbox_release_mail\n");
         mail* m = mailbox_alloc_mail();
         if (m) {
@@ -165,12 +178,15 @@ void mailbox_api_test_main(void)
         } else {
             term_fail("mailbox_alloc_mail returned NULL");
         }
+        timer_delay_ms(1000);
     }
 
     /* -------------------------------------------------------------- *
      *  Test 2 — mailbox_alloc / mailbox_release                       *
      * -------------------------------------------------------------- */
     {
+        check_flush();
+        terminal_write("\n");
         terminal_write("[TEST 2] mailbox_alloc / mailbox_release\n");
         mailbox* mb = mailbox_alloc(my_pid, 0);
         if (mb) {
@@ -180,6 +196,7 @@ void mailbox_api_test_main(void)
         } else {
             term_fail("mailbox_alloc returned NULL");
         }
+        timer_delay_ms(1000);
     }
 
     /* -------------------------------------------------------------- *
@@ -192,6 +209,8 @@ void mailbox_api_test_main(void)
      *  We use thread_block / thread_unblock to sequence this safely.   *
      * -------------------------------------------------------------- */
     {
+        check_flush();
+        terminal_write("\n");
         terminal_write("[TEST 3] Send + Listen (queue path)\n");
         reset_handler_state();
 
@@ -247,13 +266,17 @@ void mailbox_api_test_main(void)
 
         /* Clean up the listener thread */
         thread_exit(listener_tid);
-        skip_test3: ;
+        skip_test3:
+        timer_delay_ms(1000);
+        ;
     }
 
     /* -------------------------------------------------------------- *
      *  Test 4 — Handler registration + unicast delivery               *
      * -------------------------------------------------------------- */
     {
+        check_flush();
+        terminal_write("\n");
         terminal_write("[TEST 4] Register handler + unicast delivery\n");
         reset_handler_state();
 
@@ -313,13 +336,17 @@ void mailbox_api_test_main(void)
         /* Clean up: unregister and destroy host thread */
         mailbox_unregister_handler(host_tcb->mailbox, handler_one);
         thread_exit(host_tid);
-        skip_test4: ;
+        skip_test4:
+        timer_delay_ms(1000);
+        ;
     }
 
     /* -------------------------------------------------------------- *
      *  Test 5 — Multiple handlers on one mailbox                      *
      * -------------------------------------------------------------- */
     {
+        check_flush();
+        terminal_write("\n");
         terminal_write("[TEST 5] Multiple handlers on one mailbox\n");
         reset_handler_state();
 
@@ -366,13 +393,17 @@ void mailbox_api_test_main(void)
         mailbox_unregister_handler(host_tcb->mailbox, handler_one);
         mailbox_unregister_handler(host_tcb->mailbox, handler_two);
         thread_exit(host_tid);
-        skip_test5: ;
+        skip_test5:
+        timer_delay_ms(1000);
+        ;
     }
 
     /* -------------------------------------------------------------- *
      *  Test 6 — Unregister handler, verify it's no longer called      *
      * -------------------------------------------------------------- */
     {
+        check_flush();
+        terminal_write("\n");
         terminal_write("[TEST 6] Unregister handler\n");
         reset_handler_state();
 
@@ -422,13 +453,17 @@ void mailbox_api_test_main(void)
 
         /* Clean up */
         thread_exit(host_tid);
-        skip_test6: ;
+        skip_test6:
+        timer_delay_ms(1000);
+        ;
     }
 
     /* -------------------------------------------------------------- *
      *  Test 7 — Broadcast to threads with handlers                    *
      * -------------------------------------------------------------- */
     {
+        check_flush();
+        terminal_write("\n");
         terminal_write("[TEST 7] Broadcast (MAIL_ANY_TID) to handlers\n");
         reset_handler_state();
 
@@ -477,13 +512,17 @@ void mailbox_api_test_main(void)
         mailbox_unregister_handler(host2->mailbox, handler_two);
         thread_exit(host1_tid);
         thread_exit(host2_tid);
-        skip_test7: ;
+        skip_test7:
+        timer_delay_ms(1000);
+        ;
     }
 
     /* -------------------------------------------------------------- *
      *  Test 8 — Error: send to non-existent receiver                  *
      * -------------------------------------------------------------- */
     {
+        check_flush();
+        terminal_write("\n");
         terminal_write("[TEST 8] Send to non-existent receiver\n");
 
         mail* m = mailbox_alloc_mail();
@@ -501,13 +540,17 @@ void mailbox_api_test_main(void)
         else
             term_fail("send to bad TID should NOT return 0");
 
-        skip_test8: ;
+        skip_test8:
+        timer_delay_ms(1000);
+        ;
     }
 
     /* -------------------------------------------------------------- *
      *  Test 9 — Error: NULL parameters                                *
      * -------------------------------------------------------------- */
     {
+        check_flush();
+        terminal_write("\n");
         terminal_write("[TEST 9] NULL parameter checks\n");
 
         int ret;
@@ -541,14 +584,15 @@ void mailbox_api_test_main(void)
             term_pass("unregister_handler(NULL handler) returns error");
         else
             term_fail("unregister_handler(NULL handler)");
+        timer_delay_ms(1000);
     }
 
     /* -------------------------------------------------------------- *
      *  All done                                                        *
      * -------------------------------------------------------------- */
     terminal_write("\n========== Mailbox API Test Suite COMPLETE ==========\n");
-    terminal_write("Returning to menu in 3 seconds...\n");
-    timer_delay_ms(3000);
+    terminal_write("Returning to menu in 5 seconds...\n");
+    timer_delay_ms(5000);
     test_finished_flag = 1;
     proc_exit(my_pid);
 }

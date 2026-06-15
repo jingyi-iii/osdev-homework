@@ -411,6 +411,18 @@ void terminal_write(const char* str)
     }
 }
 
+void terminal_write_color(const char* str, uint8_t color)
+{
+    if (!str)
+        return;
+
+    struct terminal_device* dev = &term_device;
+    uint8_t old_color = dev->curr_color;
+    dev->curr_color = color;
+    terminal_write(str);
+    dev->curr_color = old_color;
+}
+
 void terminal_putchar(char c)
 {
     struct terminal_device* dev = &term_device;
@@ -442,6 +454,11 @@ void terminal_putchar(char c)
 
     cursor_update(dev->curr_row, dev->curr_col);
     spinlock_unlock(dev->lock);
+}
+
+size_t terminal_get_row(void)
+{
+    return term_device.curr_row;
 }
 
 int terminal_register_cmd(const char* name, terminal_cmd_fn callback)
