@@ -40,6 +40,9 @@ SECTIONS
 		*(COMMON)
 		*(.bss)
 	} :bss
+
+	/* Kernel end marker (physical address) — used by paging init */
+	__kernel_end = .;
 }
 
 PHDRS

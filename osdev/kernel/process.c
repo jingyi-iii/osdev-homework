@@ -1,5 +1,6 @@
 #include "kernel/process.h"
 #include "mm/heap.h"
+#include "mm/vmm.h"
 #include "arch_protm.h"
 #include "lib/module.h"
 #include "lib/string.h"
@@ -60,6 +61,26 @@ static tcb* find_next_runnable(tcb* current)
     }
 
     return 0;
+}
+
+/*
+ * switch_address_space - Load the page directory of @next if it differs
+ * from the currently active one.  Must be called with schedule_lock held.
+ */
+static void switch_address_space(tcb* old, tcb* next)
+{
+    uint32_t old_cr3, new_cr3;
+
+    if (!old || !next)
+        return;
+    if (old->parent == next->parent)
+        return;  /* same process, no CR3 switch needed */
+
+    old_cr3 = old->parent->cr3;
+    new_cr3 = next->parent->cr3;
+
+    if (old_cr3 != new_cr3 && new_cr3)
+        vmm_load_cr3(new_cr3);
 }
 
 static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
@@ -183,6 +204,13 @@ static void t_delete(int32_t tid)
         thread_run = next;
 
         /*
+         * Switch address space if we're moving to a different process.
+         * Must be done before arch_task_restore_context so the new
+         * page tables are active when iret returns to the new context.
+         */
+        switch_address_space(old, next);
+
+        /*
          * Switch curr_task_ctx to the next thread BEFORE freeing the old
          * thread's stack.  This closes the window where curr_task_ctx pointed
          * to freed memory in case a nested exception fires.
@@ -223,7 +251,12 @@ static void t_block(int32_t tid)
         if (t == thread_run) {
             tcb* next = find_next_runnable(thread_run);
             if (next) {
+                tcb* old = thread_run;
                 thread_run = next;
+
+                /* Switch address space if we're moving to a different process */
+                switch_address_space(old, next);
+
                 arch_task_restore_context(&next->context);
             }
         }
@@ -263,7 +296,12 @@ static void t_yield(void)
 
     tcb* next = find_next_runnable(thread_run);
     if (next) {
+        tcb* old = thread_run;
         thread_run = next;
+
+        /* Switch address space if we're moving to a different process */
+        switch_address_space(old, next);
+
         arch_task_restore_context(&next->context);
     }
 
@@ -290,6 +328,21 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry)
     proc->pid = pid++;
     proc->state = PS_READY;
     proc->priv = priv;
+
+    /* Allocate a private page directory for user processes.
+     * Kernel processes share the kernel's master page directory. */
+    if (priv == PROC_PRIV_USER) {
+        proc->cr3 = vmm_create_address_space();
+        if (!proc->cr3) {
+            KLOG("failed to create address space for pid %d", proc->pid);
+            spinlock_release(proc->sp_lock);
+            kfree(proc);
+            return E_NOMEM;
+        }
+    } else {
+        proc->cr3 = vmm_get_kernel_pdir();
+    }
+
     list_init(&proc->this_node);
     list_init(&proc->tcbs);
 
@@ -343,6 +396,10 @@ static void p_exit(int32_t pid)
 
                 tcb* old = thread_run;
                 thread_run = next;
+
+                /* Switch address space if needed */
+                switch_address_space(old, next);
+
                 arch_task_restore_context(&next->context);
 
                 arch_task_context_release(&old->context);
@@ -370,6 +427,9 @@ static void p_exit(int32_t pid)
     spinlock_unlock(schedule_lock);
 
     if (found) {
+        /* Free per-process page directory (user processes only) */
+        if (found->priv == PROC_PRIV_USER && found->cr3)
+            vmm_destroy_address_space(found->cr3);
         spinlock_release(found->sp_lock);
         kfree(found);
     }
@@ -473,7 +533,12 @@ static void schedule_isr(void* p)
 
     tcb* next = find_next_runnable(thread_run);
     if (next) {
+        tcb* old = thread_run;
         thread_run = next;
+
+        /* Switch address space if we're moving to a different process */
+        switch_address_space(old, next);
+
         arch_task_restore_context(&next->context);
     }
 

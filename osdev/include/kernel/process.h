@@ -40,6 +40,7 @@ typedef struct pcb {
     int32_t             pid;
     proc_state          state;
     proc_priv           priv;
+    uint32_t            cr3;          /* physical address of page directory */
     list_node           this_node;
     list_node           tcbs;
     spinlock*           sp_lock;
