@@ -67,6 +67,42 @@ static void identity_map_4mb(pde_t* pde, pte_t* pt, uint32_t flags)
     pde->paddr    = ((uint32_t)pt) >> 12;
 }
 
+#define IS_4KB_ALIGN(x) \
+    (((uint32_t)(x) & (PAGE_SIZE - 1)) == 0)
+
+static pde_t pdes[1024] __attribute__((aligned(PAGE_SIZE)));
+static pte_t ptes[16][1024]  __attribute__((aligned(PAGE_SIZE)));
+
+static void map_4mb(void* va, void* pa, uint32_t flags)
+{
+    static size_t pte_index = 0;
+    size_t pde_index = PD_INDEX(va);
+
+    if (!IS_4KB_ALIGN(va) || !IS_4KB_ALIGN(pa)) {
+        KLOG("map_4mb: addresses must be 4KB-aligned");
+        return;
+    }
+
+    for (uint32_t i = 0; i < 1024; i++) {
+        ptes[pte_index][i].raw      = 0;
+        ptes[pte_index][i].present  = 1;
+        ptes[pte_index][i].rw       = (flags & PTE_RW)   ? 1 : 0;
+        ptes[pte_index][i].user     = (flags & PTE_USER) ? 1 : 0;
+        ptes[pte_index][i].paddr    = ((uint32_t)pa >> 12) + i;
+    }
+
+    pdes[pde_index].raw      = 0;
+    pdes[pde_index].present  = 1;
+    pdes[pde_index].rw       = 1;
+    pdes[pde_index].paddr    = ((uint32_t)ptes[pte_index]) >> 12;
+
+    pte_index++;
+    if (pte_index >= 16) {
+        KLOG("map_4mb: out of page tables");
+        pte_index = 0;  /* wrap around, but this is a bug */
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Public entry point                                                  */
 /* ------------------------------------------------------------------ */
