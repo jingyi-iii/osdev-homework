@@ -32,6 +32,8 @@ uint32_t vmm_get_cr3(void);
  */
 uint32_t vmm_create_address_space(void);
 
+uint32_t vmm_clone_kernel_pde(void);
+
 /**
  * vmm_destroy_address_space - Destroy a user address space.
  *

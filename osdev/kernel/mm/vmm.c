@@ -83,40 +83,57 @@ void vmm_enable_paging(void)
     );
 }
 
-uint32_t vmm_create_address_space(void)
+uint32_t vmm_clone_kernel_pde(void)
 {
-    uint32_t new_pdir_phys;
-    pde_t* new_pdir;
-    pde_t* kern_pdir;
-    uint32_t kernel_pd_start;
-    uint32_t i;
-
-    new_pdir_phys = pmm_alloc_page();
-    if (!new_pdir_phys) {
-        KLOG("VMM: failed to allocate page directory");
+    uint32_t pde_pa = pmm_alloc_page();
+    if (!pde_pa) {
+        KLOG("VMM: failed to allocate page for PDE clone");
         return 0;
     }
 
-    new_pdir  = pdir_of(new_pdir_phys);
-    kern_pdir = pdir_of(kernel_pdir_phys);
-    kernel_pd_start = PD_INDEX(KERNEL_BASE_VADDR);
+    pde_t* new_pde = pdir_of(pde_pa);
+    pde_t* kern_pde = pdir_of(kernel_pdir_phys);
 
-    /*
-     * Copy ALL PDEs from the kernel master page directory so that:
-     *   - Kernel identity-mapped physical memory (PDE[0..N]) stays
-     *     accessible while executing kernel code in this process.
-     *   - Higher-half mappings (PDE[768..1023]) are shared.
-     *
-     * User-space isolation is achieved by later mapping user pages
-     * (with U/S=1) over the appropriate PTEs.  Since kernel pages
-     * are marked supervisor (U/S=0), ring-3 code cannot access them
-     * even though their PDEs are present.
-     */
-    for (i = 0; i < 1024; i++)
-        new_pdir[i].raw = kern_pdir[i].raw;
+    /* Clone all PDEs from the kernel master PD */
+    for (uint32_t i = 0; i < 1024; i++)
+        new_pde[i].raw = kern_pde[i].raw;
 
-    return new_pdir_phys;
+    return pde_pa;
 }
+
+// uint32_t vmm_create_address_space(void)
+// {
+//     uint32_t new_pdir_phys;
+//     pde_t* new_pdir;
+//     pde_t* kern_pdir;
+//     uint32_t kernel_pd_start;
+//     uint32_t i;
+
+//     new_pdir_phys = pmm_alloc_page();
+//     if (!new_pdir_phys) {
+//         KLOG("VMM: failed to allocate page directory");
+//         return 0;
+//     }
+
+//     new_pdir  = pdir_of(new_pdir_phys);
+//     kern_pdir = pdir_of(kernel_pdir_phys);
+
+//     /*
+//      * Copy ALL PDEs from the kernel master page directory so that:
+//      *   - Kernel identity-mapped physical memory (PDE[0..N]) stays
+//      *     accessible while executing kernel code in this process.
+//      *   - Higher-half mappings (PDE[768..1023]) are shared.
+//      *
+//      * User-space isolation is achieved by later mapping user pages
+//      * (with U/S=1) over the appropriate PTEs.  Since kernel pages
+//      * are marked supervisor (U/S=0), ring-3 code cannot access them
+//      * even though their PDEs are present.
+//      */
+//     for (i = 0; i < 1024; i++)
+//         new_pdir[i].raw = kern_pdir[i].raw;
+
+//     return new_pdir_phys;
+// }
 
 void vmm_destroy_address_space(uint32_t pdir_phys)
 {

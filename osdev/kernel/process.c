@@ -332,7 +332,7 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry)
     /* Allocate a private page directory for user processes.
      * Kernel processes share the kernel's master page directory. */
     if (priv == PROC_PRIV_USER) {
-        proc->cr3 = vmm_create_address_space();
+        proc->cr3 = vmm_clone_kernel_pde();
         if (!proc->cr3) {
             KLOG("failed to create address space for pid %d", proc->pid);
             spinlock_release(proc->sp_lock);
