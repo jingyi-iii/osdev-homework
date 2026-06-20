@@ -2,6 +2,7 @@
 #include "mm/paging.h"
 #include "lib/string.h"
 #include "drivers/log_driver.h"
+#include "sync/spinlock.h"
 
 /*
  * Physical Memory Manager — bitmap-based allocator.
@@ -18,8 +19,9 @@
 static uint8_t*  bitmap = 0;
 static uint32_t  total_blocks = 0;
 static uint32_t  free_blocks = 0;
+static spinlock* pmm_lock = 0;
+static int       pmm_initialized = 0;
 
-/* Helpers */
 static inline void bit_set(uint32_t block)
 {
     bitmap[block / 8] |= (uint8_t)(1U << (block % 8));
@@ -35,62 +37,51 @@ static inline int bit_test(uint32_t block)
     return (bitmap[block / 8] >> (block % 8)) & 1;
 }
 
-void pmm_init(uint32_t total_memory, uint32_t kernel_end_phys,
-              uint32_t kernel_pd_phys, uint32_t kernel_pt0_phys)
+void pmm_init(uint32_t total_memory, uint8_t* bitmap_pa)
 {
-    uint32_t bitmap_start_phys;
-    uint32_t bitmap_end_phys;
-    uint32_t reserved_top;
-    uint32_t i;
+    uint32_t first_free_block = 0;
 
+    if (!bitmap_pa) {
+        KLOG("pmm_init: bitmap_pa is NULL");
+        return;
+    }
+
+    pmm_lock = spinlock_alloc();
+    if (!pmm_lock) {
+        KLOG("pmm_init: failed to allocate PMM spinlock");
+        return;
+    }
+
+    spinlock_lock(pmm_lock);
     total_blocks = total_memory / PAGE_SIZE;
+    bitmap = (uint8_t*)PAGE_ALIGN(bitmap_pa);
 
-    /* Round kernel_end_phys up to page boundary */
-    kernel_end_phys = PAGE_ALIGN(kernel_end_phys);
+    /* Mark all blocks as used initially */
+    memset(bitmap, 0xFF, (total_blocks + 7) / 8);
 
-    /*
-     * Find the highest reserved address among the bootstrap structures.
-     * Everything up to this point must not be handed out.
-     */
-    reserved_top = kernel_end_phys;
-    if (kernel_pd_phys + PAGE_SIZE > reserved_top)
-        reserved_top = kernel_pd_phys + PAGE_SIZE;
-    if (kernel_pt0_phys + PAGE_SIZE > reserved_top)
-        reserved_top = kernel_pt0_phys + PAGE_SIZE;
-    reserved_top = PAGE_ALIGN(reserved_top);
-
-    /*
-     * Place the bitmap right after the highest reserved region.
-     * Bitmap size = total_blocks / 8 bytes, page-aligned.
-     */
-    bitmap_start_phys = reserved_top;
-    bitmap = (uint8_t*)bitmap_start_phys;
-
-    uint32_t bitmap_bytes = (total_blocks + 7) / 8;
-    bitmap_bytes = PAGE_ALIGN(bitmap_bytes);
-    bitmap_end_phys = bitmap_start_phys + bitmap_bytes;
-
-    /* Mark EVERYTHING as used first... */
-    memset(bitmap, 0xFF, bitmap_bytes);
-
-    /*
-     * Then free blocks from bitmap_end_phys up to total_memory.
-     * Blocks below bitmap_end_phys stay marked used (kernel + bootstrap).
-     */
-    uint32_t first_free_block = bitmap_end_phys / PAGE_SIZE;
     free_blocks = 0;
-    for (i = first_free_block; i < total_blocks; i++) {
+    first_free_block = (uint32_t)bitmap / PAGE_SIZE;
+    first_free_block += (((total_blocks + 7) / 8) + PAGE_SIZE - 1) / PAGE_SIZE;  /* skip bitmap blocks */
+    
+    for (size_t i = first_free_block; i < total_blocks; i++) {
         bit_clear(i);
         free_blocks++;
     }
+    spinlock_unlock(pmm_lock);
+    pmm_initialized = 1;
 
     KLOG("PMM: total %u pages (%u MB), %u pages free, bitmap at 0x%x",
-         total_blocks, total_memory >> 20, free_blocks, bitmap_start_phys);
+         total_blocks, total_memory >> 20, free_blocks, (uint32_t)bitmap);
 }
 
 uint32_t pmm_alloc_page(void)
 {
-    uint32_t i;
+    uint32_t i = 0;
+
+    if (!pmm_initialized)
+        return 0;
+
+    spinlock_lock(pmm_lock);
     for (i = 0; i < total_blocks; i++) {
         if (!bit_test(i)) {
             bit_set(i);
@@ -100,9 +91,12 @@ uint32_t pmm_alloc_page(void)
              * can just use memset on the physical address directly.
              */
             memset((void*)(i * PAGE_SIZE), 0, PAGE_SIZE);
+            spinlock_unlock(pmm_lock);
             return i * PAGE_SIZE;
         }
     }
+    spinlock_unlock(pmm_lock);
+
     KLOG("PMM: out of memory!");
     return 0;
 }
@@ -110,32 +104,27 @@ uint32_t pmm_alloc_page(void)
 void pmm_free_page(uint32_t paddr)
 {
     uint32_t block = paddr / PAGE_SIZE;
-    if (block >= total_blocks)
+    if (!pmm_initialized || block >= total_blocks)
         return;
+
+    spinlock_lock(pmm_lock);
     if (bit_test(block)) {
         bit_clear(block);
         free_blocks++;
     }
+    spinlock_unlock(pmm_lock);
 }
 
-void pmm_mark_used_range(uint32_t paddr, uint32_t size)
+uint32_t pmm_get_free_page_count(void)
 {
-    uint32_t start_block = paddr / PAGE_SIZE;
-    uint32_t num_blocks = (size + PAGE_SIZE - 1) / PAGE_SIZE;
-    uint32_t i;
+    uint32_t blocks = 0;
 
-    for (i = 0; i < num_blocks; i++) {
-        uint32_t block = start_block + i;
-        if (block >= total_blocks)
-            break;
-        if (!bit_test(block)) {
-            bit_set(block);
-            free_blocks--;
-        }
-    }
-}
+    if (!pmm_initialized)
+        return 0;
 
-uint32_t pmm_free_page_count(void)
-{
-    return free_blocks;
+    spinlock_lock(pmm_lock);
+    blocks = free_blocks;
+    spinlock_unlock(pmm_lock);
+
+    return blocks;
 }

@@ -4,7 +4,6 @@
 #include <stdint.h>
 
 #define PAGE_SIZE           4096
-#define PAGE_SHIFT          12
 #define PAGE_MASK           0xFFFFF000
 
 /* Page Directory Entry (PDE) */
@@ -63,8 +62,13 @@ typedef union pte {
 #define PD_INDEX(vaddr)     (((uint32_t)(vaddr) >> 22) & 0x3FF)
 #define PT_INDEX(vaddr)     (((uint32_t)(vaddr) >> 12) & 0x3FF)
 #define PAGE_OFFSET(vaddr)  ((uint32_t)(vaddr) & 0xFFF)
-
 #define PAGE_ALIGN(x)       (((uint32_t)(x) + PAGE_SIZE - 1) & PAGE_MASK)
+
+#define IS_4MB_ALIGN(x) \
+    (((uint32_t)(x) & (0x400000 - 1)) == 0)
+
+#define IS_PAGE_ALIGNED(x) \
+    (((uint32_t)(x) & (PAGE_SIZE - 1)) == 0)
 
 /*
  * Kernel virtual address space layout (32-bit, 4GB total):
@@ -73,12 +77,5 @@ typedef union pte {
  */
 #define KERNEL_BASE_VADDR   0xC0000000
 #define USER_SPACE_TOP      KERNEL_BASE_VADDR
-
-/* Convert kernel virtual <-> physical (higher-half identity mapping) */
-#define P2V(paddr)  ((void*)((uint32_t)(paddr) + KERNEL_BASE_VADDR))
-#define V2P(vaddr)  ((uint32_t)(vaddr) - KERNEL_BASE_VADDR)
-
-/* Number of 4MB pages needed to identity-map X bytes */
-#define PAGES_4MB(nbytes)   (((nbytes) + 0x3FFFFF) >> 22)
 
 #endif /* PAGING_H */
