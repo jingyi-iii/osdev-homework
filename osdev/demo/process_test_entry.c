@@ -18,8 +18,9 @@
 extern void thread_api_test_main(void);
 extern void process_api_test_main(void);
 extern void mailbox_api_test_main(void);
+extern void rbtree_test_main(void);
 
-/* Menu state: 0 = waiting, 1 = thread tests, 2 = process tests, 3 = mailbox tests */
+/* Menu state: 0 = waiting, 1 = thread tests, 2 = process tests, 3 = mailbox tests, 4 = rbtree tests */
 static volatile int menu_choice = 0;
 
 /*
@@ -40,6 +41,7 @@ static void menu_kb_handler(const char* data, size_t size)
     if (key == '1') menu_choice = 1;
     if (key == '2') menu_choice = 2;
     if (key == '3') menu_choice = 3;
+    if (key == '4') menu_choice = 4;
 }
 
 /* ------------------------------------------------------------------ *
@@ -69,7 +71,12 @@ static void draw_menu(void)
     terminal_write("      mailbox_register_handler\n");
     terminal_write("      broadcast (MAIL_ANY_TID)\n");
     terminal_write("\n");
-    terminal_write("  Press 1, 2 or 3 to select a test suite\n");
+    terminal_write("  [4] Red-Black Tree Test Suite\n");
+    terminal_write("      rb_insert / rb_erase / rb_find\n");
+    terminal_write("      rb_next / rb_prev / rb_replace_node\n");
+    terminal_write("      rb_find_or_insert / rb_for_each_safe\n");
+    terminal_write("\n");
+    terminal_write("  Press 1, 2, 3 or 4 to select a test suite\n");
 }
 
 /* ------------------------------------------------------------------ *
@@ -98,9 +105,12 @@ void process_test_main_thread(void)
         } else if (menu_choice == 2) {
             terminal_write("\n--- Launching Process API Test Suite ---\n\n");
             proc_create(PROC_PRIV_KERNEL, process_api_test_main);
-        } else {
+        } else if (menu_choice == 3) {
             terminal_write("\n--- Launching Mailbox API Test Suite ---\n\n");
             proc_create(PROC_PRIV_KERNEL, mailbox_api_test_main);
+        } else {
+            terminal_write("\n--- Launching Red-Black Tree Test Suite ---\n\n");
+            proc_create(PROC_PRIV_KERNEL, rbtree_test_main);
         }
 
         /*

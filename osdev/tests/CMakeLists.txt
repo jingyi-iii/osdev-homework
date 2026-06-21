@@ -12,6 +12,7 @@ add_executable(ut main.c
         lock_ut.c "../kernel/sync/spinlock.c"
         list_ut.c
         heap_ut.c "../kernel/mm/heap.c"
-        cxa_guard_ut.c "../kernel/sync/cxa_guard.c")
+        cxa_guard_ut.c "../kernel/sync/cxa_guard.c"
+        rbtree_ut.c "../kernel/lib/rbtree.c")
 
 target_compile_definitions(ut PRIVATE UNIT_TEST_BUILD)
