@@ -72,9 +72,9 @@ static void draw_menu(void)
     terminal_write("      broadcast (MAIL_ANY_TID)\n");
     terminal_write("\n");
     terminal_write("  [4] Red-Black Tree Test Suite\n");
-    terminal_write("      rb_insert / rb_erase / rb_find\n");
-    terminal_write("      rb_next / rb_prev / rb_replace_node\n");
-    terminal_write("      rb_find_or_insert / rb_for_each_safe\n");
+    terminal_write("      rbtree_insert / rbtree_delete / rbtree_search\n");
+    terminal_write("      rbtree_next / rbtree_prev / rbtree_replace_node\n");
+    terminal_write("      rbtree_find_or_insert / rbtree_for_each_safe\n");
     terminal_write("\n");
     terminal_write("  Press 1, 2, 3 or 4 to select a test suite\n");
 }
