@@ -10,7 +10,6 @@
 #include <assert.h>
 #include <string.h>
 #include "rbtree.h"
-#include "rbtree_ops.h"
 
 /* ------------------------------------------------------------------
  * Test container — embeds rbnode just like real kernel code would

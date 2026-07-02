@@ -98,10 +98,10 @@ void test_null_handling(void) {
 
     spinlock *lock = NULL;
 
-    // Test lock functions with NULL
-    assert(spinlock_lock(lock) == -1);
-    assert(spinlock_unlock(lock) == -1);
-    assert(spinlock_trylock(lock) == -1);
+    // Test lock functions with NULL — all return E_INVAL (-2)
+    assert(spinlock_lock(lock) == -2);
+    assert(spinlock_unlock(lock) == -2);
+    assert(spinlock_trylock(lock) == -2);
 
     // These should not crash
     spinlock_release(lock);

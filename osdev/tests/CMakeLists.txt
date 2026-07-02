@@ -3,10 +3,10 @@ project(ut C)
 
 set(CMAKE_C_STANDARD 11)
 
+include_directories("../include")
 include_directories("../include/lib")
 include_directories("../include/sync")
 include_directories("../include/mm")
-include_directories("../include/kernel")
 
 add_executable(ut main.c
         lock_ut.c "../kernel/sync/spinlock.c"

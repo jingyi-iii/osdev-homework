@@ -16,7 +16,6 @@
 #include "drivers/timer_driver.h"
 #include "kernel/process.h"
 #include "lib/rbtree.h"
-#include "lib/rbtree_ops.h"
 #include "lib/string.h"
 
 extern volatile int test_finished_flag;

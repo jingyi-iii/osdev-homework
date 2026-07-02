@@ -61,6 +61,16 @@ static void rbtree_replace_node(rbtree* tree, rbnode* old, rbnode* new)
 	new->parent = old->parent;
 }
 
+void rbtree_init(rbtree* tree, rbnode* nil)
+{
+    nil->col    = BLACK;
+    nil->left   = nil;
+    nil->right  = nil;
+    nil->parent = nil;
+    tree->root  = nil;
+    tree->nil   = nil;
+}
+
 rbtree* rbtree_create(void)
 {
 	rbtree* tree = (rbtree*)kmalloc(sizeof(rbtree));
@@ -190,10 +200,8 @@ void rbtree_insert(rbtree* tree, rbnode* new_node, rbtree_node_cmp cmp)
 		result = cmp(new_node, node);
 		if (result < 0) {
 			node = node->left;
-		} else if (result > 0) {
-			node = node->right;
 		} else {
-			return;
+			node = node->right;
 		}
 	}
 
