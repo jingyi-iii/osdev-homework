@@ -69,18 +69,12 @@ static tcb* find_next_runnable(tcb* current)
  */
 static void switch_address_space(tcb* old, tcb* next)
 {
-    uint32_t old_cr3, new_cr3;
-
     if (!old || !next)
         return;
     if (old->parent == next->parent)
         return;  /* same process, no CR3 switch needed */
 
-    old_cr3 = old->parent->cr3;
-    new_cr3 = next->parent->cr3;
-
-    if (old_cr3 != new_cr3 && new_cr3)
-        vmm_load_cr3(new_cr3);
+    vmm_switch(&next->parent->vcb);
 }
 
 static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
@@ -331,16 +325,11 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry)
 
     /* Allocate a private page directory for user processes.
      * Kernel processes share the kernel's master page directory. */
-    if (priv == PROC_PRIV_USER) {
-        proc->cr3 = vmm_clone_kernel_pde();
-        if (!proc->cr3) {
-            KLOG("failed to create address space for pid %d", proc->pid);
-            spinlock_release(proc->sp_lock);
-            kfree(proc);
-            return E_NOMEM;
-        }
-    } else {
-        proc->cr3 = vmm_get_kernel_pdir();
+    if (vmm_create(&proc->vcb, priv == PROC_PRIV_USER)) {
+        KLOG("failed to create address space for pid %d", proc->pid);
+        spinlock_release(proc->sp_lock);
+        kfree(proc);
+        return E_NOMEM;
     }
 
     list_init(&proc->this_node);
@@ -427,9 +416,7 @@ static void p_exit(int32_t pid)
     spinlock_unlock(schedule_lock);
 
     if (found) {
-        /* Free per-process page directory (user processes only) */
-        if (found->priv == PROC_PRIV_USER && found->cr3)
-            vmm_destroy_address_space(found->cr3);
+        vmm_destroy(&found->vcb);
         spinlock_release(found->sp_lock);
         kfree(found);
     }

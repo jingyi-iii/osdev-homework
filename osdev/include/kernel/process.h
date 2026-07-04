@@ -6,6 +6,7 @@
 #include "lib/list.h"
 #include "sync/spinlock.h"
 #include "kernel/errno.h"
+#include "mm/vmm.h"
 
 #define PROCESS_SUPPORT_MAILBOX
 
@@ -25,7 +26,7 @@ typedef struct proc_thread_ctrl_config {
 
 typedef enum proc_priv {
     PROC_PRIV_KERNEL = 0,
-    PROC_PRIV_USER,
+    PROC_PRIV_USER   = 1,
 } proc_priv;
 
 typedef enum proc_state {
@@ -40,20 +41,21 @@ typedef struct pcb {
     int32_t             pid;
     proc_state          state;
     proc_priv           priv;
-    uint32_t            cr3;          /* physical address of page directory */
     list_node           this_node;
     list_node           tcbs;
     spinlock*           sp_lock;
+
+    vmm_control_block   vcb;            /* address space context for this process */
 } pcb;
 
 /* Thread Control Block */
 typedef struct tcb {
-    arch_task_context context;
+    arch_task_context   context;
     task_entry_t        entry;
     int32_t             tid;
     thread_state        state;
-    list_node           this_node;   /* node in global scheduling list */
-    list_node           proc_node;   /* node in parent->tcbs list */
+    list_node           this_node;      /* node in global scheduling list */
+    list_node           proc_node;      /* node in parent->tcbs list */
     spinlock*           sp_lock;
     struct pcb*         parent;
 #ifdef PROCESS_SUPPORT_MAILBOX
@@ -61,19 +63,19 @@ typedef struct tcb {
 #endif
 } tcb;
 
-int32_t thread_create(task_priv priv, task_entry_t entry);
-void thread_exit(int32_t tid);
-void thread_yield(void);
-void thread_block(int32_t tid);
-void thread_unblock(int32_t tid);
-int thread_get_tid(void);
-tcb* thread_get_by_tid(int32_t tid);
+int32_t thread_create       (task_priv priv, task_entry_t entry);
+void    thread_exit         (int32_t tid);
+void    thread_yield        (void);
+void    thread_block        (int32_t tid);
+void    thread_unblock      (int32_t tid);
+int     thread_get_tid      (void);
+tcb*    thread_get_by_tid   (int32_t tid);
 
-void proc_create(proc_priv priv, task_entry_t entry);
-void proc_exit(int32_t pid);
-int proc_block(int32_t pid);
-int proc_unblock(int32_t pid);
-int proc_get_pid(void);
+void    proc_create         (proc_priv priv, task_entry_t entry);
+void    proc_exit           (int32_t pid);
+int     proc_block          (int32_t pid);
+int     proc_unblock        (int32_t pid);
+int     proc_get_pid        (void);
 
 /* Exported for mailbox broadcast — must be held when iterating thread_head */
 extern list_node thread_head;
