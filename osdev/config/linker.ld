@@ -41,7 +41,19 @@ SECTIONS
 		*(.bss)
 	} :bss
 
-	/* Kernel end marker (physical address) — used by paging init */
+	/*
+	 * PMM bitmap — 128 KB reserved for the physical memory manager's
+	 * bitmap (one bit per 4 KB page, enough for 4 GB of physical memory).
+	 * The bitmap is zero-initialised by the loader (BSS-like section).
+	 */
+	.pmm_bitmap BLOCK(4K) : ALIGN(4K)
+	{
+		__pmm_bitmap_start = .;
+		. = . + 128K;
+		__pmm_bitmap_end = .;
+	} :bss
+
+	/* Kernel end marker — everything beyond this is free physical memory */
 	__kernel_end = .;
 }
 

@@ -3,8 +3,6 @@
 #include "lib/string.h"
 #include "drivers/log_driver.h"
 
-static int pmm_initialized = 0;
-
 void vmm_switch(vmm_control_block* vcb)
 {
     if (!vcb || !vcb->cr3)
@@ -35,4 +33,5 @@ void vmm_destroy(vmm_control_block* vcb)
         return;
 
     arch_destroy_address_space(vcb->cr3);
+    pmm_free_page(vcb->cr3);
 }

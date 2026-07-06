@@ -67,6 +67,9 @@ typedef union pte {
 #define IS_4MB_ALIGN(x) \
     (((uint32_t)(x) & (0x400000 - 1)) == 0)
 
+#define IS_4KB_ALIGN(x) \
+    (((uint32_t)(x) & (4096 - 1)) == 0)
+
 #define IS_PAGE_ALIGNED(x) \
     (((uint32_t)(x) & (PAGE_SIZE - 1)) == 0)
 
@@ -77,13 +80,6 @@ typedef union pte {
  */
 #define KERNEL_BASE_VADDR   0xC0000000
 #define USER_SPACE_TOP      KERNEL_BASE_VADDR
-
-
-/**
- * arch_get_kernel_pdir - Return the physical address of the kernel's
- * master page directory.
- */
-uint32_t arch_get_kernel_pdir(void);
 
 /**
  * arch_load_cr3 - Load a page directory into CR3.
@@ -162,12 +158,6 @@ void* arch_alloc_user_page(uint32_t pdir_phys, uint32_t vaddr, uint32_t flags);
  * loaded into CR3.
  */
 void arch_enable_paging(void);
-
-/**
- * arch_set_kernel_pdir - Register the kernel master page directory.
- * Called once by arch_paging_init() after the bootstrap PD is built.
- */
-void arch_set_kernel_pdir(uint32_t pdir_phys);
 
 /**
  * arch_paging_init - Architecture-specific paging bootstrap.

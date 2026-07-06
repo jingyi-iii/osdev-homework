@@ -667,12 +667,12 @@ void gfx_set_cursor(size_t col, size_t row)
 /*                      Module Init / Exit                              */
 /************************************************************************/
 
-static void graphics_module_init(void)
+void graphics_module_init(void)
 {
     platform_driver_register(&graphics_driver);
 }
 
-static void graphics_module_exit(void)
+void graphics_module_exit(void)
 {
     platform_driver_unregister(&graphics_driver);
 }

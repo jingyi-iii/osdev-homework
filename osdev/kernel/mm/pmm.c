@@ -49,6 +49,9 @@ void pmm_init(uint32_t total_memory, uint8_t* bitmap_pa)
     uint32_t reserve_blocks = 0;
     uint32_t first_bitmap_block = 0;
 
+    if (pmm_initialized)
+        return;
+
     if (!bitmap_pa) {
         KLOG("pmm_init: bitmap_pa is NULL");
         return;
