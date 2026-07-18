@@ -103,7 +103,7 @@ uint32_t arch_get_cr3(void);
  */
 // uint32_t vmm_create(void);
 
-uint32_t arch_clone_kernel_pde(uint32_t pde_pa);
+uint32_t arch_clone_kernel_pde(uint32_t pde_pa, int user_accessible);
 
 /**
  * arch_destroy_address_space - Destroy a user address space.

@@ -20,7 +20,7 @@ int vmm_create(vmm_control_block* vcb, int user_accessible)
     if (!vcb->tree)
         return ENOMEM;
 
-    vcb->cr3 = arch_clone_kernel_pde(pmm_alloc_page());
+    vcb->cr3 = arch_clone_kernel_pde(pmm_alloc_page(), user_accessible);
     if (!vcb->cr3)
         return ENOMEM;
 
@@ -34,4 +34,20 @@ void vmm_destroy(vmm_control_block* vcb)
 
     arch_destroy_address_space(vcb->cr3);
     pmm_free_page(vcb->cr3);
+}
+
+uint32_t vmm_alloc_region(vmm_control_block* vcb, uint32_t size, uint32_t flags)
+{
+    if (!vcb || !vcb->tree || size == 0)
+        return E_INVAL;
+
+    return 0;
+}
+
+int vmm_free_region(vmm_control_block* vcb, uint32_t start_va)
+{
+    if (!vcb || !vcb->tree)
+        return E_INVAL;
+
+    return 0;
 }

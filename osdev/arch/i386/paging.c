@@ -32,6 +32,21 @@ static spinlock* paging_lock;
  * All user processes clone kernel-space entries from here. */
 static uint32_t kernel_pdir_phys = 0;
 
+static inline pde_t* pdir_of(uint32_t pdir_phys)
+{
+    return (pde_t*)pdir_phys;
+}
+
+static inline pte_t* ptbl_of(uint32_t ptbl_phys)
+{
+    return (pte_t*)ptbl_phys;
+}
+
+static inline pte_t* ptbl_of_pde(pde_t* pde)
+{
+    return (pte_t*)(pde->paddr << 12);
+}
+
 /* Invalidate a single TLB entry */
 static inline void tlb_invlpg(uint32_t vaddr)
 {
@@ -63,6 +78,24 @@ static void arch_map_4mb(void* va, void* pa, uint32_t flags)
     pdes[pde_index].global      = (flags & PTE_GLOBAL)   ? 1 : 0;
     pdes[pde_index].paddr       = ((uint32_t)pa) >> 12;
     spinlock_unlock(paging_lock);
+
+    tlb_invlpg((uint32_t)va);
+}
+
+static void arch_unmap_4mb(void* va)
+{
+    size_t pde_index = PD_INDEX(va);
+
+    if (pde_index >= 1024) {
+        KLOG("arch_unmap_4mb: virtual address out of range");
+        return;
+    }
+
+    spinlock_lock(paging_lock);
+    pdes[pde_index].raw = 0;
+    spinlock_unlock(paging_lock);
+
+    tlb_invlpg((uint32_t)va);
 }
 
 static void arch_map_4kb(void* va, void* pa, uint32_t flags)
@@ -93,13 +126,44 @@ static void arch_map_4kb(void* va, void* pa, uint32_t flags)
         memset((void*)pt_pa, 0, PAGE_SIZE);
     }
 
-    pte_t* ptbl = (pte_t*)(pdes[pde_index].paddr << 12);
+    pte_t* ptbl = ptbl_of_pde(&pdes[pde_index]);
     ptbl[pte_index].raw         = 0;
     ptbl[pte_index].present     = (flags & PTE_PRESENT) ? 1 : 0;
     ptbl[pte_index].rw          = (flags & PTE_RW)      ? 1 : 0;
     ptbl[pte_index].user        = (flags & PTE_USER)    ? 1 : 0;
     ptbl[pte_index].paddr       = ((uint32_t)pa) >> 12;
     spinlock_unlock(paging_lock);
+
+    tlb_invlpg((uint32_t)va);
+}
+
+static void arch_unmap_4kb(void* va)
+{
+    size_t pde_index = PD_INDEX(va);
+    size_t pte_index = PT_INDEX(va);
+
+    if (pde_index >= 1024 || pte_index >= 1024) {
+        KLOG("arch_unmap_4kb: virtual address out of range");
+        return;
+    }
+
+    spinlock_lock(paging_lock);
+    if (!pdes[pde_index].present) {
+        spinlock_unlock(paging_lock);
+        return;
+    }
+
+    pte_t* ptbl = ptbl_of_pde(&pdes[pde_index]);
+    if (!ptbl[pte_index].present) {
+        spinlock_unlock(paging_lock);
+        return;
+    }
+
+    pmm_free_page(ptbl[pte_index].paddr << 12);
+    ptbl[pte_index].raw = 0;
+    spinlock_unlock(paging_lock);
+
+    tlb_invlpg((uint32_t)va);
 }
 
 void arch_map_4mb_range(uint32_t start_pa, uint32_t end_pa, uint32_t flags)
@@ -208,7 +272,7 @@ void arch_enable_paging(void)
     );
 }
 
-uint32_t arch_clone_kernel_pde(uint32_t pde_pa)
+uint32_t arch_clone_kernel_pde(uint32_t pde_pa, int user_accessible)
 {
     if (!pde_pa) {
         KLOG("VMM: failed to allocate page for PDE clone");
@@ -219,181 +283,43 @@ uint32_t arch_clone_kernel_pde(uint32_t pde_pa)
     pde_t* kern_pde = (pde_t*)kernel_pdir_phys;
 
     /* Clone all PDEs from the kernel master PD */
-    for (uint32_t i = 0; i < 1024; i++)
-        new_pde[i].raw = kern_pde[i].raw;
-
+    if (user_accessible) {
+        for (uint32_t i = 0; i < 768; i++)
+            new_pde[i].raw = 0;
+        for (uint32_t i = 768; i < 1024; i++)
+            new_pde[i].raw = kern_pde[i].raw;
+    } else {
+        for (uint32_t i = 0; i < 1024; i++)
+            new_pde[i].raw = kern_pde[i].raw;
+    }
     return pde_pa;
 }
 
 void arch_destroy_address_space(uint32_t pdir_phys)
 {
-    // pde_t* pdir;
-    // pde_t* kern_pdir;
-    // uint32_t i, j;
+    if (!pdir_phys || pdir_phys == kernel_pdir_phys) {
+        KLOG("VMM: cannot destroy kernel address space");
+        return;
+    }
 
-    // if (!pdir_phys || pdir_phys == kernel_pdir_phys)
-    //     return;  /* never destroy the kernel master PD */
+    pde_t* pdes = pdir_of(pdir_phys);
+    pde_t* kern_pdes = pdir_of(kernel_pdir_phys);
 
-    // pdir = pdir_of(pdir_phys);
-    // kern_pdir = pdir_of(kernel_pdir_phys);
+    /* only release user pages */
+    for (uint32_t i = 0; i < 768; i++) {
+        if (!pdes[i].present)
+            continue;
+        if (pdes[i].paddr == kern_pdes[i].paddr)
+            continue;  /* skip kernel-shared page tables */
 
-    // /*
-    //  * Walk all PDEs.  If a PDE points to the same page table as the
-    //  * kernel master PD, it is shared across all address spaces and
-    //  * must NOT be freed.  Only free page tables that were privately
-    //  * allocated for this address space.
-    //  */
-    // for (i = 0; i < 1024; i++) {
-    //     if (!pdir[i].present)
-    //         continue;
-
-    //     /*
-    //      * 4MB pages map a large physical region directly; they have no
-    //      * page table to walk or free.  Skip them — only process 4KB PDEs.
-    //      */
-    //     if (pdir[i].page_size)
-    //         continue;
-
-    //     /* Skip kernel-shared page tables (same physical address as kernel PD) */
-    //     if (pdir[i].paddr == kern_pdir[i].paddr)
-    //         continue;
-
-    //     pte_t* ptbl = ptbl_of_pde(&pdir[i]);
-
-    //     /* Free every physical page referenced by this private PT */
-    //     for (j = 0; j < 1024; j++) {
-    //         if (ptbl[j].present) {
-    //             pmm_free_page(ptbl[j].paddr << 12);
-    //             ptbl[j].raw = 0;
-    //         }
-    //     }
-
-    //     /* Free the page table itself */
-    //     pmm_free_page(pdir[i].paddr << 12);
-    //     pdir[i].raw = 0;
-    // }
-
-    // /* Free the page directory */
-    // pmm_free_page(pdir_phys);
+        pte_t* ptbl = ptbl_of_pde(&pdes[i]);
+        for (uint32_t j = 0; j < 1024; j++) {
+            if (ptbl[j].present) {
+                pmm_free_page(ptbl[j].paddr << 12);
+                ptbl[j].raw = 0;
+            }
+        }
+        pmm_free_page(pdes[i].paddr << 12);
+        pdes[i].raw = 0;
+    }
 }
-
-// int arch_map_page(uint32_t pdir_phys, uint32_t vaddr, uint32_t paddr,
-//                  uint32_t flags)
-// {
-//     uint32_t pd_idx = PD_INDEX(vaddr);
-//     uint32_t pt_idx = PT_INDEX(vaddr);
-//     pde_t* pdir;
-//     pte_t* ptbl;
-
-//     paddr &= PAGE_MASK;
-//     vaddr &= PAGE_MASK;
-
-//     pdir = pdir_of(pdir_phys);
-
-//     /* Allocate a new page table if this PDE is not yet present */
-//     if (!pdir[pd_idx].present) {
-//         uint32_t pt_pa = pmm_alloc_page();
-//         if (!pt_pa) {
-//             KLOG("VMM: failed to allocate page table for vaddr 0x%x", vaddr);
-//             return -1;
-//         }
-
-//         pdir[pd_idx].raw = 0;
-//         pdir[pd_idx].present = 1;
-//         pdir[pd_idx].rw      = 1;
-//         pdir[pd_idx].user    = (flags & PTE_USER) ? 1 : 0;
-//         pdir[pd_idx].paddr   = pt_pa >> 12;
-
-//         ptbl = ptbl_of_phys(pt_pa);
-//         memset(ptbl, 0, PAGE_SIZE);
-//     } else {
-//         ptbl = ptbl_of_pde(&pdir[pd_idx]);
-//     }
-
-//     /* Fill in the PTE */
-//     ptbl[pt_idx].raw = 0;
-//     ptbl[pt_idx].present = (flags & PTE_PRESENT) ? 1 : 0;
-//     ptbl[pt_idx].rw      = (flags & PTE_RW)      ? 1 : 0;
-//     ptbl[pt_idx].user    = (flags & PTE_USER)    ? 1 : 0;
-//     ptbl[pt_idx].paddr   = paddr >> 12;
-
-//     tlb_invlpg(vaddr);
-//     return 0;
-// }
-
-// void arch_unmap_page(uint32_t pdir_phys, uint32_t vaddr)
-// {
-//     uint32_t pd_idx = PD_INDEX(vaddr);
-//     uint32_t pt_idx = PT_INDEX(vaddr);
-//     pde_t* pdir;
-//     pte_t* ptbl;
-
-//     vaddr &= PAGE_MASK;
-//     pdir = pdir_of(pdir_phys);
-
-//     if (!pdir[pd_idx].present)
-//         return;
-
-//     ptbl = ptbl_of_pde(&pdir[pd_idx]);
-//     if (!ptbl[pt_idx].present)
-//         return;
-
-//     pmm_free_page(ptbl[pt_idx].paddr << 12);
-//     ptbl[pt_idx].raw = 0;
-//     tlb_invlpg(vaddr);
-// }
-
-// int arch_map_range(uint32_t pdir_phys, uint32_t vaddr, uint32_t paddr,
-//                   uint32_t size, uint32_t flags)
-// {
-//     uint32_t off;
-//     for (off = 0; off < size; off += PAGE_SIZE) {
-//         if (arch_map_page(pdir_phys, vaddr + off, paddr + off, flags))
-//             return -1;
-//     }
-//     return 0;
-// }
-
-// uint32_t arch_virt_to_phys(uint32_t pdir_phys, uint32_t vaddr)
-// {
-//     uint32_t pd_idx = PD_INDEX(vaddr);
-//     uint32_t pt_idx = PT_INDEX(vaddr);
-//     pde_t* pdir;
-
-//     if (!pdir_phys)
-//         pdir_phys = arch_get_cr3();
-
-//     pdir = pdir_of(pdir_phys);
-//     if (!pdir[pd_idx].present)
-//         return 0;
-
-//     pte_t* ptbl = ptbl_of_pde(&pdir[pd_idx]);
-//     if (!ptbl[pt_idx].present)
-//         return 0;
-
-//     return (ptbl[pt_idx].paddr << 12) | PAGE_OFFSET(vaddr);
-// }
-
-// void* arch_alloc_user_page(uint32_t pdir_phys, uint32_t vaddr, uint32_t flags)
-// {
-//     uint32_t paddr;
-
-//     vaddr &= PAGE_MASK;
-
-//     /* If already mapped, unmap first */
-//     uint32_t old = arch_virt_to_phys(pdir_phys, vaddr);
-//     if (old) {
-//         arch_unmap_page(pdir_phys, vaddr);
-//     }
-
-//     paddr = pmm_alloc_page();
-//     if (!paddr)
-//         return 0;
-
-//     if (arch_map_page(pdir_phys, vaddr, paddr, flags)) {
-//         pmm_free_page(paddr);
-//         return 0;
-//     }
-
-//     return (void*)vaddr;
-// }
