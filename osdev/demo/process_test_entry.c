@@ -55,34 +55,16 @@ static void draw_menu(void)
     terminal_flush(0);
 
     terminal_write("========================================\n");
-    terminal_write("  PROCESS API TEST SUITE (Text Mode)    \n");
+    terminal_write("  PROCESS API TEST SUITE                \n");
     terminal_write("========================================\n");
     terminal_write("\n");
     terminal_write("  [1] Thread API Test Suite\n");
-    terminal_write("      thread_create / thread_yield\n");
-    terminal_write("      thread_block / thread_unblock\n");
-    terminal_write("      thread_exit / proc_get_pid\n");
-    terminal_write("\n");
     terminal_write("  [2] Process API Test Suite\n");
-    terminal_write("      proc_create / proc_exit\n");
-    terminal_write("      proc_block / proc_unblock\n");
-    terminal_write("      proc_get_pid\n");
-    terminal_write("\n");
     terminal_write("  [3] Mailbox API Test Suite\n");
-    terminal_write("      mailbox_send / mailbox_listen\n");
-    terminal_write("      mailbox_register_handler\n");
-    terminal_write("      broadcast (MAIL_ANY_TID)\n");
-    terminal_write("\n");
     terminal_write("  [4] Red-Black Tree Test Suite\n");
-    terminal_write("      rbtree_insert / rbtree_delete / rbtree_search\n");
-    terminal_write("      rbtree_next / rbtree_prev / rbtree_replace_node\n");
-    terminal_write("      rbtree_find_or_insert / rbtree_for_each_safe\n");
-    terminal_write("\n");
     terminal_write("  [5] Mixed Scheduling Test Suite\n");
-    terminal_write("      kernel + user thread interleaving\n");
-    terminal_write("      cross-privilege block / unblock\n");
     terminal_write("\n");
-    terminal_write("  Press 1, 2, 3, 4 or 5 to select a test suite\n");
+    terminal_write("  Press 1, 2, 3, 4 or 5 to select\n");
 }
 
 /* ------------------------------------------------------------------ *

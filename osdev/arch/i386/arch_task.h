@@ -3,6 +3,7 @@
 
 #include "arch_protm.h"
 #include "mm/heap.h"
+#include "mm/vmm.h"
 
 typedef struct regs {
     uint32_t gs;
@@ -69,7 +70,7 @@ typedef struct arch_task_context {
 } arch_task_context;
 
 int tss_init(void);
-int arch_task_context_init(arch_task_context* context, task_entry_t entry, task_priv priv);
+int arch_task_context_init(vmm_control_block* vcb, arch_task_context* context, task_entry_t entry, task_priv priv);
 void arch_task_context_release(arch_task_context* context);
 int arch_task_restore_context(arch_task_context* context);
 #endif

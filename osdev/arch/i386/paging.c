@@ -108,7 +108,7 @@ void arch_unmap_4mb(void* va)
  * Caller MUST hold paging_lock.
  * Returns 0 on success, negative on failure.
  */
-static inline int split_4mb_pde(uint32_t pde_index)
+static inline int split_4mb_pde(uint32_t pde_index, uint32_t user_accessible)
 {
     pde_t* pde = &pdes[pde_index];
     pte_t* ptl = 0;
@@ -123,6 +123,9 @@ static inline int split_4mb_pde(uint32_t pde_index)
         KLOG("split_4mb_pde: failed to allocate page table for PDE at index %u", pde_index);
         return E_NOMEM;
     }
+
+    if (user_accessible && pde->user == 0)
+        pde->user = 1;
 
     for (size_t i = 0; i < 1024; i++) {
         ptl[i].raw         = 0;
@@ -166,7 +169,7 @@ void arch_map_4kb(void* va, void* pa, uint32_t flags)
      * 4KB mapping alongside the existing identity map.
      */
     if (pdes[pde_index].present && pdes[pde_index].page_size) {
-        if (split_4mb_pde(pde_index) != 0) {
+        if (split_4mb_pde(pde_index, flags & PTE_USER) != 0) {
             KLOG("arch_map_4kb: failed to split 4MB PDE at index %u", pde_index);
             spinlock_unlock(paging_lock);
             return;
@@ -223,7 +226,7 @@ void arch_unmap_4kb(void* va)
         return;
     }
 
-    pmm_free_page(ptbl[pte_index].paddr << 12);
+    // pmm_free_page(ptbl[pte_index].paddr << 12);
     ptbl[pte_index].raw = 0;
     spinlock_unlock(paging_lock);
 
@@ -278,13 +281,13 @@ void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
      * execute kernel code and access kernel data within the same
      * address space.  This is acceptable for a hobby / testing OS. */
     memset(pdes, 0, sizeof(pdes));
-    arch_map_4mb((void*)0x0,        (void*)0x0, PTE_USER_PAGE);
+    arch_map_4mb_range(0x0, 0x1000000, PTE_USER_PAGE);  /* identity map first 16MB */
     arch_map_4mb((void*)0xC0000000, (void*)0x0, PTE_USER_PAGE);
 
-    for (uint32_t addr = 0x400000; addr < total_memory; addr += 0x400000) {
+    for (uint32_t addr = 0x1000000; addr < total_memory; addr += 0x400000) {
         if (addr == 0xC0000000)
             continue;  /* skip the higher-half slot */
-        arch_map_4mb((void*)addr, (void*)addr, PTE_USER_PAGE);
+        arch_map_4mb((void*)addr, (void*)addr, PTE_KERNEL);
     }
 
     /* Step 2: Set PSE (Page Size Extension) in CR4 */

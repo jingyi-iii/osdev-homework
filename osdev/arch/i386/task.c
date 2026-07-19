@@ -47,12 +47,12 @@ static inline void ldt_reload(arch_task_context* context)
     arch_reload_ldt(arch_get_sel(LDT));
 }
 
-int arch_task_context_init(arch_task_context* context, task_entry_t entry, task_priv priv)
+int arch_task_context_init(vmm_control_block* vcb, arch_task_context* context, task_entry_t entry, task_priv priv)
 {
     uint8_t ring = priv == TASK_PRIV_KERNEL ? 0 : 3;
 
-    if (!context) {
-        KLOG("task context is null");
+    if (!context || !vcb) {
+        KLOG("task context or vcb is null");
         return E_INVAL;
     }
 
@@ -64,7 +64,7 @@ int arch_task_context_init(arch_task_context* context, task_entry_t entry, task_
     context->ldts[3] = 0x00cf9200 | (ring << 13);
 
     if (ring) {
-        context->stack = vmm_alloc_page(PTE_USER_PAGE);    // user stack
+        context->stack = vmm_alloc_page(vcb, PTE_USER_PAGE);    // user stack
     } else {
         context->stack = kmalloc(0x1000);    // 4KB stack
     }
@@ -92,8 +92,12 @@ void arch_task_context_release(arch_task_context* context)
     if (!context)
         return;
 
-    if (context->stack)
-        kfree(context->stack);
+    if (context->stack) {
+        if (context->ring)
+            arch_unmap_4kb(context->stack);  /* user stack: unmap + free phys page */
+        else
+            kfree(context->stack);            /* kernel stack: heap free */
+    }
 
     memset(context, 0, sizeof(arch_task_context));
 }

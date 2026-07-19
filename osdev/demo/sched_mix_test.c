@@ -94,12 +94,20 @@ static void mix_helper_entry(void)
     int my_tid = thread_get_tid();
     int my_idx = -1;
 
-    /* Find our slot in the global arrays */
-    for (int i = 0; i < MAX_MIX_THREADS; i++) {
-        if (g_helper_tids[i] == my_tid) {
-            my_idx = i;
-            break;
+    /* Find our slot in the global arrays.
+     * Spin until the main thread has registered our TID — there is a
+     * window between thread_create() and g_helper_tids[] assignment
+     * where a timer IRQ could preempt the main thread and schedule us
+     * before our slot is ready. */
+    while (my_idx < 0) {
+        for (int i = 0; i < MAX_MIX_THREADS; i++) {
+            if (g_helper_tids[i] == my_tid) {
+                my_idx = i;
+                break;
+            }
         }
+        if (my_idx < 0)
+            thread_yield();
     }
 
     /*

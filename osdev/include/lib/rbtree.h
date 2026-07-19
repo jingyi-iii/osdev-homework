@@ -96,13 +96,13 @@ static inline rbnode* rbtree_prev(rbtree* tree, rbnode* node)
 
 /** Iterate @pos over every node in @tree in sorted order. */
 #define rbtree_for_each(pos, tree) \
-	for ((pos) = rbtree_first(tree); \
+	for (rbnode* (pos) = rbtree_first(tree); \
 	     (pos) != 0; \
 	     (pos) = rbtree_next((tree), (pos)))
 
 /** Iterate @pos over every node, safe against deletion of @pos. */
 #define rbtree_for_each_safe(pos, n, tree) \
-	for ((pos) = rbtree_first(tree), (n) = (pos) ? rbtree_next((tree), (pos)) : 0; \
+	for (rbnode* (pos) = rbtree_first(tree), *(n) = (pos) ? rbtree_next((tree), (pos)) : 0; \
 	     (pos) != 0; \
 	     (pos) = (n), (n) = (pos) ? rbtree_next((tree), (pos)) : 0)
 

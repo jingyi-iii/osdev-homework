@@ -95,7 +95,7 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
         return E_NOMEM;
     }
 
-    if (arch_task_context_init(&thread->context, entry, priv)) {
+    if (arch_task_context_init(&parent->vcb, &thread->context, entry, priv)) {
         KLOG("failed to init thread context");
         kfree(thread);
         return E_THREAD_CREATE;

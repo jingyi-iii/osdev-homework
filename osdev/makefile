@@ -20,12 +20,17 @@ ARCH       := i686-elf-
 CC         := $(ARCH)gcc
 CXX        := $(ARCH)g++
 AS         := $(ARCH)as
+OBJDUMP    := $(ARCH)objdump
+NM         := $(ARCH)nm
+SIZE       := $(ARCH)size
 
 DEPFLAGS   := -MMD -MP
 CFLAGS     := -std=gnu99 -ffreestanding -O2 -g -Wall -Wextra $(INC_DIRS) $(DEPFLAGS)
 CXXFLAGS   := -ffreestanding -O2 -Wall -Wextra -g -fno-exceptions -fno-rtti $(INC_DIRS) $(DEPFLAGS)
 ASFLAGS    :=
 LDFLAGS    := -ffreestanding -O2 -g -nostdlib
+
+MEMORY_MAP := $(OUT_DIR)memory_map
 
 $(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) | $(OUT_DIR) $(GRUB_DIR)
 	cp $(TARGET_BIN) $(OUT_DIR)iso/boot/myos.bin
@@ -34,6 +39,14 @@ $(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) | $(OUT_DIR) $(GRUB_DIR)
 
 $(TARGET_BIN): $(OBJS)
 	$(CC) -T $(LINKFILE) $(LDFLAGS) $^ -o $@ -lgcc
+	@echo "  GEN     $(MEMORY_MAP)"
+	@$(OBJDUMP) -h $@ > $(MEMORY_MAP)
+	@echo "" >> $(MEMORY_MAP)
+	@echo "=== Section Sizes ===" >> $(MEMORY_MAP)
+	@$(SIZE) $@ >> $(MEMORY_MAP)
+	@echo "" >> $(MEMORY_MAP)
+	@echo "=== Symbols by Address ===" >> $(MEMORY_MAP)
+	@$(NM) -n $@ >> $(MEMORY_MAP)
 
 $(OBJS_DIR)%.c.o: %.c
 	@mkdir -p $(@D)
