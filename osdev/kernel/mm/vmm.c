@@ -36,18 +36,28 @@ void vmm_destroy(vmm_control_block* vcb)
     pmm_free_page(vcb->cr3);
 }
 
-uint32_t vmm_alloc_region(vmm_control_block* vcb, uint32_t size, uint32_t flags)
+void* vmm_alloc_page(uint32_t flags)
 {
-    if (!vcb || !vcb->tree || size == 0)
-        return E_INVAL;
+    uint32_t pa = 0;
+    uint32_t va = 0;
 
-    return 0;
+    // if (!vcb || !vcb->tree)
+    //     return E_INVAL;
+
+    pa = pmm_alloc_page();
+    if (!pa)
+        return 0;
+
+    va = pa;
+    arch_map_4kb((void*)va, (void*)pa, flags);
+    return (void*)va;
 }
 
-int vmm_free_region(vmm_control_block* vcb, uint32_t start_va)
+int vmm_free_page(void* va)
 {
-    if (!vcb || !vcb->tree)
-        return E_INVAL;
+    // if (!vcb || !vcb->tree)
+    //     return E_INVAL;
 
+    arch_unmap_4kb((void*)va);
     return 0;
 }

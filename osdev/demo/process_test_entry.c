@@ -19,8 +19,9 @@ extern void thread_api_test_main(void);
 extern void process_api_test_main(void);
 extern void mailbox_api_test_main(void);
 extern void rbtree_test_main(void);
+extern void sched_mix_test_main(void);
 
-/* Menu state: 0 = waiting, 1 = thread tests, 2 = process tests, 3 = mailbox tests, 4 = rbtree tests */
+/* Menu state: 0 = waiting, 1 = thread tests, 2 = process tests, 3 = mailbox tests, 4 = rbtree tests, 5 = mixed scheduling tests */
 static volatile int menu_choice = 0;
 
 /*
@@ -42,6 +43,7 @@ static void menu_kb_handler(const char* data, size_t size)
     if (key == '2') menu_choice = 2;
     if (key == '3') menu_choice = 3;
     if (key == '4') menu_choice = 4;
+    if (key == '5') menu_choice = 5;
 }
 
 /* ------------------------------------------------------------------ *
@@ -76,7 +78,11 @@ static void draw_menu(void)
     terminal_write("      rbtree_next / rbtree_prev / rbtree_replace_node\n");
     terminal_write("      rbtree_find_or_insert / rbtree_for_each_safe\n");
     terminal_write("\n");
-    terminal_write("  Press 1, 2, 3 or 4 to select a test suite\n");
+    terminal_write("  [5] Mixed Scheduling Test Suite\n");
+    terminal_write("      kernel + user thread interleaving\n");
+    terminal_write("      cross-privilege block / unblock\n");
+    terminal_write("\n");
+    terminal_write("  Press 1, 2, 3, 4 or 5 to select a test suite\n");
 }
 
 /* ------------------------------------------------------------------ *
@@ -108,6 +114,9 @@ void process_test_main_thread(void)
         } else if (menu_choice == 3) {
             terminal_write("\n--- Launching Mailbox API Test Suite ---\n\n");
             proc_create(PROC_PRIV_KERNEL, mailbox_api_test_main);
+        } else if (menu_choice == 5) {
+            terminal_write("\n--- Launching Mixed Scheduling Test Suite ---\n\n");
+            proc_create(PROC_PRIV_KERNEL, sched_mix_test_main);
         } else {
             terminal_write("\n--- Launching Red-Black Tree Test Suite ---\n\n");
             proc_create(PROC_PRIV_KERNEL, rbtree_test_main);

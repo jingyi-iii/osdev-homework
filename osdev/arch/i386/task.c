@@ -1,6 +1,7 @@
 #include "arch_task.h"
 #include "lib/string.h"
 #include "kernel/errno.h"
+#include "mm/vmm.h"
 
 #ifndef KLOG
 #define KLOG(x) 
@@ -62,7 +63,11 @@ int arch_task_context_init(arch_task_context* context, task_entry_t entry, task_
     context->ldts[2] = 0x0000ffff;
     context->ldts[3] = 0x00cf9200 | (ring << 13);
 
-    context->stack = kmalloc(0x1000);    // 4KB stack
+    if (ring) {
+        context->stack = vmm_alloc_page(PTE_USER_PAGE);    // user stack
+    } else {
+        context->stack = kmalloc(0x1000);    // 4KB stack
+    }
     if (!context->stack) {
         KLOG("failed to alloc task stack");
         return E_NOMEM;

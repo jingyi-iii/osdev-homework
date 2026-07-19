@@ -53,7 +53,7 @@ static inline void tlb_invlpg(uint32_t vaddr)
     __asm__ __volatile__("invlpg (%0)" : : "r"(vaddr) : "memory");
 }
 
-static void arch_map_4mb(void* va, void* pa, uint32_t flags)
+void arch_map_4mb(void* va, void* pa, uint32_t flags)
 {
     size_t pde_index = PD_INDEX(va);
 
@@ -82,7 +82,7 @@ static void arch_map_4mb(void* va, void* pa, uint32_t flags)
     tlb_invlpg((uint32_t)va);
 }
 
-static void arch_unmap_4mb(void* va)
+void arch_unmap_4mb(void* va)
 {
     size_t pde_index = PD_INDEX(va);
 
@@ -98,7 +98,57 @@ static void arch_unmap_4mb(void* va)
     tlb_invlpg((uint32_t)va);
 }
 
-static void arch_map_4kb(void* va, void* pa, uint32_t flags)
+/*
+ * split_4mb_pde — Split a 4MB PDE into 1024 4KB PTEs.
+ *
+ * Allocates a new page table and fills every PTE with the original
+ * 4MB PDE's attributes, preserving the identity mapping (PA = VA).
+ * Then replaces the 4MB PDE with a PDE pointing to the new page table.
+ *
+ * Caller MUST hold paging_lock.
+ * Returns 0 on success, negative on failure.
+ */
+static inline int split_4mb_pde(uint32_t pde_index)
+{
+    pde_t* pde = &pdes[pde_index];
+    pte_t* ptl = 0;
+
+    if (!pde->present || !pde->page_size) {
+        KLOG("split_4mb_pde: PDE at index %u is not a 4MB page", pde_index);
+        return -1;
+    }
+
+    ptl = (pte_t*)pmm_alloc_page();
+    if (!ptl) {
+        KLOG("split_4mb_pde: failed to allocate page table for PDE at index %u", pde_index);
+        return E_NOMEM;
+    }
+
+    for (size_t i = 0; i < 1024; i++) {
+        ptl[i].raw         = 0;
+        ptl[i].present     = pde->present;
+        ptl[i].rw          = pde->rw;
+        ptl[i].user        = pde->user;
+        ptl[i].pwt         = pde->pwt;
+        ptl[i].pcd         = pde->pcd;
+        ptl[i].global      = pde->global;
+        ptl[i].paddr       = pde->paddr + i;
+    }
+
+    {
+        pde_t new_pde;
+        new_pde.raw = pde->raw;
+        new_pde.present = 1;
+        new_pde.rw = 1;         /* writable PTEs take effect */
+        new_pde.page_size = 0;  /* 4KB page table */
+        new_pde.paddr = (uint32_t)ptl >> 12;
+        pde->raw = new_pde.raw;
+    }
+
+    return 0;
+}
+
+void arch_map_4kb(void* va, void* pa, uint32_t flags)
 {
     size_t pde_index = PD_INDEX(va);
     size_t pte_index = PT_INDEX(va);
@@ -109,6 +159,20 @@ static void arch_map_4kb(void* va, void* pa, uint32_t flags)
     }
 
     spinlock_lock(paging_lock);
+
+    /*
+     * If a 4MB page already covers this virtual address, split it
+     * into 4KB page tables first so we can create a fine-grained
+     * 4KB mapping alongside the existing identity map.
+     */
+    if (pdes[pde_index].present && pdes[pde_index].page_size) {
+        if (split_4mb_pde(pde_index) != 0) {
+            KLOG("arch_map_4kb: failed to split 4MB PDE at index %u", pde_index);
+            spinlock_unlock(paging_lock);
+            return;
+        }
+    }
+
     if (!pdes[pde_index].present) {
         uint32_t pt_pa = pmm_alloc_page();
         if (!pt_pa) {
@@ -137,7 +201,7 @@ static void arch_map_4kb(void* va, void* pa, uint32_t flags)
     tlb_invlpg((uint32_t)va);
 }
 
-static void arch_unmap_4kb(void* va)
+void arch_unmap_4kb(void* va)
 {
     size_t pde_index = PD_INDEX(va);
     size_t pte_index = PT_INDEX(va);
@@ -209,15 +273,18 @@ void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
     KLOG("arch_paging_init: total_memory=%u MB, bitmap=0x%x",
          total_memory >> 20, (uint32_t)__pmm_bitmap_start);
 
-    /* Step 1: Build the initial page directory */
+    /* Step 1: Build the initial page directory.
+     * Use PTE_USER_PAGE so that user-mode (ring-3) threads can
+     * execute kernel code and access kernel data within the same
+     * address space.  This is acceptable for a hobby / testing OS. */
     memset(pdes, 0, sizeof(pdes));
-    arch_map_4mb((void*)0x0,        (void*)0x0, PTE_KERNEL);
-    arch_map_4mb((void*)0xC0000000, (void*)0x0, PTE_KERNEL);
+    arch_map_4mb((void*)0x0,        (void*)0x0, PTE_USER_PAGE);
+    arch_map_4mb((void*)0xC0000000, (void*)0x0, PTE_USER_PAGE);
 
     for (uint32_t addr = 0x400000; addr < total_memory; addr += 0x400000) {
         if (addr == 0xC0000000)
             continue;  /* skip the higher-half slot */
-        arch_map_4mb((void*)addr, (void*)addr, PTE_KERNEL);
+        arch_map_4mb((void*)addr, (void*)addr, PTE_USER_PAGE);
     }
 
     /* Step 2: Set PSE (Page Size Extension) in CR4 */
