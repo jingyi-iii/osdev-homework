@@ -22,7 +22,7 @@ void vmm_switch(vmm_control_block* vcb);
 int vmm_create(vmm_control_block* vcb, int user_accessible);
 void vmm_destroy(vmm_control_block* vcb);
 
-void* vmm_alloc_page(vmm_control_block* vcb, uint32_t flags);
+void* vmm_alloc_pages(vmm_control_block* vcb, uint32_t page_cnt, uint32_t flags);
 int vmm_free_page(vmm_control_block* vcb, void* va);
 
 #endif /* VMM_H */

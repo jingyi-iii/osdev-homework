@@ -64,7 +64,7 @@ int arch_task_context_init(vmm_control_block* vcb, arch_task_context* context, t
     context->ldts[3] = 0x00cf9200 | (ring << 13);
 
     if (ring) {
-        context->stack = vmm_alloc_page(vcb, PTE_USER_PAGE);    // user stack
+        context->stack = vmm_alloc_pages(vcb, 1, PTE_USER_PAGE);    // user stack
     } else {
         context->stack = kmalloc(0x1000);    // 4KB stack
     }

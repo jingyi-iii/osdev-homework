@@ -81,7 +81,7 @@ void vmm_destroy(vmm_control_block* vcb)
         rbtree_for_each_safe(pos, n, vcb->tree) {
             vmm_region* r = rb_entry(pos, vmm_region, node);
             arch_unmap_4kb(r->start_va);
-            pmm_free_page(r->pa);
+            pmm_free_pages(r->pa, r->size / PAGE_SIZE);
             rbtree_delete(vcb->tree, pos);
             kfree(r);
         }
@@ -89,10 +89,10 @@ void vmm_destroy(vmm_control_block* vcb)
     }
 
     arch_destroy_address_space(vcb->cr3);
-    pmm_free_page(vcb->cr3);
+    pmm_free_pages(vcb->cr3, 1);
 }
 
-void* vmm_alloc_page(vmm_control_block* vcb, uint32_t flags)
+void* vmm_alloc_pages(vmm_control_block* vcb, uint32_t page_cnt, uint32_t flags)
 {
     uint32_t pa = 0;
     uint32_t va = 0;
@@ -122,7 +122,7 @@ void* vmm_alloc_page(vmm_control_block* vcb, uint32_t flags)
         }
     }
 
-    pa = pmm_alloc_page();
+    pa = pmm_alloc_pages(page_cnt);
     if (!pa) {
         return 0;
     }
@@ -133,12 +133,12 @@ void* vmm_alloc_page(vmm_control_block* vcb, uint32_t flags)
 
     region = kmalloc(sizeof(vmm_region));
     if (!region) {
-        pmm_free_page(pa);
+        pmm_free_pages(pa, page_cnt);
         return 0;
     }
 
     region->start_va = (void*)va;
-    region->size     = PAGE_SIZE;
+    region->size     = PAGE_SIZE * page_cnt;
     region->flags    = flags;
     region->pa       = pa;
     rbtree_insert(vcb->tree, &region->node, vmm_rbtree_node_cmp);
@@ -162,7 +162,7 @@ int vmm_free_page(vmm_control_block* vcb, void* va)
     region = rb_entry(node, vmm_region, node);
     if (region) {
         arch_unmap_4kb(region->start_va);
-        pmm_free_page(region->pa);
+        pmm_free_pages(region->pa, region->size / PAGE_SIZE);
         rbtree_delete(vcb->tree, node);
         kfree(region);
     }

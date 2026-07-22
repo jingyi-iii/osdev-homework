@@ -146,3 +146,55 @@ uint32_t pmm_get_free_page_count(void)
 
     return blocks;
 }
+
+uint32_t pmm_alloc_pages(uint32_t num_pages)
+{
+    if (!pmm_initialized || num_pages == 0)
+        return 0;
+
+    spinlock_lock(pmm_lock);
+
+    uint32_t start_block = 0;
+    uint32_t found_blocks = 0;
+
+    for (size_t i = 0; i < total_blocks; i++) {
+        if (!bitmap_test(i)) {
+            if (found_blocks == 0) {
+                start_block = i;
+            }
+            found_blocks++;
+            if (found_blocks == num_pages) {
+                for (size_t j = start_block; j < start_block + num_pages; j++) {
+                    bitmap_set(j);
+                }
+                free_blocks -= num_pages;
+                memset((void*)(start_block * block_size), 0, num_pages * block_size);
+                spinlock_unlock(pmm_lock);
+                return start_block * block_size;
+            }
+        } else {
+            found_blocks = 0;
+        }
+    }
+
+    spinlock_unlock(pmm_lock);
+    KLOG("PMM: out of memory for %u pages!", num_pages);
+    return 0;
+}
+
+void pmm_free_pages(uint32_t paddr, uint32_t num_pages)
+{
+    if (!pmm_initialized || num_pages == 0)
+        return;
+
+    uint32_t start_block = paddr / block_size;
+
+    spinlock_lock(pmm_lock);
+    for (size_t i = start_block; i < start_block + num_pages; i++) {
+        if (i < total_blocks && bitmap_test(i)) {
+            bitmap_clear(i);
+            free_blocks++;
+        }
+    }
+    spinlock_unlock(pmm_lock);
+}
