@@ -120,19 +120,23 @@ void arch_unmap_4mb(void* cr3, void* va)
  * Caller MUST hold paging_lock.
  * Returns 0 on success, negative on failure.
  */
-static inline int split_4mb_pde(uint32_t pde_index, uint32_t user_accessible)
+static inline int split_4mb_pde(pde_t* pde, uint32_t user_accessible)
 {
-    pde_t* pde = &pdes[pde_index];
     pte_t* ptl = 0;
 
+    if (!pde) {
+        KLOG("split_4mb_pde: invalid pde");
+        return -1;
+    }
+
     if (!pde->present || !pde->page_size) {
-        KLOG("split_4mb_pde: PDE at index %u is not a 4MB page", pde_index);
+        KLOG("split_4mb_pde: PDE is not a 4MB page");
         return -1;
     }
 
     ptl = (pte_t*)pmm_alloc_page();
     if (!ptl) {
-        KLOG("split_4mb_pde: failed to allocate page table for PDE at index %u", pde_index);
+        KLOG("split_4mb_pde: failed to allocate page table");
         return E_NOMEM;
     }
 
@@ -187,7 +191,7 @@ void arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
      * 4KB mapping alongside the existing identity map.
      */
     if (pdes[pde_index].present && pdes[pde_index].page_size) {
-        if (split_4mb_pde(pde_index, flags & PTE_USER) != 0) {
+        if (split_4mb_pde(&pdes[pde_index], flags & PTE_USER) != 0) {
             KLOG("arch_map_4kb: failed to split 4MB PDE at index %u", pde_index);
             spinlock_unlock(paging_lock);
             return;
@@ -277,7 +281,7 @@ void arch_map_4mb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t 
 void arch_map_4kb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t flags)
 {
     if (!cr3) {
-        KLOG("arch_map_4mb_range: invalid cr3");
+        KLOG("arch_map_4kb_range: invalid cr3");
         return;
     }
 

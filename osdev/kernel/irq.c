@@ -107,7 +107,7 @@ static int irqline_remove_all(struct irqline* line)
         return E_INVAL;
 
     spinlock_lock(line->sp_lock);
-    list_for_each(node, &line->irqs) {
+    list_for_each_safe(node, next, &line->irqs) {
         list_del(node);
     }
     spinlock_unlock(line->sp_lock);

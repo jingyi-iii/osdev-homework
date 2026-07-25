@@ -78,7 +78,7 @@ void release_mailbox(mailbox* mb)
 
         /* Release all registered handlers */
         while (!list_empty(&mb->handlers)) {
-            mailhander* mh = list_entry(mb->handlers.prev, mailhander, this_node);
+            mailhandler* mh = list_entry(mb->handlers.prev, mailhandler, this_node);
             list_del(&mh->this_node);
             kfree(mh);
         }
@@ -105,7 +105,7 @@ static int send_mail(mailbox* mb, mail* m)
          * regardless of how many handlers are registered.
          */
         list_for_each(pos, &mb->handlers) {
-            mailhander* mh = list_entry(pos, mailhander, this_node);
+            mailhandler* mh = list_entry(pos, mailhandler, this_node);
             if (mh->handler)
                 mh->handler(m);
         }
@@ -268,7 +268,7 @@ static int register_handler(mailbox* mb, mail_handler handler)
     if (!mb || !handler)
         return -EINVAL;
 
-    mailhander* mh = (mailhander*)kmalloc(sizeof(mailhander));
+    mailhandler* mh = (mailhandler*)kmalloc(sizeof(mailhandler));
     if (!mh)
         return -ENOMEM;
 
@@ -289,7 +289,7 @@ static int unregister_handler(mailbox* mb, mail_handler handler)
 
     spinlock_lock(mb->sp_lock);
     list_for_each(pos, &mb->handlers) {
-        mailhander* mh = list_entry(pos, mailhander, this_node);
+        mailhandler* mh = list_entry(pos, mailhandler, this_node);
         if (mh->handler == handler) {
             list_del(pos);
             spinlock_unlock(mb->sp_lock);

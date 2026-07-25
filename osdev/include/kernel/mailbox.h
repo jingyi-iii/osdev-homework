@@ -32,10 +32,10 @@ typedef struct mail {
  */
 typedef void (*mail_handler)(mail* m);
 
-typedef struct mailhander {
+typedef struct mailhandler {
     mail_handler handler;
     list_node this_node;
-} mailhander;
+} mailhandler;
 
 typedef struct mailbox {
     int owner_pid;

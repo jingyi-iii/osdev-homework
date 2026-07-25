@@ -3,6 +3,7 @@ ENTRY(_start)
 SECTIONS
 {
 	. = 1M;
+	__kernel_start = .;
 
 	/* Code data. */
 	.text BLOCK(4K) : ALIGN(4K)

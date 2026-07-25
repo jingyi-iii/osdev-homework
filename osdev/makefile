@@ -25,7 +25,7 @@ NM         := $(ARCH)nm
 SIZE       := $(ARCH)size
 
 DEPFLAGS   := -MMD -MP
-CFLAGS     := -std=gnu99 -ffreestanding -O2 -g -Wall -Wextra $(INC_DIRS) $(DEPFLAGS)
+CFLAGS     := -std=gnu99 -ffreestanding -O2 -g -Wall -Wextra -fno-omit-frame-pointer $(INC_DIRS) $(DEPFLAGS)
 CXXFLAGS   := -ffreestanding -O2 -Wall -Wextra -g -fno-exceptions -fno-rtti $(INC_DIRS) $(DEPFLAGS)
 ASFLAGS    :=
 LDFLAGS    := -ffreestanding -O2 -g -nostdlib
@@ -74,6 +74,53 @@ run: $(TARGET_ISO)
 run_debug: $(TARGET_BIN)
 	qemu-system-i386 -s -S -kernel $(TARGET_BIN) -serial file:serial.log
 
+# --- Crash dump: extract EIPs from serial log and resolve to function names ---
+LOG ?= serial.log
+DUMP_BIN := $(TARGET_BIN)
+ADDR2LINE := $(ARCH)addr2line
+
+dump: $(DUMP_BIN)
+	@echo "=== Crash Stack Trace ==="
+	@echo "  Log    : $(LOG)"
+	@echo "  Binary : $(DUMP_BIN)"
+	@echo "  Tool   : $(ADDR2LINE)"
+	@echo ""
+	@if [ ! -f $(LOG) ]; then \
+		echo "Error: '$(LOG)' not found.  Run 'make run' first."; \
+		exit 1; \
+	fi
+	@if ! command -v $(ADDR2LINE) >/dev/null 2>&1; then \
+		echo "Error: '$(ADDR2LINE)' not found in PATH."; \
+		echo "  You may need to source your cross-compiler environment"; \
+		echo "  or set PATH to include the i686-elf bin directory."; \
+		exit 1; \
+	fi
+	@crash=$$(sed -n '/--- STACK_TRACE_BEGIN ---/,/--- STACK_TRACE_END ---/p' $(LOG) | \
+	           grep -o 'CRASH:[0-9A-Fa-f]\{8\}' | sed 's/CRASH://' | tr -d '\r'); \
+	eips=$$(sed -n '/--- STACK_TRACE_BEGIN ---/,/--- STACK_TRACE_END ---/p' $(LOG) | \
+	         grep -o 'EIP:[0-9A-Fa-f]\{8\}' | sed 's/EIP://' | tr -d '\r'); \
+	if [ -n "$$crash" ]; then \
+		line=$$($(ADDR2LINE) -e $(DUMP_BIN) -f -p -C "0x$$crash" 2>&1); \
+		echo "  >>> CRASH at 0x$$crash  $$line"; \
+		echo ""; \
+	fi; \
+	if [ -z "$$eips" ]; then \
+		echo "  (no call-chain EIPs found)"; \
+	else \
+		echo "  Call chain (return addresses):"; \
+		i=0; \
+		for addr in $$eips; do \
+			line=$$($(ADDR2LINE) -e $(DUMP_BIN) -f -p -C "0x$$addr" 2>&1); \
+			if [ -n "$$line" ] && [ "$$line" != "?? ??:0" ]; then \
+				echo "  #$$i  0x$$addr  $$line"; \
+			else \
+				echo "  #$$i  0x$$addr  (not resolved)"; \
+			fi; \
+			i=$$((i+1)); \
+		done; \
+	fi
+	@echo ""
+
 # --- Simple bootloader (no GRUB, bare metal) ---
 BOOTLOADER_BIN := $(OUT_DIR)bootloader.bin
 
@@ -88,5 +135,5 @@ clean:
 	@rm -rf $(OUT_DIR)
 	@rm -rf *.log
 
-.PHONY: all env run run_boot clean
+.PHONY: all env run run_boot clean dump
 
