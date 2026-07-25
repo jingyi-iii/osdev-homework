@@ -539,17 +539,17 @@ int snprintf(char *str, size_t size, const char *format, ...)
     return result;
 }
 
-void memcpy(void *dest, const void *src, uint32_t size)
+void memcpy(void *dest, const void *src, size_t size)
 {
-    uint32_t i = 0;
+    size_t i = 0;
 
     for (i = 0; i < size; i++)
         *((uint8_t *)dest + i) = *((const uint8_t *)src + i);
 }
 
-void memset(void* dest, char chr, size_t size)
+void memset(void* dest, int chr, size_t size)
 {
     for (size_t i = 0; i < size; i++) {
-        *((char*)dest + i) = chr;
+        *((char*)dest + i) = (char)chr;
     }
 }

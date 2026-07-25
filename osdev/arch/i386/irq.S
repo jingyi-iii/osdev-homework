@@ -265,4 +265,3 @@ arch_syscall_entry:
 
         RESTORE_REGS_AND_SWITCH_USER_STACK
         iret
-.endm

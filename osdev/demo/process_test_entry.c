@@ -18,8 +18,10 @@
 extern void thread_api_test_main(void);
 extern void process_api_test_main(void);
 extern void mailbox_api_test_main(void);
+extern void rbtree_test_main(void);
+extern void sched_mix_test_main(void);
 
-/* Menu state: 0 = waiting, 1 = thread tests, 2 = process tests, 3 = mailbox tests */
+/* Menu state: 0 = waiting, 1 = thread tests, 2 = process tests, 3 = mailbox tests, 4 = rbtree tests, 5 = mixed scheduling tests */
 static volatile int menu_choice = 0;
 
 /*
@@ -40,6 +42,8 @@ static void menu_kb_handler(const char* data, size_t size)
     if (key == '1') menu_choice = 1;
     if (key == '2') menu_choice = 2;
     if (key == '3') menu_choice = 3;
+    if (key == '4') menu_choice = 4;
+    if (key == '5') menu_choice = 5;
 }
 
 /* ------------------------------------------------------------------ *
@@ -51,25 +55,16 @@ static void draw_menu(void)
     terminal_flush(0);
 
     terminal_write("========================================\n");
-    terminal_write("  PROCESS API TEST SUITE (Text Mode)    \n");
+    terminal_write("  PROCESS API TEST SUITE                \n");
     terminal_write("========================================\n");
     terminal_write("\n");
     terminal_write("  [1] Thread API Test Suite\n");
-    terminal_write("      thread_create / thread_yield\n");
-    terminal_write("      thread_block / thread_unblock\n");
-    terminal_write("      thread_exit / proc_get_pid\n");
-    terminal_write("\n");
     terminal_write("  [2] Process API Test Suite\n");
-    terminal_write("      proc_create / proc_exit\n");
-    terminal_write("      proc_block / proc_unblock\n");
-    terminal_write("      proc_get_pid\n");
-    terminal_write("\n");
     terminal_write("  [3] Mailbox API Test Suite\n");
-    terminal_write("      mailbox_send / mailbox_listen\n");
-    terminal_write("      mailbox_register_handler\n");
-    terminal_write("      broadcast (MAIL_ANY_TID)\n");
+    terminal_write("  [4] Red-Black Tree Test Suite\n");
+    terminal_write("  [5] Mixed Scheduling Test Suite\n");
     terminal_write("\n");
-    terminal_write("  Press 1, 2 or 3 to select a test suite\n");
+    terminal_write("  Press 1, 2, 3, 4 or 5 to select\n");
 }
 
 /* ------------------------------------------------------------------ *
@@ -98,9 +93,15 @@ void process_test_main_thread(void)
         } else if (menu_choice == 2) {
             terminal_write("\n--- Launching Process API Test Suite ---\n\n");
             proc_create(PROC_PRIV_KERNEL, process_api_test_main);
-        } else {
+        } else if (menu_choice == 3) {
             terminal_write("\n--- Launching Mailbox API Test Suite ---\n\n");
             proc_create(PROC_PRIV_KERNEL, mailbox_api_test_main);
+        } else if (menu_choice == 5) {
+            terminal_write("\n--- Launching Mixed Scheduling Test Suite ---\n\n");
+            proc_create(PROC_PRIV_KERNEL, sched_mix_test_main);
+        } else {
+            terminal_write("\n--- Launching Red-Black Tree Test Suite ---\n\n");
+            proc_create(PROC_PRIV_KERNEL, rbtree_test_main);
         }
 
         /*

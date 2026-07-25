@@ -8,6 +8,6 @@
 size_t strlen(const char *s);
 int strcmp(const char *s1, const char *s2);
 int snprintf(char *str, size_t size, const char *format, ...);
-void memcpy(void *dest, const void *src, uint32_t size);
-void memset(void* dest, char chr, size_t size);
+void memcpy(void *dest, const void *src, size_t size);
+void memset(void* dest, int chr, size_t size);
 #endif

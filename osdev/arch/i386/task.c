@@ -1,6 +1,8 @@
 #include "arch_task.h"
 #include "lib/string.h"
 #include "kernel/errno.h"
+#include "mm/vmm.h"
+#include "mm/pmm.h"
 
 #ifndef KLOG
 #define KLOG(x) 
@@ -46,12 +48,12 @@ static inline void ldt_reload(arch_task_context* context)
     arch_reload_ldt(arch_get_sel(LDT));
 }
 
-int arch_task_context_init(arch_task_context* context, task_entry_t entry, task_priv priv)
+int arch_task_context_init(vmm_control_block* vcb, arch_task_context* context, task_entry_t entry, task_priv priv)
 {
     uint8_t ring = priv == TASK_PRIV_KERNEL ? 0 : 3;
 
-    if (!context) {
-        KLOG("task context is null");
+    if (!context || !vcb) {
+        KLOG("task context or vcb is null");
         return E_INVAL;
     }
 
@@ -62,7 +64,11 @@ int arch_task_context_init(arch_task_context* context, task_entry_t entry, task_
     context->ldts[2] = 0x0000ffff;
     context->ldts[3] = 0x00cf9200 | (ring << 13);
 
-    context->stack = kmalloc(0x1000);    // 4KB stack
+    if (ring) {
+        context->stack = vmm_alloc_pages(vcb, 1, PTE_USER_PAGE);    // user stack
+    } else {
+        context->stack = kmalloc(0x1000);    // 4KB stack
+    }
     if (!context->stack) {
         KLOG("failed to alloc task stack");
         return E_NOMEM;
@@ -82,13 +88,19 @@ int arch_task_context_init(arch_task_context* context, task_entry_t entry, task_
     return 0;
 }
 
-void arch_task_context_release(arch_task_context* context)
+void arch_task_context_release(vmm_control_block* vcb, arch_task_context* context)
 {
-    if (!context)
+    if (!context || !vcb)
         return;
 
-    if (context->stack)
-        kfree(context->stack);
+    if (context->stack) {
+        if (context->ring) {
+            arch_unmap_4kb((void*)vcb->cr3, context->stack);  /* user stack: unmap + free phys page */
+            pmm_free_page((uint32_t)context->stack);
+        } else {
+            kfree(context->stack);            /* kernel stack: heap free */
+        }
+    }
 
     memset(context, 0, sizeof(arch_task_context));
 }

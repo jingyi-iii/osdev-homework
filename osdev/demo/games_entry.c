@@ -30,6 +30,7 @@ static void menu_kb_handler(const char* data, size_t size)
 
 static void draw_menu(void)
 {
+    gfx_switch_to_mode();
     gfx_clear(GFX_BLACK);
 
     /* Top decorative bar */

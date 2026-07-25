@@ -1,5 +1,6 @@
 #include "kernel/process.h"
 #include "mm/heap.h"
+#include "mm/vmm.h"
 #include "arch_protm.h"
 #include "lib/module.h"
 #include "lib/string.h"
@@ -62,6 +63,20 @@ static tcb* find_next_runnable(tcb* current)
     return 0;
 }
 
+/*
+ * switch_address_space - Load the page directory of @next if it differs
+ * from the currently active one.  Must be called with schedule_lock held.
+ */
+static void switch_address_space(tcb* old, tcb* next)
+{
+    if (!old || !next)
+        return;
+    if (old->parent == next->parent)
+        return;  /* same process, no CR3 switch needed */
+
+    vmm_switch(&next->parent->vcb);
+}
+
 static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
 {
     tcb* thread = 0;
@@ -80,7 +95,7 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
         return E_NOMEM;
     }
 
-    if (arch_task_context_init(&thread->context, entry, priv)) {
+    if (arch_task_context_init(&parent->vcb, &thread->context, entry, priv)) {
         KLOG("failed to init thread context");
         kfree(thread);
         return E_THREAD_CREATE;
@@ -91,7 +106,7 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
     thread->sp_lock = spinlock_alloc();
     if (!thread->sp_lock) {
         KLOG("failed to alloc spin lock for tcb");
-        arch_task_context_release(&thread->context);
+        arch_task_context_release((void*)parent->vcb.cr3, &thread->context);
         kfree(thread);
         return E_LIMIT;
     }
@@ -149,7 +164,7 @@ static void t_delete(int32_t tid)
     if (target != thread_run) {
         /* deleting a non-running thread */
         spinlock_lock(target->sp_lock);
-        arch_task_context_release(&target->context);
+        arch_task_context_release((void*)target->parent->vcb.cr3, &target->context);
         spinlock_unlock(target->sp_lock);
 
         list_del(&target->this_node);
@@ -183,6 +198,13 @@ static void t_delete(int32_t tid)
         thread_run = next;
 
         /*
+         * Switch address space if we're moving to a different process.
+         * Must be done before arch_task_restore_context so the new
+         * page tables are active when iret returns to the new context.
+         */
+        switch_address_space(old, next);
+
+        /*
          * Switch curr_task_ctx to the next thread BEFORE freeing the old
          * thread's stack.  This closes the window where curr_task_ctx pointed
          * to freed memory in case a nested exception fires.
@@ -190,7 +212,7 @@ static void t_delete(int32_t tid)
         arch_task_restore_context(&next->context);
 
         /* Now safe to release the old thread's resources */
-        arch_task_context_release(&old->context);
+        arch_task_context_release((void*)old->parent->vcb.cr3, &old->context);
         list_del(&old->this_node);
         list_del(&old->proc_node);
 
@@ -223,7 +245,12 @@ static void t_block(int32_t tid)
         if (t == thread_run) {
             tcb* next = find_next_runnable(thread_run);
             if (next) {
+                tcb* old = thread_run;
                 thread_run = next;
+
+                /* Switch address space if we're moving to a different process */
+                switch_address_space(old, next);
+
                 arch_task_restore_context(&next->context);
             }
         }
@@ -263,7 +290,12 @@ static void t_yield(void)
 
     tcb* next = find_next_runnable(thread_run);
     if (next) {
+        tcb* old = thread_run;
         thread_run = next;
+
+        /* Switch address space if we're moving to a different process */
+        switch_address_space(old, next);
+
         arch_task_restore_context(&next->context);
     }
 
@@ -290,6 +322,16 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry)
     proc->pid = pid++;
     proc->state = PS_READY;
     proc->priv = priv;
+
+    /* Allocate a private page directory for user processes.
+     * Kernel processes share the kernel's master page directory. */
+    if (vmm_create(&proc->vcb, priv == PROC_PRIV_USER)) {
+        KLOG("failed to create address space for pid %d", proc->pid);
+        spinlock_release(proc->sp_lock);
+        kfree(proc);
+        return E_NOMEM;
+    }
+
     list_init(&proc->this_node);
     list_init(&proc->tcbs);
 
@@ -343,16 +385,20 @@ static void p_exit(int32_t pid)
 
                 tcb* old = thread_run;
                 thread_run = next;
+
+                /* Switch address space if needed */
+                switch_address_space(old, next);
+
                 arch_task_restore_context(&next->context);
 
-                arch_task_context_release(&old->context);
+                arch_task_context_release((void*)old->parent->vcb.cr3, &old->context);
                 list_del(&old->this_node);
                 list_del(&old->proc_node);
                 spinlock_release(old->sp_lock);
                 kfree(old);
             } else {
                 spinlock_lock(thread->sp_lock);
-                arch_task_context_release(&thread->context);
+                arch_task_context_release((void*)thread->parent->vcb.cr3, &thread->context);
                 spinlock_unlock(thread->sp_lock);
 
                 list_del(&thread->this_node);
@@ -370,6 +416,7 @@ static void p_exit(int32_t pid)
     spinlock_unlock(schedule_lock);
 
     if (found) {
+        vmm_destroy(&found->vcb);
         spinlock_release(found->sp_lock);
         kfree(found);
     }
@@ -473,7 +520,12 @@ static void schedule_isr(void* p)
 
     tcb* next = find_next_runnable(thread_run);
     if (next) {
+        tcb* old = thread_run;
         thread_run = next;
+
+        /* Switch address space if we're moving to a different process */
+        switch_address_space(old, next);
+
         arch_task_restore_context(&next->context);
     }
 

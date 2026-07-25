@@ -5,6 +5,7 @@
 #include "kernel/init.h"
 #include "drivers/platform_devices.h"
 #include "kernel/process.h"
+#include "mm/vmm.h"
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -40,10 +41,25 @@ static void kernel_do_exitcalls(void)
 
 void kernel_start(void)
 {
+    /*
+     * Phase 1: Set up platform bus and log early so we can trace
+     * the paging bootstrap.
+     */
     platform_bus_init();
     platform_devices_init();
-
     log_init();
+
+    /*
+     * Phase 2: Initialize paging — enables CR0.PG, sets up the kernel
+     * page directory, and brings up the physical memory manager.
+     * 64 MB is a safe default for QEMU; GRUB multiboot info could
+     * provide the real value in a production kernel.
+     */
+    arch_paging_init(64 * 1024 * 1024, 0);
+
+    /*
+     * Phase 3: Rest of the kernel subsystems.
+     */
     kb_init();
     kernel_do_initcalls();
     proc_create(PROC_PRIV_KERNEL, init_thread);
