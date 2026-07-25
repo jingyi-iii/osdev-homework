@@ -4,5 +4,6 @@
             "approve": true,
             "matchCommandLine": true
         }
-    }
+    },
+    "cmake.sourceDirectory": "/wsl.localhost/Debian/home/linji/osdev-homework/osdev/tests"
 }

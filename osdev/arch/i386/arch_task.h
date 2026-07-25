@@ -71,6 +71,6 @@ typedef struct arch_task_context {
 
 int tss_init(void);
 int arch_task_context_init(vmm_control_block* vcb, arch_task_context* context, task_entry_t entry, task_priv priv);
-void arch_task_context_release(arch_task_context* context);
+void arch_task_context_release(vmm_control_block* vcb, arch_task_context* context);
 int arch_task_restore_context(arch_task_context* context);
 #endif

@@ -53,12 +53,18 @@ static inline void tlb_invlpg(uint32_t vaddr)
     __asm__ __volatile__("invlpg (%0)" : : "r"(vaddr) : "memory");
 }
 
-void arch_map_4mb(void* va, void* pa, uint32_t flags)
+void arch_map_4mb(void* cr3, void* va, void* pa, uint32_t flags)
 {
+    pde_t* pdes = (pde_t*)cr3;
     size_t pde_index = PD_INDEX(va);
 
     if (pde_index >= 1024) {
         KLOG("arch_map_4mb: virtual address out of range");
+        return;
+    }
+
+    if (!pdes) {
+        KLOG("arch_map_4mb: invalid cr3");
         return;
     }
 
@@ -82,12 +88,18 @@ void arch_map_4mb(void* va, void* pa, uint32_t flags)
     tlb_invlpg((uint32_t)va);
 }
 
-void arch_unmap_4mb(void* va)
+void arch_unmap_4mb(void* cr3, void* va)
 {
+    pde_t* pdes = (pde_t*)cr3;
     size_t pde_index = PD_INDEX(va);
 
     if (pde_index >= 1024) {
         KLOG("arch_unmap_4mb: virtual address out of range");
+        return;
+    }
+
+    if (!pdes) {
+        KLOG("arch_map_4mb: invalid cr3");
         return;
     }
 
@@ -151,13 +163,19 @@ static inline int split_4mb_pde(uint32_t pde_index, uint32_t user_accessible)
     return 0;
 }
 
-void arch_map_4kb(void* va, void* pa, uint32_t flags)
+void arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
 {
+    pde_t* pdes = (pde_t*)cr3;
     size_t pde_index = PD_INDEX(va);
     size_t pte_index = PT_INDEX(va);
 
     if (pde_index >= 1024 || pte_index >= 1024) {
         KLOG("arch_map_4kb: virtual address out of range");
+        return;
+    }
+
+    if (!pdes) {
+        KLOG("arch_map_4kb: invalid cr3");
         return;
     }
 
@@ -204,13 +222,19 @@ void arch_map_4kb(void* va, void* pa, uint32_t flags)
     tlb_invlpg((uint32_t)va);
 }
 
-void arch_unmap_4kb(void* va)
+void arch_unmap_4kb(void* cr3, void* va)
 {
+    pde_t* pdes = (pde_t*)cr3;
     size_t pde_index = PD_INDEX(va);
     size_t pte_index = PT_INDEX(va);
 
     if (pde_index >= 1024 || pte_index >= 1024) {
         KLOG("arch_unmap_4kb: virtual address out of range");
+        return;
+    }
+
+    if (!pdes) {
+        KLOG("arch_map_4kb: invalid cr3");
         return;
     }
 
@@ -233,27 +257,37 @@ void arch_unmap_4kb(void* va)
     tlb_invlpg((uint32_t)va);
 }
 
-void arch_map_4mb_range(uint32_t start_pa, uint32_t end_pa, uint32_t flags)
+void arch_map_4mb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t flags)
 {
+    if (!cr3) {
+        KLOG("arch_map_4mb_range: invalid cr3");
+        return;
+    }
+
     if (!IS_4MB_ALIGN(start_pa) || !IS_4MB_ALIGN(end_pa)) {
         KLOG("arch_map_4mb_range: addresses must be 4MB-aligned");
         return;
     }
 
     for (uint32_t pa = start_pa; pa < end_pa; pa += 0x400000) {
-        arch_map_4mb((void*)pa, (void*)pa, flags);
+        arch_map_4mb(cr3, (void*)pa, (void*)pa, flags);
     }
 }
 
-void arch_map_4kb_range(uint32_t start_pa, uint32_t end_pa, uint32_t flags)
+void arch_map_4kb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t flags)
 {
+    if (!cr3) {
+        KLOG("arch_map_4mb_range: invalid cr3");
+        return;
+    }
+
     if (!IS_4KB_ALIGN(start_pa) || !IS_4KB_ALIGN(end_pa)) {
         KLOG("arch_map_4kb_range: addresses must be 4KB-aligned");
         return;
     }
 
     for (uint32_t pa = start_pa; pa < end_pa; pa += PAGE_SIZE) {
-        arch_map_4kb((void*)pa, (void*)pa, flags);
+        arch_map_4kb(cr3, (void*)pa, (void*)pa, flags);
     }
 }
 
@@ -281,13 +315,13 @@ void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
      * execute kernel code and access kernel data within the same
      * address space.  This is acceptable for a hobby / testing OS. */
     memset(pdes, 0, sizeof(pdes));
-    arch_map_4mb_range(0x0, 0x1000000, PTE_USER_PAGE);  /* identity map first 16MB */
-    arch_map_4mb((void*)0xC0000000, (void*)0x0, PTE_USER_PAGE);
+    arch_map_4mb_range((void*)pdes, 0x0, 0x1000000, PTE_USER_PAGE);  /* identity map first 16MB */
+    arch_map_4mb((void*)pdes, (void*)0xC0000000, (void*)0x0, PTE_USER_PAGE);
 
     for (uint32_t addr = 0x1000000; addr < total_memory; addr += 0x400000) {
         if (addr == 0xC0000000)
             continue;  /* skip the higher-half slot */
-        arch_map_4mb((void*)addr, (void*)addr, PTE_KERNEL);
+        arch_map_4mb((void*)pdes, (void*)addr, (void*)addr, PTE_KERNEL);
     }
 
     /* Step 2: Set PSE (Page Size Extension) in CR4 */

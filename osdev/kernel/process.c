@@ -106,7 +106,7 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
     thread->sp_lock = spinlock_alloc();
     if (!thread->sp_lock) {
         KLOG("failed to alloc spin lock for tcb");
-        arch_task_context_release(&thread->context);
+        arch_task_context_release((void*)parent->vcb.cr3, &thread->context);
         kfree(thread);
         return E_LIMIT;
     }
@@ -164,7 +164,7 @@ static void t_delete(int32_t tid)
     if (target != thread_run) {
         /* deleting a non-running thread */
         spinlock_lock(target->sp_lock);
-        arch_task_context_release(&target->context);
+        arch_task_context_release((void*)target->parent->vcb.cr3, &target->context);
         spinlock_unlock(target->sp_lock);
 
         list_del(&target->this_node);
@@ -212,7 +212,7 @@ static void t_delete(int32_t tid)
         arch_task_restore_context(&next->context);
 
         /* Now safe to release the old thread's resources */
-        arch_task_context_release(&old->context);
+        arch_task_context_release((void*)old->parent->vcb.cr3, &old->context);
         list_del(&old->this_node);
         list_del(&old->proc_node);
 
@@ -391,14 +391,14 @@ static void p_exit(int32_t pid)
 
                 arch_task_restore_context(&next->context);
 
-                arch_task_context_release(&old->context);
+                arch_task_context_release((void*)old->parent->vcb.cr3, &old->context);
                 list_del(&old->this_node);
                 list_del(&old->proc_node);
                 spinlock_release(old->sp_lock);
                 kfree(old);
             } else {
                 spinlock_lock(thread->sp_lock);
-                arch_task_context_release(&thread->context);
+                arch_task_context_release((void*)thread->parent->vcb.cr3, &thread->context);
                 spinlock_unlock(thread->sp_lock);
 
                 list_del(&thread->this_node);

@@ -4,10 +4,12 @@
 #include <stdint.h>
 #include "mm/paging.h"
 #include "lib/rbtree.h"
+#include "sync/spinlock.h"
 
 typedef struct vmm_control_block {
     rbtree*     tree;
     uint32_t    cr3;
+    spinlock*   lock;
 } vmm_control_block;
 
 typedef struct vmm_region {
@@ -23,6 +25,6 @@ int vmm_create(vmm_control_block* vcb, int user_accessible);
 void vmm_destroy(vmm_control_block* vcb);
 
 void* vmm_alloc_pages(vmm_control_block* vcb, uint32_t page_cnt, uint32_t flags);
-int vmm_free_page(vmm_control_block* vcb, void* va);
+void vmm_free_pages(vmm_control_block* vcb, void* va);
 
 #endif /* VMM_H */

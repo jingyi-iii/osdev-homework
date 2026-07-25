@@ -2,6 +2,7 @@
 #include "lib/string.h"
 #include "kernel/errno.h"
 #include "mm/vmm.h"
+#include "mm/pmm.h"
 
 #ifndef KLOG
 #define KLOG(x) 
@@ -87,16 +88,18 @@ int arch_task_context_init(vmm_control_block* vcb, arch_task_context* context, t
     return 0;
 }
 
-void arch_task_context_release(arch_task_context* context)
+void arch_task_context_release(vmm_control_block* vcb, arch_task_context* context)
 {
-    if (!context)
+    if (!context || !vcb)
         return;
 
     if (context->stack) {
-        if (context->ring)
-            arch_unmap_4kb(context->stack);  /* user stack: unmap + free phys page */
-        else
+        if (context->ring) {
+            arch_unmap_4kb((void*)vcb->cr3, context->stack);  /* user stack: unmap + free phys page */
+            pmm_free_page((uint32_t)context->stack);
+        } else {
             kfree(context->stack);            /* kernel stack: heap free */
+        }
     }
 
     memset(context, 0, sizeof(arch_task_context));
