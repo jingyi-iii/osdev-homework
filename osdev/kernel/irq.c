@@ -3,6 +3,8 @@
 #include "lib/string.h"
 #include "drivers/log_driver.h"
 #include "mm/heap.h"
+#include "kernel/capability.h"
+#include "kernel/process.h"
 
 static irqline* irqlines[IDT_ENTRIES] = {0};
 
@@ -221,6 +223,17 @@ int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
 {
     if (!out || major >= IDT_ENTRIES)
         return E_INVAL;
+
+    /* Transition phase: only enforce capability checks on untrusted user
+     * processes.
+     * - proc == NULL (early boot, scheduler not up)  -> trusted, allow
+     * - proc->priv == PROC_PRIV_KERNEL (kernel driver) -> trusted, allow
+     * - user process -> must hold CAP_IRQ_OWN for this IRQ line */
+    pcb* proc = get_current_process();
+    if (proc && proc->priv != PROC_PRIV_KERNEL) {
+        if (cap_check(proc, CAP_IRQ_OWN, &major) != 0)
+            return E_PERM;
+    }
 
     int ret = 0;
     int minor_existed = 0;

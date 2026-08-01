@@ -7,6 +7,7 @@
 #include "sync/spinlock.h"
 #include "kernel/errno.h"
 #include "mm/vmm.h"
+#include "kernel/capability.h"
 
 #define PROCESS_SUPPORT_MAILBOX
 
@@ -46,6 +47,8 @@ typedef struct pcb {
     spinlock*           sp_lock;
 
     vmm_control_block   vcb;            /* address space context for this process */
+    list_node           capabilities;
+    spinlock*           cap_lock;
 } pcb;
 
 /* Thread Control Block */
@@ -76,6 +79,7 @@ void    proc_exit           (int32_t pid);
 int     proc_block          (int32_t pid);
 int     proc_unblock        (int32_t pid);
 int     proc_get_pid        (void);
+pcb*    get_current_process (void);
 
 /* Exported for mailbox broadcast — must be held when iterating thread_head */
 extern list_node thread_head;

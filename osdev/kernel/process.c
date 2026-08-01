@@ -318,6 +318,13 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry)
         kfree(proc);
         return E_LIMIT;
     }
+    proc->cap_lock = spinlock_alloc();
+    if (!proc->cap_lock) {
+        KLOG("failed to alloc spin lock for pcb capabilities");
+        spinlock_release(proc->sp_lock);
+        kfree(proc);
+        return E_LIMIT;
+    }
 
     proc->pid = pid++;
     proc->state = PS_READY;
@@ -334,6 +341,7 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry)
 
     list_init(&proc->this_node);
     list_init(&proc->tcbs);
+    list_init(&proc->capabilities);
 
     spinlock_lock(schedule_lock);
     list_add(&proc->this_node, &proc_head);
@@ -741,6 +749,12 @@ int proc_get_pid(void)
 {
     tcb* cur = thread_run;
     return cur ? cur->parent->pid : -1;
+}
+
+pcb* get_current_process(void)
+{
+    tcb* cur = thread_run;
+    return cur ? cur->parent : 0;
 }
 
 module_init(proc_env_init);
