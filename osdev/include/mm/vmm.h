@@ -18,6 +18,7 @@ typedef struct vmm_region {
     uint32_t    size;
     uint32_t    flags;
     uint32_t    pa;             /* physical address for pmm_free_page */
+    int         own_phys;
 } vmm_region;
 
 void vmm_switch(vmm_control_block* vcb);

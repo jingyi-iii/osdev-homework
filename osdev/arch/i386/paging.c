@@ -48,7 +48,7 @@ static inline pte_t* ptbl_of_pde(pde_t* pde)
 }
 
 /* Invalidate a single TLB entry */
-static inline void tlb_invlpg(uint32_t vaddr)
+void arch_tlb_invlpg(uint32_t vaddr)
 {
     __asm__ __volatile__("invlpg (%0)" : : "r"(vaddr) : "memory");
 }
@@ -85,7 +85,7 @@ void arch_map_4mb(void* cr3, void* va, void* pa, uint32_t flags)
     pdes[pde_index].paddr       = ((uint32_t)pa) >> 12;
     spinlock_unlock(paging_lock);
 
-    tlb_invlpg((uint32_t)va);
+    arch_tlb_invlpg((uint32_t)va);
 }
 
 void arch_unmap_4mb(void* cr3, void* va)
@@ -107,7 +107,7 @@ void arch_unmap_4mb(void* cr3, void* va)
     pdes[pde_index].raw = 0;
     spinlock_unlock(paging_lock);
 
-    tlb_invlpg((uint32_t)va);
+    arch_tlb_invlpg((uint32_t)va);
 }
 
 /*
@@ -167,7 +167,7 @@ static inline int split_4mb_pde(pde_t* pde, uint32_t user_accessible)
     return 0;
 }
 
-void arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
+int arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
 {
     pde_t* pdes = (pde_t*)cr3;
     size_t pde_index = PD_INDEX(va);
@@ -175,12 +175,12 @@ void arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
 
     if (pde_index >= 1024 || pte_index >= 1024) {
         KLOG("arch_map_4kb: virtual address out of range");
-        return;
+        return E_INVAL;
     }
 
     if (!pdes) {
         KLOG("arch_map_4kb: invalid cr3");
-        return;
+        return E_INVAL;
     }
 
     spinlock_lock(paging_lock);
@@ -194,7 +194,7 @@ void arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
         if (split_4mb_pde(&pdes[pde_index], flags & PTE_USER) != 0) {
             KLOG("arch_map_4kb: failed to split 4MB PDE at index %u", pde_index);
             spinlock_unlock(paging_lock);
-            return;
+            return E_NOMEM;
         }
     }
 
@@ -203,7 +203,7 @@ void arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
         if (!pt_pa) {
             KLOG("arch_map_4kb: failed to allocate page table for vaddr 0x%x", va);
             spinlock_unlock(paging_lock);
-            return;
+            return E_NOMEM;
         }
 
         pdes[pde_index].raw     = 0;
@@ -223,7 +223,8 @@ void arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
     ptbl[pte_index].paddr       = ((uint32_t)pa) >> 12;
     spinlock_unlock(paging_lock);
 
-    tlb_invlpg((uint32_t)va);
+    arch_tlb_invlpg((uint32_t)va);
+    return 0;
 }
 
 void arch_unmap_4kb(void* cr3, void* va)
@@ -258,7 +259,7 @@ void arch_unmap_4kb(void* cr3, void* va)
     ptbl[pte_index].raw = 0;
     spinlock_unlock(paging_lock);
 
-    tlb_invlpg((uint32_t)va);
+    arch_tlb_invlpg((uint32_t)va);
 }
 
 void arch_map_4mb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t flags)
@@ -420,13 +421,6 @@ void arch_destroy_address_space(uint32_t pdir_phys)
         if (pdes[i].paddr == kern_pdes[i].paddr)
             continue;  /* skip kernel-shared page tables */
 
-        pte_t* ptbl = ptbl_of_pde(&pdes[i]);
-        for (uint32_t j = 0; j < 1024; j++) {
-            if (ptbl[j].present) {
-                pmm_free_page(ptbl[j].paddr << 12);
-                ptbl[j].raw = 0;
-            }
-        }
         pmm_free_page(pdes[i].paddr << 12);
         pdes[i].raw = 0;
     }

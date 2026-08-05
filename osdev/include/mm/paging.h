@@ -175,7 +175,9 @@ void arch_paging_init(uint32_t total_memory, uint32_t reserved_end);
 void arch_map_4mb(void* cr3, void* va, void* pa, uint32_t flags);
 void arch_unmap_4mb(void* cr3, void* va);
 
-void arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags);
+int arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags);
 void arch_unmap_4kb(void* cr3, void* va);
+
+void arch_tlb_invlpg(uint32_t vaddr);
 
 #endif /* PAGING_H */

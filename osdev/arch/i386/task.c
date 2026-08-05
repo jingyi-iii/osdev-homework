@@ -95,8 +95,7 @@ void arch_task_context_release(vmm_control_block* vcb, arch_task_context* contex
 
     if (context->stack) {
         if (context->ring) {
-            arch_unmap_4kb((void*)vcb->cr3, context->stack);  /* user stack: unmap + free phys page */
-            pmm_free_page((uint32_t)context->stack);
+            vmm_free_pages(vcb, context->stack);
         } else {
             kfree(context->stack);            /* kernel stack: heap free */
         }
