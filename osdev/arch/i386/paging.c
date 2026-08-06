@@ -32,6 +32,67 @@ static spinlock* paging_lock;
  * All user processes clone kernel-space entries from here. */
 static uint32_t kernel_pdir_phys = 0;
 
+/* ------------------------------------------------------------------ */
+/* Paging-structures pool                                              */
+/*                                                                     */
+/* Page directories AND page tables are accessed through their         */
+/* identity VA (pdir_of / ptbl_of_pde).  To guarantee they can never   */
+/* numerically collide with a user VA (also identity-mapped), both are */
+/* carved from a fixed linker-reserved region (linker.ld .page_tables) */
+/* that the PMM never hands out — the free pool starts after           */
+/* __page_table_end.                                                   */
+/* ------------------------------------------------------------------ */
+extern uint32_t __page_table_base[];
+extern uint32_t __page_table_end[];
+
+#define VMM_PDE_ALLOC_BASE  ((uint32_t)__page_table_base)
+#define VMM_PDE_ALLOC_SIZE  (8u * 1024 * 1024)
+#define VMM_PDE_ALLOC_END   ((uint32_t)__page_table_end)
+
+/* one 4 KB slot per page table / directory; 8 MB pool => 2048 slots */
+#define PAGING_POOL_SLOTS (VMM_PDE_ALLOC_SIZE / PAGE_SIZE)
+
+static spinlock* paging_pool_lock = 0;
+/* one bit per slot: 1 = in use */
+static uint32_t paging_pool_used[(PAGING_POOL_SLOTS + 31) / 32];
+
+void* arch_paging_pool_alloc(void)
+{
+    if (!paging_pool_lock)
+        return 0;
+
+    spinlock_lock(paging_pool_lock);
+    for (size_t i = 0; i < PAGING_POOL_SLOTS; i++) {
+        if (!(paging_pool_used[i / 32] & (1u << (i % 32)))) {
+            paging_pool_used[i / 32] |= (1u << (i % 32));
+            uint32_t pa = VMM_PDE_ALLOC_BASE + i * PAGE_SIZE;
+            memset((void*)pa, 0, PAGE_SIZE);
+            spinlock_unlock(paging_pool_lock);
+            return (void*)pa;
+        }
+    }
+    spinlock_unlock(paging_pool_lock);
+
+    KLOG("arch_paging_pool_alloc: paging-structures pool exhausted");
+    return 0;
+}
+
+void arch_paging_pool_free(uint32_t pa)
+{
+    if (!paging_pool_lock)
+        return;
+
+    /* ignore addresses outside the pool (e.g. 4 MB chunk PDEs) */
+    if (pa < VMM_PDE_ALLOC_BASE || pa >= VMM_PDE_ALLOC_END)
+        return;
+
+    size_t i = (pa - VMM_PDE_ALLOC_BASE) / PAGE_SIZE;
+
+    spinlock_lock(paging_pool_lock);
+    paging_pool_used[i / 32] &= ~(1u << (i % 32));
+    spinlock_unlock(paging_pool_lock);
+}
+
 static inline pde_t* pdir_of(uint32_t pdir_phys)
 {
     return (pde_t*)pdir_phys;
@@ -134,7 +195,7 @@ static inline int split_4mb_pde(pde_t* pde, uint32_t user_accessible)
         return -1;
     }
 
-    ptl = (pte_t*)pmm_alloc_page();
+    ptl = (pte_t*)arch_paging_pool_alloc();
     if (!ptl) {
         KLOG("split_4mb_pde: failed to allocate page table");
         return E_NOMEM;
@@ -199,7 +260,7 @@ int arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
     }
 
     if (!pdes[pde_index].present) {
-        uint32_t pt_pa = pmm_alloc_page();
+        uint32_t pt_pa = (uint32_t)arch_paging_pool_alloc();
         if (!pt_pa) {
             KLOG("arch_map_4kb: failed to allocate page table for vaddr 0x%x", va);
             spinlock_unlock(paging_lock);
@@ -304,11 +365,18 @@ void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
     uint32_t total_4mb_chunks;
     uint32_t hi_pd_idx;
     uint32_t i;
-    (void)reserved_end;  /* currently unused — reserved_end is derived inside */
+    (void)reserved_end;  /* currently unused — the paging pool sits below
+                          * the PMM bitmap, so pmm_init() keeps it reserved */
 
     paging_lock = spinlock_alloc();
     if (!paging_lock) {
         KLOG("arch_paging_init: failed to allocate paging spinlock");
+        return;
+    }
+
+    paging_pool_lock = spinlock_alloc();
+    if (!paging_pool_lock) {
+        KLOG("arch_paging_init: failed to allocate paging pool spinlock");
         return;
     }
 
@@ -346,8 +414,12 @@ void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
     /* Step 4: Register the kernel master PD */
     kernel_pdir_phys = (uint32_t)pdes;
 
-    /* Step 5: Initialise the physical memory manager */
+    /* Step 5: Initialise the physical memory manager.  The paging pool
+     * sits below the PMM bitmap, so pmm_init() keeps it reserved and
+     * user VAs (identity-mapped) can never collide with its PAs. */
     pmm_init(total_memory, __pmm_bitmap_start);
+    KLOG("Paging: paging-structures pool 0x%x-0x%x (%u slots)",
+         VMM_PDE_ALLOC_BASE, VMM_PDE_ALLOC_END, PAGING_POOL_SLOTS);
     KLOG("Paging: bootstrap complete, %u pages free", pmm_get_free_page_count());
 }
 
@@ -391,16 +463,19 @@ uint32_t arch_clone_kernel_pde(uint32_t pde_pa, int user_accessible)
     pde_t* new_pde = (pde_t*)pde_pa;
     pde_t* kern_pde = (pde_t*)kernel_pdir_phys;
 
-    /* Clone all PDEs from the kernel master PD */
-    if (user_accessible) {
-        for (uint32_t i = 0; i < 768; i++)
-            new_pde[i].raw = 0;
-        for (uint32_t i = 768; i < 1024; i++)
-            new_pde[i].raw = kern_pde[i].raw;
-    } else {
-        for (uint32_t i = 0; i < 1024; i++)
-            new_pde[i].raw = kern_pde[i].raw;
-    }
+    /*
+     * Clone ALL PDEs from the kernel master PD, including the low
+     * identity map.  The kernel is linked at 1MB (identity mapped),
+     * so a user process MUST share the kernel's low identity map to
+     * be able to execute any kernel code (the first 16MB are mapped
+     * with PTE_USER_PAGE for exactly this purpose — see
+     * arch_paging_init()).  For this hobby OS, user and kernel
+     * processes therefore live in the same address space.
+     */
+    (void)user_accessible;
+    for (uint32_t i = 0; i < 1024; i++)
+        new_pde[i].raw = kern_pde[i].raw;
+
     return pde_pa;
 }
 
@@ -421,7 +496,7 @@ void arch_destroy_address_space(uint32_t pdir_phys)
         if (pdes[i].paddr == kern_pdes[i].paddr)
             continue;  /* skip kernel-shared page tables */
 
-        pmm_free_page(pdes[i].paddr << 12);
+        arch_paging_pool_free(pdes[i].paddr << 12);
         pdes[i].raw = 0;
     }
 }

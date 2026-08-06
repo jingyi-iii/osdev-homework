@@ -2,6 +2,7 @@
 #define VMM_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include "mm/paging.h"
 #include "lib/rbtree.h"
 #include "sync/spinlock.h"
@@ -27,5 +28,21 @@ void vmm_destroy(vmm_control_block* vcb);
 
 void* vmm_alloc_pages(vmm_control_block* vcb, uint32_t page_cnt, uint32_t flags);
 void vmm_free_pages(vmm_control_block* vcb, void* va);
+
+/*
+ * vmm_map_memory / vmm_unmap_memory operate on the current process.
+ *
+ * vmm_map_memory returns a valid user VA on success; on failure it returns
+ * an error pointer.  Kernel errno values are negative, so the error pointers
+ * live in the top 4KB of the 32-bit address space — a range the VA allocator
+ * never hands out, so error pointers can never collide with a valid mapping.
+ * Check with VMM_IS_ERR() and recover the code with VMM_PTR_ERR().
+ */
+#define VMM_ERR_PTR(err)    ((void*)(intptr_t)(err))
+#define VMM_PTR_ERR(ptr)    ((int)(intptr_t)(ptr))
+#define VMM_IS_ERR(ptr)     ((uintptr_t)(ptr) >= (uintptr_t)-4095)
+
+void* vmm_map_memory(uint32_t phys_addr, size_t size, uint32_t flags);
+int   vmm_unmap_memory(void* virt_addr, size_t size);
 
 #endif /* VMM_H */

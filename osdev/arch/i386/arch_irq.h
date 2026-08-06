@@ -45,4 +45,16 @@ void arch_unmask_irq(uint16_t irq_nr);
 void arch_mask_irq(uint16_t irq_nr);
 void arch_syscall(uint32_t minor, void* data);
 
+/*
+ * Return 1 if the caller is currently executing at CPL3 (user mode),
+ * 0 otherwise.  Drivers use this to decide whether privileged I/O
+ * must go through the syscall gate instead of being done directly.
+ */
+static inline int arch_running_ring3(void)
+{
+    uint16_t cs;
+    __asm__ __volatile__("mov %%cs, %0" : "=r"(cs));
+    return (cs & 3) == 3;
+}
+
 #endif

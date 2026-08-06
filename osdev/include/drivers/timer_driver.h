@@ -38,10 +38,19 @@ typedef struct {
 /* Timer syscall minor number for RING3 access */
 #define TIMER_SYSCALL_MINOR     (2)
 
+/* Timer syscall commands */
+typedef enum {
+    TIMER_SYSCALL_GET_TIME = 0,   /* read RTC time string */
+    TIMER_SYSCALL_DELAY_MS = 1,   /* busy-wait delay via PIT */
+} timer_syscall_cmd;
+
 /* Data structure for timer syscall */
 typedef struct timer_syscall_data {
-    char* buf;      /* Buffer to write time string "YYYY-MM-DD HH:MM:SS" */
-    size_t size;    /* Size of buffer */
+    uint32_t cmd;       /* timer_syscall_cmd */
+    char*    buf;       /* Buffer to write time string "YYYY-MM-DD HH:MM:SS" */
+    size_t   size;      /* Size of buffer */
+    uint32_t ms;        /* milliseconds for DELAY_MS */
+    int      ret;       /* out: result of GET_TIME */
 } timer_syscall_data;
 
 void timer_init(void);
@@ -59,5 +68,10 @@ int timer_read_time_str(char* buf, size_t size);
  * timer_delay_us: delay in microseconds (min ~1us resolution via PIT) */
 void timer_delay_ms(uint32_t ms);
 void timer_delay_us(uint32_t us);
+
+/* Ring-3 accessible wrappers — these go through the syscall gate, so they
+ * can be called from both kernel (CPL0) and user (CPL3) threads. */
+int  sys_time_str(char* buf, size_t size);
+void sys_sleep_ms(uint32_t ms);
 
 #endif

@@ -93,16 +93,16 @@ void arch_load_cr3(uint32_t pdir_phys);
 uint32_t arch_get_cr3(void);
 
 /**
- * vmm_create - Create a new user address space.
+ * arch_clone_kernel_pde - Create a new address-space page directory.
  *
- * Allocates a new page directory and copies the kernel-space PDEs
- * (KERNEL_BASE_VADDR..4GB) from the kernel master page directory.
- * User-space PDEs (0..KERNEL_BASE_VADDR) are zero-initialised.
+ * Allocates a new page directory (pde_pa) and copies ALL PDEs from the
+ * kernel master page directory.  Because the kernel is linked and
+ * identity-mapped at 1MB, user processes share the kernel's address
+ * space so that ring-3 code can execute kernel functions (the first
+ * 16MB are mapped user-accessible by arch_paging_init()).
  *
- * Returns the physical address of the new page directory, or 0 on failure.
+ * Returns pde_pa on success, or 0 on failure.
  */
-// uint32_t vmm_create(void);
-
 uint32_t arch_clone_kernel_pde(uint32_t pde_pa, int user_accessible);
 
 /**
@@ -113,6 +113,25 @@ uint32_t arch_clone_kernel_pde(uint32_t pde_pa, int user_accessible);
  * left untouched.
  */
 void arch_destroy_address_space(uint32_t pdir_phys);
+
+/**
+ * arch_paging_pool_alloc - Allocate one 4 KB page from the reserved
+ * paging-structures pool (page directories AND page tables).
+ *
+ * Page directories/tables are accessed through their identity VA, so
+ * they must live in a fixed range that the PMM never hands out.  The
+ * pool is reserved in linker.ld (.page_tables) and the PMM free pool
+ * starts after it, so user VAs can never collide with these PAs.
+ * Returns the physical address (also a valid identity VA), or 0 on
+ * exhaustion.
+ */
+void* arch_paging_pool_alloc(void);
+
+/**
+ * arch_paging_pool_free - Return a 4 KB page to the paging pool.
+ * Addresses outside the pool range are ignored.
+ */
+void arch_paging_pool_free(uint32_t pa);
 
 /**
  * arch_map_page - Map a single virtual page to a physical page.

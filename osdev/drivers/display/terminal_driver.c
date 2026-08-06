@@ -26,6 +26,8 @@
 #include "drivers/kb_driver.h"
 #include "mm/heap.h"
 #include "lib/string.h"
+#include "kernel/irq.h"
+#include "arch_irq.h"
 
 /************************************************************************/
 /*                        Internal Definitions                          */
@@ -332,6 +334,13 @@ static struct driver terminal_driver = {
 /************************************************************************/
 void terminal_flush(const char* unused)
 {
+    if (arch_running_ring3()) {
+        terminal_syscall_data data = {0};
+        data.cmd = TERM_SYSCALL_FLUSH;
+        arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
+        return;
+    }
+
     struct terminal_device* dev = &term_device;
 
     spinlock_lock(dev->lock);
@@ -402,6 +411,14 @@ void terminal_write_at_str(const char* str, uint8_t color, size_t x, size_t y)
 
 void terminal_write(const char* str)
 {
+    if (arch_running_ring3()) {
+        terminal_syscall_data data = {0};
+        data.cmd = TERM_SYSCALL_WRITE;
+        data.buf = str;
+        arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
+        return;
+    }
+
     if (!str)
         return;
 
@@ -413,6 +430,15 @@ void terminal_write(const char* str)
 
 void terminal_write_color(const char* str, uint8_t color)
 {
+    if (arch_running_ring3()) {
+        terminal_syscall_data data = {0};
+        data.cmd   = TERM_SYSCALL_WRITE_COLOR;
+        data.buf   = str;
+        data.color = color;
+        arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
+        return;
+    }
+
     if (!str)
         return;
 
@@ -425,6 +451,14 @@ void terminal_write_color(const char* str, uint8_t color)
 
 void terminal_putchar(char c)
 {
+    if (arch_running_ring3()) {
+        terminal_syscall_data data = {0};
+        data.cmd = TERM_SYSCALL_PUTCHAR;
+        data.chr = c;
+        arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
+        return;
+    }
+
     struct terminal_device* dev = &term_device;
 
     spinlock_lock(dev->lock);
@@ -458,6 +492,13 @@ void terminal_putchar(char c)
 
 size_t terminal_get_row(void)
 {
+    if (arch_running_ring3()) {
+        terminal_syscall_data data = {0};
+        data.cmd = TERM_SYSCALL_GET_ROW;
+        arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
+        return data.row;
+    }
+
     return term_device.curr_row;
 }
 
@@ -589,6 +630,80 @@ static void terminal_kb_handler(const char* data, size_t size)
 }
 
 /************************************************************************/
+/*                      Terminal Syscall (RING3)                        */
+/************************************************************************/
+
+static irq* terminal_scall = 0;
+
+static void terminal_syscall_handler(void* context)
+{
+    terminal_syscall_data* data = (terminal_syscall_data*)context;
+    if (!data)
+        return;
+
+    switch (data->cmd) {
+    case TERM_SYSCALL_WRITE:
+        terminal_write(data->buf);
+        break;
+    case TERM_SYSCALL_WRITE_COLOR:
+        terminal_write_color(data->buf, data->color);
+        break;
+    case TERM_SYSCALL_PUTCHAR:
+        terminal_putchar(data->chr);
+        break;
+    case TERM_SYSCALL_FLUSH:
+        terminal_flush(NULL);
+        break;
+    case TERM_SYSCALL_GET_ROW:
+        data->row = terminal_get_row();
+        break;
+    default:
+        break;
+    }
+}
+
+/* ---- Ring-3 wrappers: callable from CPL3 through the syscall gate ---- */
+void sys_terminal_write(const char* str)
+{
+    terminal_syscall_data data = {0};
+    data.cmd = TERM_SYSCALL_WRITE;
+    data.buf = str;
+    arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
+}
+
+void sys_terminal_write_color(const char* str, uint8_t color)
+{
+    terminal_syscall_data data = {0};
+    data.cmd   = TERM_SYSCALL_WRITE_COLOR;
+    data.buf   = str;
+    data.color = color;
+    arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
+}
+
+void sys_terminal_putchar(char c)
+{
+    terminal_syscall_data data = {0};
+    data.cmd = TERM_SYSCALL_PUTCHAR;
+    data.chr = c;
+    arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
+}
+
+void sys_terminal_flush(void)
+{
+    terminal_syscall_data data = {0};
+    data.cmd = TERM_SYSCALL_FLUSH;
+    arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
+}
+
+size_t sys_terminal_get_row(void)
+{
+    terminal_syscall_data data = {0};
+    data.cmd = TERM_SYSCALL_GET_ROW;
+    arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
+    return data.row;
+}
+
+/************************************************************************/
 /*                      Init / Exit                                     */
 /************************************************************************/
 
@@ -604,6 +719,12 @@ void terminal_init(void)
 
     cursor_init();
 
+    /* Register terminal syscall for RING3 access */
+    int ret = irq_request(&terminal_scall, "terminal_syscall", 100,
+                          TERMINAL_SYSCALL_MINOR, terminal_syscall_handler, NULL);
+    if (ret == 0 && terminal_scall)
+        irq_unmask(terminal_scall);
+
     /* register keyboard echo + command dispatch */
     kb_register_callback(terminal_kb_handler);
 
@@ -613,6 +734,11 @@ void terminal_init(void)
 
 void terminal_exit(void)
 {
+    if (terminal_scall) {
+        irq_release(terminal_scall);
+        terminal_scall = NULL;
+    }
+
     platform_driver_unregister(&terminal_driver);
 }
 

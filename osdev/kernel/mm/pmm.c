@@ -11,6 +11,9 @@
  *   0x00000000 - 0x000FFFFF   Reserved (BIOS, IVT, BDA, EBDA, etc.)
  *   0x00100000 - 0x001?????   Kernel image (code + rodata + data + bss)
  *   0x00?????? - 0x00??????   Bootstrap page structures (PD + PT0)
+ *   0x00?????? - 0x00??????   Paging-structures pool (page directories
+ *                             + page tables; linker-reserved, never
+ *                             handed out — see linker.ld .page_tables)
  *   0x00?????? - 0x00??????   Bitmap (this allocator's metadata)
  *   0x00?????? - 0x03FFFFFF   Free pages
  */
@@ -83,6 +86,11 @@ void pmm_init(uint32_t total_memory, uint8_t* bitmap_pa)
     reserve_blocks = first_bitmap_block
                    + DIV_ROUND_UP(DIV_ROUND_UP(total_blocks, 8), block_size);
 
+    /*
+     * Everything below the bitmap is reserved: BIOS, kernel image, the
+     * linker-reserved paging-structures pool (linker.ld .page_tables)
+     * and the bitmap itself.  Only pages after the bitmap are freed.
+     */
     free_blocks = 0;
     for (size_t i = reserve_blocks; i < total_blocks; i++) {
         bitmap_clear(i);

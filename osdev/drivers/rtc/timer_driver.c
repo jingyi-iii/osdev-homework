@@ -2,6 +2,7 @@
 #include "kernel/irq.h"
 #include "lib/string.h"
 #include "lib/module.h"
+#include "arch_irq.h"
 
 struct timer_device {
     struct platform_device* plat_dev;
@@ -186,6 +187,14 @@ static void pit_delay_ticks(uint16_t ticks)
 
 void timer_delay_ms(uint32_t ms)
 {
+    if (arch_running_ring3()) {
+        timer_syscall_data data = {0};
+        data.cmd = TIMER_SYSCALL_DELAY_MS;
+        data.ms  = ms;
+        arch_syscall(TIMER_SYSCALL_MINOR, &data);
+        return;
+    }
+
     if (ms == 0)
         return;
 
@@ -207,6 +216,14 @@ void timer_delay_ms(uint32_t ms)
 
 void timer_delay_us(uint32_t us)
 {
+    if (arch_running_ring3()) {
+        timer_syscall_data data = {0};
+        data.cmd = TIMER_SYSCALL_DELAY_MS;
+        data.ms  = (us + 999) / 1000;   /* syscall only has ms resolution */
+        arch_syscall(TIMER_SYSCALL_MINOR, &data);
+        return;
+    }
+
     if (us == 0)
         return;
 
@@ -261,9 +278,39 @@ static irq* timer_scall = NULL;
 static void timer_syscall_handler(void* context)
 {
     timer_syscall_data* data = (timer_syscall_data*)context;
-    if (data && data->buf && data->size > 0) {
-        timer_read_time_str(data->buf, data->size);
+    if (!data)
+        return;
+
+    switch (data->cmd) {
+    case TIMER_SYSCALL_GET_TIME:
+        if (data->buf && data->size > 0)
+            data->ret = timer_read_time_str(data->buf, data->size);
+        break;
+    case TIMER_SYSCALL_DELAY_MS:
+        timer_delay_ms(data->ms);
+        break;
+    default:
+        break;
     }
+}
+
+/* ---- Ring-3 wrappers: callable from CPL3 through the syscall gate ---- */
+int sys_time_str(char* buf, size_t size)
+{
+    timer_syscall_data data = {0};
+    data.cmd  = TIMER_SYSCALL_GET_TIME;
+    data.buf  = buf;
+    data.size = size;
+    arch_syscall(TIMER_SYSCALL_MINOR, &data);
+    return data.ret;
+}
+
+void sys_sleep_ms(uint32_t ms)
+{
+    timer_syscall_data data = {0};
+    data.cmd = TIMER_SYSCALL_DELAY_MS;
+    data.ms  = ms;
+    arch_syscall(TIMER_SYSCALL_MINOR, &data);
 }
 
 void timer_init(void)

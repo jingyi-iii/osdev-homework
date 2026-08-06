@@ -43,6 +43,24 @@ SECTIONS
 	} :bss
 
 	/*
+	 * Paging-structures pool — 8 MB reserved for page directories and
+	 * page tables (each 4 KB; 8 MB => 2048 slots, one per process and
+	 * one per 4 MB chunk mapped).  Both are accessed through their
+	 * identity VA, so they must live in a fixed range that the PMM
+	 * never hands out; otherwise a user VA (also identity-mapped)
+	 * could numerically collide with one of these PAs.  It sits BEFORE
+	 * the PMM bitmap, so pmm_init() protects it automatically: the PMM
+	 * only frees pages after the bitmap, keeping everything below it
+	 * (kernel, pool, bitmap) reserved.
+	 */
+	.page_tables BLOCK(4K) : ALIGN(4K)
+	{
+		__page_table_base = .;
+		. = . + 8M;
+		__page_table_end = .;
+	} :bss
+
+	/*
 	 * PMM bitmap — 128 KB reserved for the physical memory manager's
 	 * bitmap (one bit per 4 KB page, enough for 4 GB of physical memory).
 	 * The bitmap is zero-initialised by the loader (BSS-like section).

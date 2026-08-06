@@ -5,6 +5,23 @@
 #include "drivers/log_driver.h"
 #include "kernel/process.h"
 
+/*
+ * PA allocator:
+ *   - vmm_create: page directory from the reserved paging pool
+ *   - vmm_alloc_pages: user pages from the PMM
+ * PA deallocator:
+ *   - vmm_destroy: page directory back to the paging pool
+ *   - vmm_free_pages: user pages back to the PMM
+ *
+ * VA allocator:
+ *   - vmm_alloc_pages: for user pages
+ *   - vmm_mmap_reserve: for mmap
+ *
+ * VA deallocator:
+ *   - vmm_free_pages: for user pages
+ *   - vmm_mmap_release: for mmap
+ */
+
 static int vmm_rbtree_node_cmp(const rbnode* left, const rbnode* right)
 {
     if (!left || !right)
@@ -46,7 +63,9 @@ int vmm_create(vmm_control_block* vcb, int user_accessible)
         return ENOMEM;
     }
 
-    pa = pmm_alloc_page();
+    /* the page directory comes from the reserved paging pool so its
+     * physical address can never collide with an identity-mapped user VA */
+    pa = (uint32_t)arch_paging_pool_alloc();
     if (!pa) {
         rbtree_destroy(vcb->tree);
         spinlock_release(vcb->lock);
@@ -55,7 +74,7 @@ int vmm_create(vmm_control_block* vcb, int user_accessible)
 
     vcb->cr3 = arch_clone_kernel_pde(pa, user_accessible);
     if (!vcb->cr3) {
-        pmm_free_page(pa);
+        arch_paging_pool_free(pa);
         rbtree_destroy(vcb->tree);
         spinlock_release(vcb->lock);
         return ENOMEM;
@@ -69,8 +88,8 @@ void vmm_destroy(vmm_control_block* vcb)
     if (!vcb || !vcb->cr3)
         return;
 
+    spinlock_lock(vcb->lock);
     if (vcb->tree) {
-        spinlock_lock(vcb->lock);
         rbnode *pos, *n;
         rbtree_for_each_safe(pos, n, vcb->tree) {
             vmm_region* r = rb_entry(pos, vmm_region, node);
@@ -84,12 +103,12 @@ void vmm_destroy(vmm_control_block* vcb)
         }
         rbtree_destroy(vcb->tree);
         vcb->tree = 0;
-        spinlock_unlock(vcb->lock);
     }
 
     arch_destroy_address_space(vcb->cr3);
-    pmm_free_page(vcb->cr3);
+    arch_paging_pool_free(vcb->cr3);
     vcb->cr3 = 0;
+    spinlock_unlock(vcb->lock);
     spinlock_release(vcb->lock);
 }
 
@@ -98,40 +117,64 @@ void* vmm_alloc_pages(vmm_control_block* vcb, uint32_t page_cnt, uint32_t flags)
     uint32_t pa = 0;
     uint32_t va = 0;
     vmm_region* region = 0;
+    vmm_region* cur = 0;
 
-    if (!vcb || !vcb->tree)
+    if (!vcb || !vcb->tree || page_cnt == 0)
         return 0;
 
-    if (spinlock_lock(vcb->lock) != 0)
+    /* Allocate physical pages and the bookkeeping region up front,
+     * outside the VCB lock (pmm/heap take their own locks). */
+    pa = pmm_alloc_pages(page_cnt);
+    if (!pa)
         return 0;
+
+    region = kmalloc(sizeof(vmm_region));
+    if (!region) {
+        pmm_free_pages(pa, page_cnt);
+        return 0;
+    }
+
+    if (spinlock_lock(vcb->lock) != 0) {
+        pmm_free_pages(pa, page_cnt);
+        kfree(region);
+        return 0;
+    }
+
+    /* pick a free VA and reserve it atomically with the insert below */
     if (vcb->tree->root != vcb->tree->nil) {
         rbtree_for_each(node, vcb->tree) {
-            region = rb_entry(node, vmm_region, node);
+            cur = rb_entry(node, vmm_region, node);
 
-            rbnode* next_node = rbtree_next(vcb->tree, &region->node);
+            rbnode* next_node = rbtree_next(vcb->tree, &cur->node);
             if (next_node) {
                 vmm_region* next_region = rb_entry(next_node, vmm_region, node);
-                va = (uint32_t)region->start_va + region->size;
+                va = (uint32_t)cur->start_va + cur->size;
                 va = (va + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
                 if (page_cnt > (0xffffffff - va) / PAGE_SIZE) {
                     /* overflow */
                     spinlock_unlock(vcb->lock);
+                    pmm_free_pages(pa, page_cnt);
+                    kfree(region);
                     return 0;
                 }
                 if (va + page_cnt * PAGE_SIZE <= (uint32_t)next_region->start_va)
                     break;
             } else {
-                if ((uint32_t)region->start_va > (0xffffffff - region->size)) {
+                if ((uint32_t)cur->start_va > (0xffffffff - cur->size)) {
                     /* overflow */
                     spinlock_unlock(vcb->lock);
+                    pmm_free_pages(pa, page_cnt);
+                    kfree(region);
                     return 0;
                 }
 
-                va = (uint32_t)region->start_va + region->size;
+                va = (uint32_t)cur->start_va + cur->size;
                 va = (va + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
                 if (va == 0 || page_cnt > (0xffffffff - va) / PAGE_SIZE) {
                     /* overflow after alignment */
                     spinlock_unlock(vcb->lock);
+                    pmm_free_pages(pa, page_cnt);
+                    kfree(region);
                     return 0;
                 }
                 break;
@@ -139,22 +182,9 @@ void* vmm_alloc_pages(vmm_control_block* vcb, uint32_t page_cnt, uint32_t flags)
         }
     }
 
-    pa = pmm_alloc_pages(page_cnt);
-    if (!pa) {
-        spinlock_unlock(vcb->lock);
-        return 0;
-    }
-
     /* tree is empty — fall back to identity mapping */
     if (vcb->tree->root == vcb->tree->nil)
         va = pa;
-
-    region = kmalloc(sizeof(vmm_region));
-    if (!region) {
-        pmm_free_pages(pa, page_cnt);
-        spinlock_unlock(vcb->lock);
-        return 0;
-    }
 
     region->start_va = (void*)va;
     region->size     = PAGE_SIZE * page_cnt;
@@ -162,21 +192,23 @@ void* vmm_alloc_pages(vmm_control_block* vcb, uint32_t page_cnt, uint32_t flags)
     region->pa       = pa;
     region->own_phys = 1;
     rbtree_insert(vcb->tree, &region->node, vmm_rbtree_node_cmp);
+    spinlock_unlock(vcb->lock);
 
+    /* map pages after releasing the lock (arch_map_4kb takes paging_lock) */
     for (uint32_t i = 0; i < region->size / PAGE_SIZE; i++) {
         if (arch_map_4kb((void*)vcb->cr3, (void*)(va + i * PAGE_SIZE),
                          (void*)(pa + i * PAGE_SIZE), flags) != 0) {
             /* roll back: unmap pages mapped so far, free phys, drop region */
             for (uint32_t j = 0; j < i; j++)
                 arch_unmap_4kb((void*)vcb->cr3, (void*)(va + j * PAGE_SIZE));
-            pmm_free_pages(pa, page_cnt);
+            spinlock_lock(vcb->lock);
             rbtree_delete(vcb->tree, &region->node);
-            kfree(region);
             spinlock_unlock(vcb->lock);
+            pmm_free_pages(pa, page_cnt);
+            kfree(region);
             return 0;
         }
     }
-    spinlock_unlock(vcb->lock);
     return (void*)va;
 }
 
@@ -282,7 +314,7 @@ static void* vmm_mmap_reserve(vmm_control_block* vcb, uint32_t pa, size_t size,
     return (void*)va;
 }
 
-static int vmm_mmap_release(vmm_control_block* vcb, void* va,
+static int vmm_mmap_release(vmm_control_block* vcb, void* va, uint32_t size,
                               void** out_start, uint32_t* out_size)
 {
     rbnode* node = 0;
@@ -308,6 +340,18 @@ static int vmm_mmap_release(vmm_control_block* vcb, void* va,
     }
 
     if (found) {
+        /*
+         * A mapping is released as a whole.  Reject requests that extend
+         * beyond the mapped region (or wrap around 32-bit), so a caller
+         * can never silently unmap more than it asked for.
+         */
+        if (size > region->size ||
+            (uint32_t)va + size < (uint32_t)va ||
+            (uint32_t)va + size > (uint32_t)region->start_va + region->size) {
+            spinlock_unlock(vcb->lock);
+            return EINVAL;
+        }
+
         if (out_start)
             *out_start = region->start_va;
         if (out_size)
@@ -325,20 +369,26 @@ void* vmm_map_memory(uint32_t phys_addr, size_t size, uint32_t flags)
     cap_mem mem = {phys_addr, size, flags};
     uint32_t aligned_pa = phys_addr & ~(PAGE_SIZE - 1);
     uint32_t offset = phys_addr - aligned_pa;
-    size_t aligned_sz = (size + offset + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
+    size_t aligned_sz = 0;
     void* va = 0;
     int found = 0;
 
     pcb* proc = get_current_process();
     if (!proc)
-        return (void*)(intptr_t)(EINVAL);
+        return VMM_ERR_PTR(EINVAL);
 
     if (cap_check(proc, CAP_MEM_MAP, &mem) != 0)
-        return (void*)(intptr_t)(EPERM);
+        return VMM_ERR_PTR(EPERM);
+
+    /* reject empty mappings and 32-bit overflow of the aligned size */
+    if (size == 0 || size > (size_t)-1 - offset - (PAGE_SIZE - 1))
+        return VMM_ERR_PTR(EINVAL);
+
+    aligned_sz = (size + offset + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
 
     va = vmm_mmap_reserve(&proc->vcb, aligned_pa, aligned_sz, flags, &found);
     if (!found)
-        return (void*)(intptr_t)(ENOMEM);
+        return VMM_ERR_PTR(ENOMEM);
 
     for (uint32_t i = 0; i < aligned_sz / PAGE_SIZE; i++) {
         if (arch_map_4kb((void*)proc->vcb.cr3, (void*)(va + i * PAGE_SIZE),
@@ -346,8 +396,8 @@ void* vmm_map_memory(uint32_t phys_addr, size_t size, uint32_t flags)
             /* roll back: unmap pages mapped so far, drop the reserved region */
             for (uint32_t j = 0; j < i; j++)
                 arch_unmap_4kb((void*)proc->vcb.cr3, (void*)(va + j * PAGE_SIZE));
-            vmm_mmap_release(&proc->vcb, va, 0, 0);
-            return (void*)(intptr_t)(ENOMEM);
+            vmm_mmap_release(&proc->vcb, va, 0, 0, 0);
+            return VMM_ERR_PTR(ENOMEM);
         }
     }
 
@@ -367,8 +417,13 @@ int vmm_unmap_memory(void* virt_addr, size_t size)
     if (cap_check(proc, CAP_MEM_MAP, &mem) != 0)
         return EPERM;
 
-    /* only unmap when a matching mmap region actually exists */
-    if (vmm_mmap_release(&proc->vcb, virt_addr, &va, &region_size) != 0)
+    /*
+     * Only unmap when a matching mmap region actually exists.  The
+     * requested range is validated against the region inside
+     * vmm_mmap_release so a bad size cannot silently unmap more.
+     */
+    if (vmm_mmap_release(&proc->vcb, virt_addr, (uint32_t)size,
+                         &va, &region_size) != 0)
         return EINVAL;
 
     for (uint32_t i = 0; i < region_size / PAGE_SIZE; i++)
