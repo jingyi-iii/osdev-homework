@@ -20,7 +20,7 @@
 #include "drivers/terminal_driver.h"
 #include "drivers/timer_driver.h"
 #include "kernel/process.h"
-#include "kernel/mailbox.h"
+#include "ipc/mailbox.h"
 #include "lib/string.h"
 
 extern volatile int test_finished_flag;

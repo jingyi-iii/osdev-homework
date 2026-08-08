@@ -239,10 +239,10 @@ int cap_grant(struct pcb* proc, cap_type type, const void* args)
     return 0;
 }
 
-void cap_revoke(struct pcb* proc, cap_type type, const void* args)
+int cap_revoke(struct pcb* proc, cap_type type, const void* args)
 {
     if (!proc || !args)
-        return;
+        return E_INVAL;
 
     list_for_each_safe(node, n, &proc->capabilities) {
         capability* cap = list_entry(node, capability, this_node);
@@ -258,6 +258,8 @@ void cap_revoke(struct pcb* proc, cap_type type, const void* args)
         CASE_CAP_REVOKE(CAP_THREAD_CREATE, issue_thread_create, cap_permission_cmp)
         }
     }
+
+    return 0;
 }
 
 void cap_revoke_all(struct pcb* proc)

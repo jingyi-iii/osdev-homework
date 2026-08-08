@@ -8,6 +8,8 @@
 #include "kernel/errno.h"
 #include "mm/vmm.h"
 #include "kernel/capability.h"
+#include "sync/wait_queue.h"
+#include "sync/semaphore.h"
 
 #define PROCESS_SUPPORT_MAILBOX
 
@@ -57,6 +59,7 @@ typedef struct tcb {
     task_entry_t        entry;
     int32_t             tid;
     thread_state        state;
+    int                 wake_pending;   /* set by unblock, consumed on block/resume */
     list_node           this_node;      /* node in global scheduling list */
     list_node           proc_node;      /* node in parent->tcbs list */
     spinlock*           sp_lock;
@@ -64,6 +67,8 @@ typedef struct tcb {
 #ifdef PROCESS_SUPPORT_MAILBOX
     struct mailbox*     mailbox;
 #endif
+    list_node           wait_node;
+    wait_queue*         waiting_on;
 } tcb;
 
 int32_t thread_create       (task_priv priv, task_entry_t entry);
@@ -80,6 +85,7 @@ int     proc_block          (int32_t pid);
 int     proc_unblock        (int32_t pid);
 int     proc_get_pid        (void);
 pcb*    get_current_process (void);
+pcb*    get_process_by_pid  (int32_t pid);
 
 /* Exported for mailbox broadcast — must be held when iterating thread_head */
 extern list_node thread_head;

@@ -31,6 +31,10 @@
         "/^bash -c \"export PATH=\\\\\\$HOME/i686-tools/bin:/usr/bin:/bin && i686-elf-objdump -t output/myos\\.bin 2>&1 \\| tail -30\"$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^wsl -e bash -lc \"cd /home/linji/osdev-homework/osdev && echo '=== sections ===' && i686-elf-objdump -h output/myos\\.bin \\| grep -E 'Idx\\|\\\\\\.text\\|\\\\\\.data\\|\\\\\\.bss\\|\\\\\\.rodata\\|page\\|init' && echo '=== symbols near 0x1227EE ===' && i686-elf-nm -n output/myos\\.bin \\| awk 'strtonum\\(\\\\\"0x\\\\\"\\\\\\$1\\) >= 0x120000 && strtonum\\(\\\\\"0x\\\\\"\\\\\\$1\\) <= 0x124000 \\{print\\}' \\| head -40\"$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     },
     "cmake.sourceDirectory": "/wsl.localhost/Debian/home/linji/osdev-homework/osdev/tests"

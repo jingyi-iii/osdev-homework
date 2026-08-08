@@ -20,6 +20,8 @@ extern void process_api_test_main(void);
 extern void mailbox_api_test_main(void);
 extern void rbtree_test_main(void);
 extern void sched_mix_test_main(void);
+extern void shm_test_main(void);
+extern void shm_stress_main(void);
 
 /* Menu state: 0 = waiting, 1 = thread tests, 2 = process tests, 3 = mailbox tests, 4 = rbtree tests, 5 = mixed scheduling tests, 6 = run all */
 static volatile int menu_choice = 0;
@@ -48,6 +50,8 @@ static void menu_kb_handler(const char* data, size_t size)
     if (key == '4') menu_choice = 4;
     if (key == '5') menu_choice = 5;
     if (key == '6') menu_choice = 6;
+    if (key == '7') menu_choice = 7;
+    if (key == '8') menu_choice = 8;
     if (key == 'k' || key == 'K') priv_choice = 1;
     if (key == 'u' || key == 'U') priv_choice = 2;
 }
@@ -70,8 +74,10 @@ static void draw_menu(void)
     terminal_write("  [4] Red-Black Tree Test Suite\n");
     terminal_write("  [5] Mixed Scheduling Test Suite\n");
     terminal_write("  [6] Run All Test Suites\n");
+    terminal_write("  [7] SHM Test Suite\n");
+    terminal_write("  [8] SHM Stress Test\n");
     terminal_write("\n");
-    terminal_write("  Press 1, 2, 3, 4, 5 or 6 to select\n");
+    terminal_write("  Press 1, 2, 3, 4, 5, 6, 7 or 8 to select\n");
 }
 
 /* ------------------------------------------------------------------ *
@@ -127,6 +133,9 @@ static void run_all_test_suites(proc_priv priv)
     run_test_suite("Mailbox API Test Suite",     mailbox_api_test_main, priv);
     run_test_suite("Red-Black Tree Test Suite",  rbtree_test_main, priv);
     run_test_suite("Mixed Scheduling Test Suite", sched_mix_test_main, priv);
+    /* SHM tests need the shared kernel address space for handshaking */
+    run_test_suite("SHM Test Suite", shm_test_main, PROC_PRIV_KERNEL);
+    run_test_suite("SHM Stress Test", shm_stress_main, PROC_PRIV_KERNEL);
 
     terminal_write("\n========== ALL TEST SUITES COMPLETE ==========\n\n");
 }
@@ -161,6 +170,11 @@ void process_test_main_thread(void)
             priv = menu_ask_priv("Mailbox API Test Suite");
         } else if (menu_choice == 5) {
             priv = menu_ask_priv("Mixed Scheduling Test Suite");
+        } else if (menu_choice == 7) {
+            /* SHM tests need the shared kernel address space for handshaking */
+            priv = PROC_PRIV_KERNEL;
+        } else if (menu_choice == 8) {
+            priv = PROC_PRIV_KERNEL;
         } else {
             priv = menu_ask_priv("Red-Black Tree Test Suite");
         }
@@ -177,6 +191,10 @@ void process_test_main_thread(void)
             run_test_suite("Mailbox API Test Suite", mailbox_api_test_main, priv);
         } else if (menu_choice == 5) {
             run_test_suite("Mixed Scheduling Test Suite", sched_mix_test_main, priv);
+        } else if (menu_choice == 7) {
+            run_test_suite("SHM Test Suite", shm_test_main, priv);
+        } else if (menu_choice == 8) {
+            run_test_suite("SHM Stress Test", shm_stress_main, priv);
         } else {
             run_test_suite("Red-Black Tree Test Suite", rbtree_test_main, priv);
         }

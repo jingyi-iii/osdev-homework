@@ -1,4 +1,4 @@
-#include "kernel/mailbox.h"
+#include "ipc/mailbox.h"
 #include "mm/heap.h"
 #include "lib/string.h"
 #include "kernel/errno.h"

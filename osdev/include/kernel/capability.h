@@ -40,7 +40,7 @@ typedef struct capability {
 struct pcb;
 int cap_check(struct pcb* proc, cap_type type, const void* args);
 int cap_grant(struct pcb* proc, cap_type type, const void* args);
-void cap_revoke(struct pcb* proc, cap_type type, const void* args);
+int cap_revoke(struct pcb* proc, cap_type type, const void* args);
 void cap_revoke_all(struct pcb* proc);
 
 #endif

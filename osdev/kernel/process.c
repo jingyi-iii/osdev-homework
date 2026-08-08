@@ -6,7 +6,7 @@
 #include "lib/string.h"
 #include "drivers/log_driver.h"
 #include "kernel/irq.h"
-#include "kernel/mailbox.h"
+#include "ipc/mailbox.h"
 
 extern mailbox* alloc_mailbox(int owner_pid, int owner_tid);
 extern void release_mailbox(mailbox* mb);
@@ -43,6 +43,7 @@ static tcb* find_next_runnable(tcb* current)
         tcb* t = list_entry(pos, tcb, this_node);
         spinlock_lock(t->sp_lock);
         if (t->state == TS_READY) {
+            t->wake_pending = 0;   /* wakeup consumed: thread is about to run */
             spinlock_unlock(t->sp_lock);
             return t;
         }
@@ -54,6 +55,7 @@ static tcb* find_next_runnable(tcb* current)
         tcb* t = list_entry(pos, tcb, this_node);
         spinlock_lock(t->sp_lock);
         if (t->state == TS_READY) {
+            t->wake_pending = 0;   /* wakeup consumed: thread is about to run */
             spinlock_unlock(t->sp_lock);
             return t;
         }
@@ -95,6 +97,9 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
         return E_NOMEM;
     }
 
+    thread->waiting_on = 0;
+    list_init(&thread->wait_node);
+
     if (arch_task_context_init(&parent->vcb, &thread->context, entry, priv)) {
         KLOG("failed to init thread context");
         kfree(thread);
@@ -113,6 +118,7 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
 
     thread->parent = parent;
     thread->tid = tid++;
+    thread->wake_pending = 0;
 
     spinlock_lock(schedule_lock);
 
@@ -239,6 +245,12 @@ static void t_block(int32_t tid)
             continue;
 
         spinlock_lock(t->sp_lock);
+        if (t->wake_pending) {
+            /* Already unblocked while still running: do not block. */
+            t->wake_pending = 0;
+            spinlock_unlock(t->sp_lock);
+            break;
+        }
         t->state = TS_PENDING;
         spinlock_unlock(t->sp_lock);
 
@@ -273,6 +285,7 @@ static void t_unblock(int32_t tid)
             continue;
 
         spinlock_lock(t->sp_lock);
+        t->wake_pending = 1;
         t->state = TS_READY;
         spinlock_unlock(t->sp_lock);
         break;
@@ -755,6 +768,24 @@ pcb* get_current_process(void)
 {
     tcb* cur = thread_run;
     return cur ? cur->parent : 0;
+}
+
+pcb* get_process_by_pid(int32_t pid)
+{
+    pcb* target = 0;
+
+    spinlock_lock(schedule_lock);
+
+    list_for_each(node, &proc_head) {
+        pcb* p = list_entry(node, pcb, this_node);
+        if (p->pid == pid) {
+            target = p;
+            break;
+        }
+    }
+
+    spinlock_unlock(schedule_lock);
+    return target;
 }
 
 module_init(proc_env_init);

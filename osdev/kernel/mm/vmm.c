@@ -4,6 +4,7 @@
 #include "lib/string.h"
 #include "drivers/log_driver.h"
 #include "kernel/process.h"
+#include "kernel/capability.h"
 
 /*
  * PA allocator:
@@ -36,6 +37,20 @@ static int vmm_rbtree_node_cmp(const rbnode* left, const rbnode* right)
         return 1;
     else
         return 0;
+}
+
+static int vmm_rbtree_key_cmp(const void* key, const rbnode* node)
+{
+    if (!node || !key)
+        return -1;
+
+    vmm_region* r = rb_entry(node, vmm_region, node);
+    if (r->start_va <= key && (uint32_t)key < (uint32_t)r->start_va + r->size)
+        return 0;
+    else if ((uint32_t)key < (uint32_t)r->start_va)
+        return -1;
+    else
+        return 1;
 }
 
 void vmm_switch(vmm_control_block* vcb)
@@ -214,7 +229,8 @@ void* vmm_alloc_pages(vmm_control_block* vcb, uint32_t page_cnt, uint32_t flags)
 
 void vmm_free_pages(vmm_control_block* vcb, void* va)
 {
-    rbnode* node = 0;
+    rbnode* del_node = 0;   /* node captured inside the loop; the loop-scoped
+                             * `node` goes out of scope after rbtree_for_each */
     vmm_region* region = 0;
     int found = 0;
 
@@ -231,6 +247,7 @@ void vmm_free_pages(vmm_control_block* vcb, void* va)
             ((uint32_t)region->start_va + region->size > (uint32_t)va) &&
             region->own_phys) {
             found = 1;
+            del_node = node;
             break;
         }
     }
@@ -240,7 +257,7 @@ void vmm_free_pages(vmm_control_block* vcb, void* va)
             arch_unmap_4kb((void*)vcb->cr3,
                            (uint8_t*)region->start_va + i * PAGE_SIZE);
         pmm_free_pages(region->pa, region->size / PAGE_SIZE);
-        rbtree_delete(vcb->tree, node);
+        rbtree_delete(vcb->tree, del_node);
         kfree(region);
     }
     spinlock_unlock(vcb->lock);
@@ -317,7 +334,8 @@ static void* vmm_mmap_reserve(vmm_control_block* vcb, uint32_t pa, size_t size,
 static int vmm_mmap_release(vmm_control_block* vcb, void* va, uint32_t size,
                               void** out_start, uint32_t* out_size)
 {
-    rbnode* node = 0;
+    rbnode* del_node = 0;   /* node captured inside the loop; the loop-scoped
+                             * `node` goes out of scope after rbtree_for_each */
     vmm_region* region = 0;
     int found = 0;
 
@@ -335,6 +353,7 @@ static int vmm_mmap_release(vmm_control_block* vcb, void* va, uint32_t size,
         if (((uint32_t)region->start_va <= (uint32_t)va) &&
             ((uint32_t)region->start_va + region->size > (uint32_t)va)) {
             found = 1;
+            del_node = node;
             break;
         }
     }
@@ -356,7 +375,7 @@ static int vmm_mmap_release(vmm_control_block* vcb, void* va, uint32_t size,
             *out_start = region->start_va;
         if (out_size)
             *out_size = region->size;
-        rbtree_delete(vcb->tree, node);
+        rbtree_delete(vcb->tree, del_node);
         kfree(region);
     }
     spinlock_unlock(vcb->lock);
@@ -364,7 +383,34 @@ static int vmm_mmap_release(vmm_control_block* vcb, void* va, uint32_t size,
     return found ? 0 : EINVAL;
 }
 
-void* vmm_map_memory(uint32_t phys_addr, size_t size, uint32_t flags)
+int vmm_lookup_region(pcb* proc, uint32_t va, uint32_t* out_pa, uint32_t* out_pa_size)
+{
+    vmm_region* region = 0;
+    int found = 0;
+
+    if (!proc || !out_pa || !out_pa_size)
+        return EINVAL;
+
+    if (spinlock_lock(proc->vcb.lock) != 0)
+        return EINVAL;
+
+    rbtree_for_each(node, proc->vcb.tree) {
+        region = rb_entry(node, vmm_region, node);
+
+        if (((uint32_t)region->start_va <= (uint32_t)va) &&
+            ((uint32_t)region->start_va + region->size > (uint32_t)va)) {
+            found = 1;
+            *out_pa = region->pa;
+            *out_pa_size = region->size;
+            break;
+        }
+    }
+    spinlock_unlock(proc->vcb.lock);
+
+    return found ? 0 : EINVAL;
+}
+
+void* vmm_map_memory(pcb* proc, uint32_t phys_addr, size_t size, uint32_t flags)
 {
     cap_mem mem = {phys_addr, size, flags};
     uint32_t aligned_pa = phys_addr & ~(PAGE_SIZE - 1);
@@ -373,7 +419,6 @@ void* vmm_map_memory(uint32_t phys_addr, size_t size, uint32_t flags)
     void* va = 0;
     int found = 0;
 
-    pcb* proc = get_current_process();
     if (!proc)
         return VMM_ERR_PTR(EINVAL);
 
@@ -404,16 +449,25 @@ void* vmm_map_memory(uint32_t phys_addr, size_t size, uint32_t flags)
     return (void*)((uint8_t*)va + offset);
 }
 
-int vmm_unmap_memory(void* virt_addr, size_t size)
+int vmm_unmap_memory(pcb* proc, void* virt_addr, size_t size)
 {
-    cap_mem mem = {(uint32_t)virt_addr, size};
-    void* va = 0;
+    cap_mem mem = {0};
+    uint32_t pa = 0;
+    uint32_t pa_size = 0;
     uint32_t region_size = 0;
+    void* va = 0;
+    int ret = 0;
 
-    pcb* proc = get_current_process();
     if (!proc)
         return EINVAL;
 
+    ret = vmm_lookup_region(proc, (uint32_t)virt_addr, &pa, &pa_size);
+    if (ret)
+        return E_NOTFOUND;
+
+    mem.base = pa;
+    mem.size = pa_size;
+    mem.flags = 0;
     if (cap_check(proc, CAP_MEM_MAP, &mem) != 0)
         return EPERM;
 
@@ -431,4 +485,21 @@ int vmm_unmap_memory(void* virt_addr, size_t size)
                        (uint8_t*)va + i * PAGE_SIZE);
 
     return 0;
+}
+
+uint32_t vmm_va_to_pa(pcb* proc, uint32_t va)
+{
+    uint32_t pa = 0;
+    if (!proc || !proc->vcb.tree)
+        return 0;
+
+    spinlock_lock(proc->vcb.lock);
+    rbnode* node = rbtree_search(proc->vcb.tree, (void*)va, vmm_rbtree_key_cmp);
+    if (node) {
+        vmm_region* region = rb_entry(node, vmm_region, node);
+        pa = region->pa + ((uint32_t)va - (uint32_t)region->start_va);
+    }
+    spinlock_unlock(proc->vcb.lock);
+
+    return pa;
 }
