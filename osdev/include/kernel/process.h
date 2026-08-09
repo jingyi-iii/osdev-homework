@@ -79,7 +79,7 @@ void    thread_unblock      (int32_t tid);
 int     thread_get_tid      (void);
 tcb*    thread_get_by_tid   (int32_t tid);
 
-void    proc_create         (proc_priv priv, task_entry_t entry);
+int32_t proc_create         (proc_priv priv, task_entry_t entry);
 void    proc_exit           (int32_t pid);
 int     proc_block          (int32_t pid);
 int     proc_unblock        (int32_t pid);

@@ -717,7 +717,7 @@ tcb* thread_get_by_tid(int32_t tid)
     return target;
 }
 
-void proc_create(proc_priv priv, task_entry_t entry)
+int32_t proc_create(proc_priv priv, task_entry_t entry)
 {
     proc_thread_ctrl_config config = {0};
     config.cmd = PROC_CTRL_CREATE;
@@ -725,6 +725,8 @@ void proc_create(proc_priv priv, task_entry_t entry)
     config.entry = entry;
 
     arch_syscall(0, &config);
+
+    return config.pid;
 }
 
 void proc_exit(int32_t pid)

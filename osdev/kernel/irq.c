@@ -1,6 +1,7 @@
 #include "arch_irq.h"
 #include "kernel/irq.h"
 #include "lib/string.h"
+#include "lib/module.h"
 #include "drivers/log_driver.h"
 #include "mm/heap.h"
 #include "kernel/capability.h"
@@ -161,6 +162,18 @@ void irqline_handler(uint32_t major, uint32_t minor, void* context)
 {
     (void)minor;
 
+    /* TEMP DEBUG: count enabled handlers on the keyboard line per IRQ */
+    if (major == KEYBOARD_IRQ_NO && irqlines[major]) {
+        int n_enabled = 0;
+        list_for_each(each, &irqlines[major]->irqs) {
+            irq* p = list_entry(each, irq, node);
+            if (p->enabled)
+                n_enabled++;
+        }
+        KLOG("irqline_handler: KB major=%x minor=%d enabled=%d",
+             major, minor, n_enabled);
+    }
+
     if (!irqlines[major])
         return;
 
@@ -221,6 +234,21 @@ static int irq_free(irq *p)
 int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
                     irq_handler_fn cb, void* cb_param)
 {
+    /* User mode (CPL3): go through the syscall gate (major 100). */
+    if (arch_running_ring3()) {
+        irq_syscall_data data = {0};
+        data.cmd     = IRQ_SYSCALL_REQUEST;
+        data.name    = name;
+        data.major   = major;
+        data.minor   = minor;
+        data.handler = cb;
+        data.param   = cb_param;
+        arch_syscall(IRQ_SYSCALL_MINOR, &data);
+        if (out)
+            *out = data.handle;
+        return data.ret;
+    }
+
     if (!out || major >= IDT_ENTRIES)
         return E_INVAL;
 
@@ -231,8 +259,10 @@ int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
      * - user process -> must hold CAP_IRQ_OWN for this IRQ line */
     pcb* proc = get_current_process();
     if (proc && proc->priv != PROC_PRIV_KERNEL) {
-        if (cap_check(proc, CAP_IRQ_OWN, &major) != 0)
+        if (cap_check(proc, CAP_IRQ_OWN, &major) != 0) {
+            KLOG("no irq permission for pid %d", proc->pid);
             return E_PERM;
+        }
     }
 
     int ret = 0;
@@ -288,6 +318,15 @@ void irq_release(irq *p)
     if (!p)
         return;
 
+    /* User mode (CPL3): go through the syscall gate (major 100). */
+    if (arch_running_ring3()) {
+        irq_syscall_data data = {0};
+        data.cmd    = IRQ_SYSCALL_RELEASE;
+        data.handle = p;
+        arch_syscall(IRQ_SYSCALL_MINOR, &data);
+        return;
+    }
+
     if (irqlines[p->major]) {
         irqline_remove_irq(irqlines[p->major], p);
     }
@@ -299,6 +338,15 @@ int irq_mask(struct irq* p)
 {
     if (!p)
         return E_INVAL;
+
+    /* User mode (CPL3): go through the syscall gate (major 100). */
+    if (arch_running_ring3()) {
+        irq_syscall_data data = {0};
+        data.cmd    = IRQ_SYSCALL_MASK;
+        data.handle = p;
+        arch_syscall(IRQ_SYSCALL_MINOR, &data);
+        return data.ret;
+    }
 
     spinlock_lock(p->sp_lock);
     p->enabled = 0;
@@ -315,6 +363,15 @@ int irq_unmask(struct irq* p)
     if (!p)
         return E_INVAL;
 
+    /* User mode (CPL3): go through the syscall gate (major 100). */
+    if (arch_running_ring3()) {
+        irq_syscall_data data = {0};
+        data.cmd    = IRQ_SYSCALL_UNMASK;
+        data.handle = p;
+        arch_syscall(IRQ_SYSCALL_MINOR, &data);
+        return data.ret;
+    }
+
     spinlock_lock(p->sp_lock);
     p->enabled = 1;
     spinlock_unlock(p->sp_lock);
@@ -324,3 +381,62 @@ int irq_unmask(struct irq* p)
 
     return 0;
 }
+
+/*
+ * ============================================================================
+ * IRQ syscall layer (RING3)
+ *
+ * irq_request / irq_release / irq_mask / irq_unmask are routed through this
+ * gate (major 100, minor IRQ_SYSCALL_MINOR) whenever the caller runs in user
+ * mode (CPL3).  The handler runs in kernel context, so the capability checks
+ * inside the kernel implementations still apply to the calling process.
+ * ============================================================================
+ */
+static irq* irq_scall = 0;
+
+static void irq_syscall_handler(void* context)
+{
+    irq_syscall_data* data = (irq_syscall_data*)context;
+    if (!data)
+        return;
+
+    switch (data->cmd) {
+    case IRQ_SYSCALL_REQUEST:
+        data->ret = irq_request(&data->handle, data->name, data->major,
+                                data->minor, data->handler, data->param);
+        break;
+    case IRQ_SYSCALL_RELEASE:
+        irq_release(data->handle);
+        data->ret = 0;
+        break;
+    case IRQ_SYSCALL_MASK:
+        data->ret = irq_mask(data->handle);
+        break;
+    case IRQ_SYSCALL_UNMASK:
+        data->ret = irq_unmask(data->handle);
+        break;
+    default:
+        data->ret = -E_INVAL;
+        break;
+    }
+}
+
+void irq_syscall_init(void)
+{
+    int ret = irq_request(&irq_scall, "irq_syscall", 100,
+                          IRQ_SYSCALL_MINOR, irq_syscall_handler, NULL);
+    if (ret == 0 && irq_scall)
+        irq_unmask(irq_scall);
+}
+
+void irq_syscall_exit(void)
+{
+    if (irq_scall) {
+        irq_mask(irq_scall);
+        irq_release(irq_scall);
+        irq_scall = 0;
+    }
+}
+
+module_init(irq_syscall_init);
+module_exit(irq_syscall_exit);
