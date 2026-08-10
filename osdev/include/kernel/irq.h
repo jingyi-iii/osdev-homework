@@ -17,6 +17,9 @@ typedef struct irq {
     uint32_t major;
     uint32_t minor;
     int enabled;
+    int is_user_irq;
+    int tid;
+    void* owner;        /* registering thread's tcb (user IRQ only) */
     spinlock* sp_lock;
     list_node node;
     irq_handler_fn handler;
@@ -52,13 +55,15 @@ typedef enum {
 
 /* Data structure carried through the IRQ syscall gate */
 typedef struct irq_syscall_data {
-    uint8_t        cmd;       /* irq_syscall_cmd                             */
-    irq*           handle;    /* out (request) / in (release, mask, unmask)  */
+    uint8_t        cmd;       /* irq_syscall_cmd                            */
+    irq*           handle;    /* out (request) / in (release, mask, unmask) */
     const char*    name;      /* request: irq name                          */
     uint32_t       major;     /* request: IRQ major                         */
     uint32_t       minor;     /* request: IRQ minor                         */
     irq_handler_fn handler;   /* request: callback                          */
     void*          param;     /* request: callback param                    */
+    int            is_user_irq;  /* request: is user mode irq               */
+    int            tid;
     int            ret;       /* out: return code                           */
 } irq_syscall_data;
 

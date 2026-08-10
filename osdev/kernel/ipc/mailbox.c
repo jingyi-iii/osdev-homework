@@ -6,7 +6,7 @@
 #include "kernel/irq.h"
 #include "lib/module.h"
 
-static mail* alloc_mail(void)
+mail* alloc_mail(void)
 {
     static size_t unique_id = 0;
 
@@ -90,7 +90,7 @@ void release_mailbox(mailbox* mb)
     }
 }
 
-static int send_mail(mailbox* mb, mail* m)
+int send_mail(mailbox* mb, mail* m)
 {
     if (!mb || !m)
         return -EINVAL;
@@ -123,7 +123,7 @@ static int send_mail(mailbox* mb, mail* m)
     return 0;
 }
 
-static int send(mail* m)
+int send(mail* m)
 {
     if (!m)
         return -EINVAL;
@@ -246,23 +246,6 @@ static mail* try_get_mail(mailbox* mb)
     return m;
 }
 
-static mail* listen(mailbox* mb)
-{
-    if (!mb)
-        return 0;
-    
-    for ( ;; ) {
-        mail* m = try_get_mail(mb);
-        if (m)
-            return m;
-
-        /* No mail: yield to allow senders to run and deliver mails */
-        thread_yield();
-    }
-    
-    return 0;
-}
-
 static int register_handler(mailbox* mb, mail_handler handler)
 {
     if (!mb || !handler)
@@ -320,7 +303,14 @@ static void mailbox_syscall_isr(void* data)
         config->ret = send(config->m);
         break;
     case MAILBOX_CTRL_LISTEN:
-        config->m = listen(config->mb);
+        /*
+         * Non-blocking on purpose: this runs inside the syscall ISR with
+         * interrupts disabled, so a blocking loop that calls thread_yield()
+         * would spin forever (a nested int $100 is swallowed by the irq
+         * reentrancy guard in arch_syscall_entry).  The mailbox_listen()
+         * wrapper loops and yields in user mode instead.
+         */
+        config->m = try_get_mail(config->mb);
         config->ret = (config->m != 0) ? 0 : -1;
         break;
     case MAILBOX_CTRL_REGISTER_HANDLER:
@@ -422,13 +412,21 @@ int mailbox_send(mail* m)
 
 mail* mailbox_listen(mailbox* mb)
 {
-    mailbox_ctrl_config config = {0};
-    config.cmd = MAILBOX_CTRL_LISTEN;
-    config.mb = mb;
+    for ( ;; ) {
+        mailbox_ctrl_config config = {0};
+        config.cmd = MAILBOX_CTRL_LISTEN;
+        config.mb = mb;
 
-    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+        arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
 
-    return config.m;
+        if (config.m)
+            return config.m;
+
+        /* No mail yet: yield HERE in user mode (a fresh, non-nested
+         * syscall), so the scheduler and the interrupt handlers that will
+         * queue the mail (e.g. the keyboard ISR) actually get to run. */
+        thread_yield();
+    }
 }
 
 int mailbox_register_handler(mailbox* mb, mail_handler handler)

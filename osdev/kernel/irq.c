@@ -6,6 +6,7 @@
 #include "mm/heap.h"
 #include "kernel/capability.h"
 #include "kernel/process.h"
+#include "ipc/mailbox.h"
 
 static irqline* irqlines[IDT_ENTRIES] = {0};
 
@@ -158,6 +159,24 @@ static uint32_t irqline_find_free_minor(struct irqline* line)
     return IRQ_ANY_MINOR;
 }
 
+static void dispatch_user_mode_irq(irq* p)
+{
+    /* dispatch by mailbox: deliver to the thread that
+        * registered the IRQ (cached owner tcb, no schedule_lock) */
+    tcb* t = (tcb*)p->owner;
+    if (!t || !t->mailbox)
+        return;
+
+    mail* m = alloc_mail();
+    if (!m)
+        return;
+
+    m->type = MAIL_TYPE_IRQ;
+    m->receiver_tid = p->tid;
+
+    send_mail(t->mailbox, m);
+}
+
 void irqline_handler(uint32_t major, uint32_t minor, void* context)
 {
     (void)minor;
@@ -179,23 +198,27 @@ void irqline_handler(uint32_t major, uint32_t minor, void* context)
 
     list_for_each(each, &irqlines[major]->irqs) {
         irq* p = list_entry(each, irq, node);
-        if (p->enabled) {
-            if (p->major != 100) {
-                /* Normal IRQ: pass handler's own context (usually NULL) */
-                p->handler(p->context);
-            } else {
-                /* Syscall (major 100): dispatch by minor, pass real data */
-                if (p->minor == minor) {
-                    if (minor != 0)
-                        KLOG("syscall: minor %d triggled", minor);
+        if (!p->enabled)
+            continue;
+
+        if (p->major == 100) {
+            /* Syscall gate (major 100): dispatch by minor, pass real data */
+            if (p->minor == minor) {
+                if (p->is_user_irq)
+                    dispatch_user_mode_irq(p);
+                else
                     p->handler(context);
-                }
             }
+        } else {
+            if (p->is_user_irq)
+                dispatch_user_mode_irq(p);
+            else
+                p->handler(p->context);
         }
     }
 }
 
-static int irq_alloc(uint32_t major, uint32_t minor, const char *name,
+static int irq_alloc(uint32_t major, uint32_t minor, int is_user_irq, int tid, const char *name,
     void *context, irq_handler_fn handler, irq **out)
 {
     if (!out)
@@ -211,6 +234,9 @@ static int irq_alloc(uint32_t major, uint32_t minor, const char *name,
     p->minor = minor;
     p->handler = handler;
     p->enabled = 0;
+    p->is_user_irq = is_user_irq;
+    p->tid = tid;
+    p->owner = 0;
     p->sp_lock = spinlock_alloc();
     if (!p->sp_lock)
         return E_LIMIT;
@@ -231,24 +257,21 @@ static int irq_free(irq *p)
     return 0;
 }
 
-int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
-                    irq_handler_fn cb, void* cb_param)
+/*
+ * Core implementation of irq_request().
+ *
+ * is_user_irq tells the interrupt dispatcher how the handler must be
+ * delivered:
+ *   - 0 : kernel-mode irq   (handler runs with the kernel's own context)
+ *   - 1 : user-mode irq     (handler delivered through the user flow)
+ *
+ * The value is decided by the kernel (from the caller's privilege), never
+ * taken blindly from the caller, so a user process cannot spoof a kernel irq.
+ */
+static int irq_request_internal(irq **out, const char* name, uint32_t major,
+                                uint32_t minor, irq_handler_fn cb, void* cb_param,
+                                int is_user_irq, int tid)
 {
-    /* User mode (CPL3): go through the syscall gate (major 100). */
-    if (arch_running_ring3()) {
-        irq_syscall_data data = {0};
-        data.cmd     = IRQ_SYSCALL_REQUEST;
-        data.name    = name;
-        data.major   = major;
-        data.minor   = minor;
-        data.handler = cb;
-        data.param   = cb_param;
-        arch_syscall(IRQ_SYSCALL_MINOR, &data);
-        if (out)
-            *out = data.handle;
-        return data.ret;
-    }
-
     if (!out || major >= IDT_ENTRIES)
         return E_INVAL;
 
@@ -283,9 +306,15 @@ int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
         }
     }
 
-    ret = irq_alloc(major, minor, name, cb_param, cb, out);
+    ret = irq_alloc(major, minor, is_user_irq, tid, name, cb_param, cb, out);
     if (ret != 0 || *out == 0)
         return ret;
+
+    /* User IRQ: cache the registering thread's tcb so irqline_handler()
+     * (ISR context, interrupts disabled) can deliver the mail without
+     * taking schedule_lock via thread_get_by_tid(). */
+    if (is_user_irq)
+        (*out)->owner = (void*)thread_get_by_tid(tid);
 
     if (!irqlines[major]) {
         if (irqline_init(&irqlines[major], major) && irqlines[major])
@@ -311,6 +340,30 @@ int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
     }
 
     return 0;
+}
+
+int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
+                    irq_handler_fn cb, void* cb_param)
+{
+    /* User mode (CPL3): go through the syscall gate (major 100). */
+    if (arch_running_ring3()) {
+        irq_syscall_data data = {0};
+        data.cmd         = IRQ_SYSCALL_REQUEST;
+        data.name        = name;
+        data.major       = major;
+        data.minor       = minor;
+        data.handler     = cb;
+        data.param       = cb_param;
+        data.is_user_irq = 1;
+        data.tid         = thread_get_tid();
+        arch_syscall(IRQ_SYSCALL_MINOR, &data);
+        if (out)
+            *out = data.handle;
+        return data.ret;
+    }
+
+    /* Kernel mode (CPL0): kernel irq, no syscall round-trip. */
+    return irq_request_internal(out, name, major, minor, cb, cb_param, 0, 0);
 }
 
 void irq_release(irq *p)
@@ -402,8 +455,12 @@ static void irq_syscall_handler(void* context)
 
     switch (data->cmd) {
     case IRQ_SYSCALL_REQUEST:
-        data->ret = irq_request(&data->handle, data->name, data->major,
-                                data->minor, data->handler, data->param);
+        /* The caller ran in user mode, so this is a user irq.  The flag was
+         * set by the public irq_request() entry and carried through the
+         * syscall data; forward it into the core implementation. */
+        data->ret = irq_request_internal(&data->handle, data->name, data->major,
+                                         data->minor, data->handler, data->param,
+                                         data->is_user_irq, data->tid);
         break;
     case IRQ_SYSCALL_RELEASE:
         irq_release(data->handle);

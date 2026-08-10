@@ -10,7 +10,13 @@
 #define MAIL_ANY_PID    (-0xab)
 #define MAIL_ANY_TID    (-0xcd)
 
+typedef enum mailtype {
+    MAIL_TYPE_COMMON = 0,
+    MAIL_TYPE_IRQ,
+} mailtype;
+
 typedef struct mail {
+    mailtype type;
     int sender_pid;
     int sender_tid;
     int receiver_pid;
@@ -65,6 +71,11 @@ typedef struct mailbox_ctrl_config {
     int         tid;        /* in: owner tid for mailbox_alloc */
     int         ret;        /* out: return value */
 } mailbox_ctrl_config;
+
+/* for irq used only */
+mail*       alloc_mail                  (void);
+int         send                        (mail* m);
+int         send_mail                   (mailbox* mb, mail* m);
 
 void        mailbox_syscall_init        (void);
 void        mailbox_syscall_exit        (void);

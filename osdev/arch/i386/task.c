@@ -82,7 +82,12 @@ int arch_task_context_init(vmm_control_block* vcb, arch_task_context* context, t
     context->regs->ss = 0x8 | 0x4 | ring;
     context->regs->eip = (uint32_t)entry;
     context->regs->esp = (uint32_t)context->stack + 0x1000 - sizeof(regs_t);
-    context->regs->eflags = 0x0202;
+
+    /* IOPL=3 (EFLAGS bits 12-13): let ring-3 threads execute in/out
+     * directly.  For now every user thread gets full I/O access; later
+     * this can be replaced by a per-port TSS I/O permission bitmap
+     * driven by capabilities (keep IOPL=0 and clear bitmap bits). */
+    context->regs->eflags = 0x0202 | (ring ? 0x3000 : 0);
     context->ring = ring;
 
     return 0;

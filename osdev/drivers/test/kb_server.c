@@ -8,6 +8,7 @@
 #include "drivers/log_driver.h"
 #include "lib/module.h"
 #include "kernel/process.h"
+#include "ipc/mailbox.h"
 
 const unsigned int keymap2[NR_SCAN_CODES * MAP_COLS] = {
 /* scan-code			!Shift		Shift		E0 XX	*/
@@ -269,31 +270,51 @@ static uint8_t parse(uint8_t code)
 
 // ===========================================================
 
-static void kb_server_handler(void* context)
+/*
+ * User-mode IRQ delivery is by mailbox: when the keyboard IRQ fires,
+ * irqline_handler() queues a mail into the mailbox of the thread that
+ * called irq_request() (recorded as p->tid).  So this listen loop MUST
+ * run in that same thread — see kb_main_thread() below.
+ */
+static void kb_server_loop(void)
 {
-    /* This handler runs in KERNEL interrupt context (ring0), even though it
-     * was registered by a user-mode process: the keyboard IRQ's IDT entry
-     * uses the kernel CS selector (SYS_CODE, DPL0) and the CPU switches to
-     * the kernel stack via the TSS on entry.  I/O is unrestricted at CPL0,
-     * so inb from port 0x60 here is legal.
-     *
-     * It is also REQUIRED: if the PS/2 output buffer is never drained, IRQ1
-     * (level-triggered in QEMU) stays asserted and the handler re-fires
-     * immediately after EOI + unmask — a single key press then runs this
-     * handler many times. */
-    uint8_t scancode = arch_inb(0x60);
+    tcb* me = thread_get_by_tid(thread_get_tid());
+    if (!me || !me->mailbox) {
+        KLOG("kb_server: no mailbox for tid %d", thread_get_tid());
+        return;
+    }
 
-    /* TEMP DEBUG: use KLOG, NOT ULOG — ULOG re-enters the syscall gate
-     * from ISR context: it is dropped by the reenter guard and corrupts
-     * the ISR stack frame (nested SAVE/RESTORE_REGS). */
-    KLOG("kb_server_handler: scancode=%02x", scancode);
-}
+    for ( ;; ) {
+        mail* m = mailbox_listen(me->mailbox);
+        if (m) {
+            if (m->type != MAIL_TYPE_IRQ) {
+                mailbox_release_mail(m);
+                continue;
+            }
+            mailbox_release_mail(m);
 
-static void kb_server_isr_thread(void)
-{
-    ULOG("kb_server_isr_thread");
-    while(1) {
-        thread_yield();
+            uint8_t scancode = arch_inb(0x60);
+            KLOG("kb_server_handler: scancode=%02x", scancode);
+            KLOG("uuuuuuuuuuuuuuuuuuser mode irq handddddddddler!!!!!");
+
+            uint8_t key = parse(scancode);
+            if (key)
+                kbuf_add(&kb_device.buf, (char)key);
+
+            /* distribute one key from the buffer to all registered listeners */
+            char keybuf[2] = {0};
+            keybuf[0] = kbuf_pop(&kb_device.buf);
+            if (keybuf[0]) {
+                spinlock_lock(kb_device.lock);
+                list_for_each(pos, &kb_device.listener_list) {
+                    struct kb_listener* lsn = list_entry(pos, struct kb_listener, node);
+                    if (lsn->cb) {
+                        lsn->cb(keybuf, 1);
+                    }
+                }
+                spinlock_unlock(kb_device.lock);
+            }
+        }
     }
 }
 
@@ -305,14 +326,17 @@ void kb_main_thread(void)
     list_init(&kb_device.listener_list);
     kbuf_reset(&kb_device.buf);
 
-    int ret = irq_request(&kb_device.irq, "kbd", KEYBOARD_IRQ_NO, IRQ_ANY_MINOR, kb_server_handler, 0);
-    if (!ret)
-        irq_unmask(kb_device.irq);
+    /* The user-mode IRQ dispatch delivers mails to THIS thread's mailbox
+     * (p->tid == the registering thread), so register and listen in the
+     * same thread.  The callback is not invoked in the user flow. */
+    int ret = irq_request(&kb_device.irq, "kbd", KEYBOARD_IRQ_NO, IRQ_ANY_MINOR, 0, 0);
+    if (ret) {
+        KLOG("kb_server: irq_request failed %d", ret);
+        return;
+    }
+    irq_unmask(kb_device.irq);
 
-
-    thread_create(TASK_PRIV_USER, kb_server_isr_thread);
-
-    while (1);
+    kb_server_loop();
 }
 
 int kb_thread_exit(void)
