@@ -95,7 +95,7 @@ int send_mail(mailbox* mb, mail* m)
     if (!mb || !m)
         return -EINVAL;
 
-    spinlock_lock(mb->sp_lock);
+    while (spinlock_trylock(mb->sp_lock));
     if (!list_empty(&mb->handlers)) {
         /*
          * Deliver to all registered handlers synchronously.

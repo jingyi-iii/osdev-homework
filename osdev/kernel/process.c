@@ -108,6 +108,7 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
 
     list_init(&thread->this_node);
     list_init(&thread->proc_node);
+    list_init(&thread->irqs);
     thread->sp_lock = spinlock_alloc();
     if (!thread->sp_lock) {
         KLOG("failed to alloc spin lock for tcb");
@@ -186,6 +187,12 @@ static void t_delete(int32_t tid)
 
         spinlock_unlock(schedule_lock);
 
+        list_for_each_safe(n, next, &target->irqs) {
+            irq* curr_irq = list_entry(n, irq, thread_node);
+            list_del(n);
+            irq_release(curr_irq);
+        }
+
         spinlock_release(target->sp_lock);
 #ifdef PROCESS_SUPPORT_MAILBOX
         release_mailbox(target->mailbox);
@@ -221,6 +228,12 @@ static void t_delete(int32_t tid)
         arch_task_context_release(&old->parent->vcb, &old->context);
         list_del(&old->this_node);
         list_del(&old->proc_node);
+
+        list_for_each_safe(n, next, &old->irqs) {
+            irq* curr_irq = list_entry(n, irq, thread_node);
+            list_del(n);
+            irq_release(curr_irq);
+        }
 
         spinlock_release(old->sp_lock);
 #ifdef PROCESS_SUPPORT_MAILBOX
@@ -315,7 +328,7 @@ static void t_yield(void)
     spinlock_unlock(schedule_lock);
 }
 
-static int p_create(proc_priv priv, task_entry_t main_thread_entry)
+static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
 {
     static uint32_t pid = 0;
 
@@ -342,6 +355,7 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry)
     proc->pid = pid++;
     proc->state = PS_READY;
     proc->priv = priv;
+    proc->param = param;
 
     /* Allocate a private page directory for user processes.
      * Kernel processes share the kernel's master page directory. */
@@ -584,7 +598,7 @@ static void syscall_isr(void* data)
         t_unblock(config->tid);
         break;
     case PROC_CTRL_CREATE:
-        config->pid = p_create((proc_priv)config->priv, config->entry);
+        config->pid = p_create((proc_priv)config->priv, config->entry, config->param);
         break;
     case PROC_CTRL_EXIT:
         p_exit(config->pid);
@@ -717,12 +731,13 @@ tcb* thread_get_by_tid(int32_t tid)
     return target;
 }
 
-int32_t proc_create(proc_priv priv, task_entry_t entry)
+int32_t proc_create(proc_priv priv, task_entry_t entry, void* param)
 {
     proc_thread_ctrl_config config = {0};
     config.cmd = PROC_CTRL_CREATE;
     config.priv = priv;
     config.entry = entry;
+    config.param = param;
 
     arch_syscall(0, &config);
 

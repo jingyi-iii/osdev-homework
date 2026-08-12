@@ -108,7 +108,7 @@ static void run_test_suite(const char* name, task_entry_t entry, proc_priv priv)
     terminal_write(priv == PROC_PRIV_USER ? " (USER) ---\n\n" : " (KERNEL) ---\n\n");
 
     test_finished_flag = 0;
-    proc_create(priv, entry);
+    proc_create(priv, entry, 0);
 
     /* Wait for the test process to finish.  The test process sets
      * test_finished_flag just before calling proc_exit on itself. */

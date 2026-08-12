@@ -129,7 +129,7 @@ void shm_test_main(void)
     shm_source_size = SHM_TEST_SIZE;
 
     /* 2. spawn the target process (KERNEL: shares the address space) */
-    proc_create(PROC_PRIV_KERNEL, shm_target_main);
+    proc_create(PROC_PRIV_KERNEL, shm_target_main, 0);
     while (!shm_target_ready)
         thread_yield();
 
@@ -279,7 +279,7 @@ void shm_stress_main(void)
     }
     shm_stress_size = SHM_STRESS_PAGES * PAGE_SIZE;
 
-    proc_create(PROC_PRIV_KERNEL, shm_stress_target_main);
+    proc_create(PROC_PRIV_KERNEL, shm_stress_target_main, 0);
     while (!shm_stress_ready)
         thread_yield();
 

@@ -181,18 +181,6 @@ void irqline_handler(uint32_t major, uint32_t minor, void* context)
 {
     (void)minor;
 
-    /* TEMP DEBUG: count enabled handlers on the keyboard line per IRQ */
-    if (major == KEYBOARD_IRQ_NO && irqlines[major]) {
-        int n_enabled = 0;
-        list_for_each(each, &irqlines[major]->irqs) {
-            irq* p = list_entry(each, irq, node);
-            if (p->enabled)
-                n_enabled++;
-        }
-        KLOG("irqline_handler: KB major=%x minor=%d enabled=%d",
-             major, minor, n_enabled);
-    }
-
     if (!irqlines[major])
         return;
 
@@ -238,10 +226,14 @@ static int irq_alloc(uint32_t major, uint32_t minor, int is_user_irq, int tid, c
     p->tid = tid;
     p->owner = 0;
     p->sp_lock = spinlock_alloc();
-    if (!p->sp_lock)
+    if (!p->sp_lock) {
+        *out = 0;
+        kfree(p);
         return E_LIMIT;
+    }
 
     list_init(&p->node);
+    list_init(&p->thread_node);
 
     *out = p;
     return 0;
@@ -294,7 +286,7 @@ static int irq_request_internal(irq **out, const char* name, uint32_t major,
     if (minor == IRQ_ANY_MINOR) {
         if (!irqlines[major]) {
             if (irqline_init(&irqlines[major], major) != 0)
-                return E_IRQ_NOTAVAIL;
+                return E_INTERNAL;
         }
         if (!irqlines[major])
             return E_INTERNAL;
@@ -310,15 +302,13 @@ static int irq_request_internal(irq **out, const char* name, uint32_t major,
     if (ret != 0 || *out == 0)
         return ret;
 
-    /* User IRQ: cache the registering thread's tcb so irqline_handler()
-     * (ISR context, interrupts disabled) can deliver the mail without
-     * taking schedule_lock via thread_get_by_tid(). */
-    if (is_user_irq)
-        (*out)->owner = (void*)thread_get_by_tid(tid);
 
     if (!irqlines[major]) {
-        if (irqline_init(&irqlines[major], major) && irqlines[major])
+        if (irqline_init(&irqlines[major], major) != 0) {
+            irq_release(*out);
+            *out = 0;
             return E_INTERNAL;
+        }
     }
     if (irqlines[major]) {
         list_for_each(each, &irqlines[major]->irqs) {
@@ -334,6 +324,17 @@ static int irq_request_internal(irq **out, const char* name, uint32_t major,
             irq_release(*out);
             *out = 0;
             return E_IRQ_INUSE;
+        }
+
+        /* User IRQ: cache the registering thread's tcb so irqline_handler()
+        * (ISR context, interrupts disabled) can deliver the mail without
+        * taking schedule_lock via thread_get_by_tid(). */
+        if (is_user_irq) {
+            tcb* t = thread_get_by_tid(tid);
+            if (t) {
+                (*out)->owner = (void*)t;
+                list_add(&(*out)->thread_node, &t->irqs);
+            }
         }
 
         irqline_add_irq(irqlines[major], *out);
@@ -380,9 +381,21 @@ void irq_release(irq *p)
         return;
     }
 
+    if (p->major >= IDT_ENTRIES)
+        return;
+
     if (irqlines[p->major]) {
         irqline_remove_irq(irqlines[p->major], p);
+        irqline_mask(irqlines[p->major]);
     }
+
+    if (p->owner) {
+        tcb* t = (tcb*)p->owner;
+        spinlock_lock(t->sp_lock);
+        list_del(&p->thread_node);
+        spinlock_unlock(t->sp_lock);
+    }
+
     /* irq_free() releases the spinlock and kfrees the struct */
     irq_free(p);
 }
@@ -400,6 +413,9 @@ int irq_mask(struct irq* p)
         arch_syscall(IRQ_SYSCALL_MINOR, &data);
         return data.ret;
     }
+
+    if (p->major >= IDT_ENTRIES)
+        return E_INVAL;
 
     spinlock_lock(p->sp_lock);
     p->enabled = 0;
@@ -424,6 +440,9 @@ int irq_unmask(struct irq* p)
         arch_syscall(IRQ_SYSCALL_MINOR, &data);
         return data.ret;
     }
+
+    if (p->major >= IDT_ENTRIES)
+        return E_INVAL;
 
     spinlock_lock(p->sp_lock);
     p->enabled = 1;

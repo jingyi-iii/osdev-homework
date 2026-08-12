@@ -604,7 +604,176 @@ void kb_server_main(void) {
 ## 第 5 步：搬移驱动到用户态
 
 > **基础设施齐全后，逐个将驱动从内核空间迁移到用户态服务进程。**
+### 5.0 复用 bus-driver-device 架构（推荐做法）
 
+> **核心思路：bus-driver-device 模型解决的是"绑定 + 生命周期"（probe/remove），
+> 而不是"驱动代码跑在哪"。** 内核驱动与用户态驱动的差别只在 `probe` 的实现：
+> 内核驱动直接调 `drv->probe(dev)`；用户态驱动则"拉起一个 ring3 的 server 线程 +
+> 把 device 的资源翻译成 capability 授予它"，真正的硬件初始化（`irq_request`、
+> `mailbox_listen`、`sys_inb`）由那个 server 在用户态自己完成。
+>
+> 设备侧**完全不用改**：`platform_devices_init()` 照旧注册 device，`platform_bus` 的
+> `match` 照旧按 type 匹配。只需要给 `struct driver` 加几个字段 + `bus.c` 里分支一下。
+
+#### 5.0.1 扩展 `struct driver`（`include/kernel/driver.h`）
+
+```c
+enum drv_class {
+    DRV_CLASS_KERNEL = 0,   /* probe/remove 是内核函数指针（现状） */
+    DRV_CLASS_USER   = 1,   /* probe 时拉起用户态 server 线程      */
+};
+
+struct driver {
+    const char *type;
+    list_node drv_node;
+    void* ops;
+
+    int           class;      /* DRV_CLASS_KERNEL / DRV_CLASS_USER */
+    task_entry_t  entry;      /* user driver 的 ring3 入口          */
+    int32_t       pid;        /* probe 后记录的 server 进程 pid     */
+    int32_t       tid;        /* 对应线程 tid                      */
+
+    int (*probe)(struct device *dev);   /* kernel driver 用 */
+    int (*remove)(struct device *dev);
+};
+```
+
+#### 5.0.2 `kernel/bus.c` 按 driver class 分支
+
+```c
+static int try_bind_and_probe(struct bus *bus, struct driver *drv, struct device *dev)
+{
+    if (!drv || !dev)
+        return E_INVAL;
+    if (dev->driver != NULL)
+        return E_BUSY;
+    if (!driver_matches(bus, drv, dev))
+        return E_DRV_NOTFOUND;
+
+    dev->driver = drv;
+
+    int ret;
+    if (drv->class == DRV_CLASS_USER)
+        ret = user_driver_start(bus, drv, dev);   /* 拉起 server + 授能力 */
+    else if (!drv->probe)
+        ret = E_DRV_PROBE;
+    else
+        ret = drv->probe(dev);
+
+    if (ret != 0)
+        dev->driver = NULL;
+    return ret;
+}
+
+static int unbind_driver_from_device(struct driver *drv, struct device *dev)
+{
+    if (!drv || !dev || dev->driver != drv)
+        return E_INVAL;
+
+    if (drv->class == DRV_CLASS_USER)
+        user_driver_stop(drv);          /* thread_exit + cap_revoke_all */
+    else if (drv->remove)
+        drv->remove(dev);
+
+    dev->driver = NULL;
+    return 0;
+}
+```
+
+#### 5.0.3 `user_driver_start`：把设备资源翻译成能力
+
+```c
+static int user_driver_start(struct bus *bus, struct driver *drv, struct device *dev)
+{
+    /* 1. 拉起 ring3 server（入口是 drv->entry） */
+    int32_t pid = proc_create(PROC_PRIV_USER, drv->entry, 0);
+    if (pid < 0)
+        return E_DRV_PROBE;
+
+    pcb* proc = get_process_by_pid(pid);
+    if (!proc) {
+        proc_exit(pid);
+        return E_DRV_PROBE;
+    }
+
+    /* 2. 按设备资源逐条授予能力（platform_device 的 dev 是首成员，可直接强转） */
+    struct platform_device* pdev = to_platform_device(dev);
+    for (int i = 0; i < pdev->num_res; i++) {
+        struct platform_resource* res = &pdev->resources[i];
+        switch (res->type) {
+        case PLAT_RES_IRQ:
+            cap_grant(proc, CAP_IRQ_OWN, &res->irq.major);
+            break;
+        case PLAT_RES_IO:
+            cap_grant(proc, CAP_IO_ACCESS, &(cap_io_port){
+                .base = res->io.base, .count = res->io.size });
+            break;
+        case PLAT_RES_MEM:
+            cap_grant(proc, CAP_MEM_MAP, &(cap_mem){
+                .base = res->mem.addr, .size = res->mem.size,
+                .flags = MAP_READ | MAP_WRITE });
+            break;
+        }
+    }
+
+    /* 3. 记录 pid/tid，便于 remove 时回收
+     *    （tid = 进程主线程；目前 proc_create 不直接返回，可遍历 pcb->tcbs
+     *      或给 proc_create 加个 out 参数返回主线程 tid） */
+    drv->pid = pid;
+    drv->tid = /* 主线程 tid */;
+
+    return 0;   /* 绑定成功：真正的硬件初始化由 server 在 ring3 自己完成 */
+}
+
+static void user_driver_stop(struct driver *drv)
+{
+    if (drv->tid > 0)
+        thread_exit(drv->tid);
+    if (drv->pid > 0) {
+        pcb* proc = get_process_by_pid(drv->pid);
+        if (proc)
+            cap_revoke_all(proc);
+    }
+    drv->pid = drv->tid = -1;
+}
+```
+
+#### 5.0.4 注册一个用户态驱动（以 kb_server 为例）
+
+```c
+static struct driver kb_user_driver = {
+    .type   = "keyboard",       /* 与 platform 设备表里的 type 一致 */
+    .class  = DRV_CLASS_USER,
+    .entry  = kb_server_main,   /* ring3 入口 */
+};
+
+int kb_user_driver_init(void)
+{
+    return platform_driver_register(&kb_user_driver);
+}
+```
+
+`kb_server_main()`（用户态）相对现有 `drivers/test/kb_server.c` 的改动：
+
+| 现在（宏内核写法） | 微内核写法 |
+|---|---|
+| `arch_inb(0x60)` 直接读端口 | `sys_inb(0x60)`（走 syscall / platform_bus ops） |
+| 全局 `static struct kb_device kb_device` | 删掉内核全局态，状态放 server 自己的内存 |
+| `kb_register_callback2` 直接操作内核链表 | 变成 IPC 请求 → kb server 的 mailbox 处理 |
+| `KLOG(...)` | 通过 log server / 共享 buffer |
+
+**不变的部分**：IRQ → mailbox 的投递链路（`irq_request` → `mailbox_listen`）完全复用，
+这正是第 4 步已经做好的转发机制。
+
+#### 5.0.5 与前面步骤的衔接
+
+- 依赖第 1 步的 **capability**（`cap_grant` / `cap_revoke_all`）和第 4 步的 **IRQ→mailbox 转发**。
+- 依赖 `proc_create(PROC_PRIV_USER, entry, 0)` 能拉起独立地址空间的用户进程（第 6 步的 demo 也用同一机制）。
+- 粒度可自由选择：一个 server 进程可以挂多个 device（`drv->entry` 内部自己 `irq_request`
+  多个 IRQ），也可以一个 device 一个进程。
+- 若不想让内核"拉起"进程，也可以反过来：server 启动后通过新 syscall
+  `sys_driver_register(type, mailbox_id)` 把自己注册为某 type 的 user driver，
+  `try_bind_and_probe` 找到已注册的 server 时只做绑定 + 授能力、不 spawn 进程。
 ### 5.1 目录结构调整
 
 ```

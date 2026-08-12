@@ -22,6 +22,7 @@ typedef struct irq {
     void* owner;        /* registering thread's tcb (user IRQ only) */
     spinlock* sp_lock;
     list_node node;
+    list_node thread_node;  /* bind with tcb->irqs */
     irq_handler_fn handler;
 } irq;
 

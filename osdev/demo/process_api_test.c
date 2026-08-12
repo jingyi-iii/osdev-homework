@@ -135,7 +135,7 @@ void process_api_test_main(void)
         check_flush();
         terminal_write("\n");
         terminal_write("[TEST 2] proc_create() — spawning child process...\n");
-        proc_create(PROC_PRIV_KERNEL, child_proc_main);
+        proc_create(PROC_PRIV_KERNEL, child_proc_main, 0);
 
         /* Wait for the child to run and write its PID */
         while (g_child_pid == -1) {

@@ -77,11 +77,11 @@ void game_proc_main_thread(void)
         kb_unregister_callback(menu_kb_handler);
 
         if (menu_choice == 1) {
-            proc_create(PROC_PRIV_KERNEL, snake_thread);
+            proc_create(PROC_PRIV_KERNEL, snake_thread, 0);
         } else if (menu_choice == 2) {
-            proc_create(PROC_PRIV_KERNEL, airplane_thread);
+            proc_create(PROC_PRIV_KERNEL, airplane_thread, 0);
         } else {
-            proc_create(PROC_PRIV_KERNEL, breakout_thread);
+            proc_create(PROC_PRIV_KERNEL, breakout_thread, 0);
         }
 
         /* Wait for the game to quit (user presses Q),

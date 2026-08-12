@@ -101,6 +101,6 @@ void kernel_start(void)
     kb_init();
     terminal_register_cmd("crash", crash_cmd);
     kernel_do_initcalls();
-    proc_create(PROC_PRIV_KERNEL, init_thread);
+    proc_create(PROC_PRIV_KERNEL, init_thread, 0);
 }
 

@@ -25,6 +25,7 @@ typedef struct proc_thread_ctrl_config {
     int32_t tid;    // out param for create, in param for delete, block and unblock
     task_priv priv;
     task_entry_t entry;
+    void* param;
 } proc_thread_ctrl_config;
 
 typedef enum proc_priv {
@@ -46,6 +47,7 @@ typedef struct pcb {
     proc_priv           priv;
     list_node           this_node;
     list_node           tcbs;
+    void*               param;
     spinlock*           sp_lock;
 
     vmm_control_block   vcb;            /* address space context for this process */
@@ -64,6 +66,7 @@ typedef struct tcb {
     list_node           proc_node;      /* node in parent->tcbs list */
     spinlock*           sp_lock;
     struct pcb*         parent;
+    list_node           irqs;
 #ifdef PROCESS_SUPPORT_MAILBOX
     struct mailbox*     mailbox;
 #endif
@@ -79,7 +82,7 @@ void    thread_unblock      (int32_t tid);
 int     thread_get_tid      (void);
 tcb*    thread_get_by_tid   (int32_t tid);
 
-int32_t proc_create         (proc_priv priv, task_entry_t entry);
+int32_t proc_create         (proc_priv priv, task_entry_t entry, void* param);
 void    proc_exit           (int32_t pid);
 int     proc_block          (int32_t pid);
 int     proc_unblock        (int32_t pid);
