@@ -79,7 +79,7 @@ static void switch_address_space(tcb* old, tcb* next)
     vmm_switch(&next->parent->vcb);
 }
 
-static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
+static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry, void* param)
 {
     tcb* thread = 0;
     static uint32_t tid = 0;
@@ -118,6 +118,7 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry)
     }
 
     thread->parent = parent;
+    thread->param = param;
     thread->tid = tid++;
     thread->wake_pending = 0;
 
@@ -331,6 +332,7 @@ static void t_yield(void)
 static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
 {
     static uint32_t pid = 0;
+    int ret = 0;
 
     struct pcb* proc = (struct pcb*)kmalloc(sizeof(struct pcb));
     if (!proc) {
@@ -374,7 +376,9 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
     list_add(&proc->this_node, &proc_head);
     spinlock_unlock(schedule_lock);
 
-    return t_create(proc, (task_priv)priv, main_thread_entry);
+    ret = t_create(proc, (task_priv)priv, main_thread_entry, proc->param);
+    if (ret >= 0)
+        return proc->pid;
 }
 
 static void p_exit(int32_t pid)
@@ -583,7 +587,7 @@ static void syscall_isr(void* data)
     switch (config->cmd) {
     case THREAD_CTRL_CREATE:
         if (cur)
-            config->tid = t_create(cur->parent, config->priv, config->entry);
+            config->tid = t_create(cur->parent, config->priv, config->entry, config->param);
         break;
     case THREAD_CTRL_DELETE:
         t_delete(config->tid);
@@ -686,12 +690,13 @@ void thread_unblock(int32_t tid)
     arch_syscall(0, &config);
 }
 
-int32_t thread_create(task_priv priv, task_entry_t entry)
+int32_t thread_create(task_priv priv, task_entry_t entry, void* param)
 {
     proc_thread_ctrl_config config = {0};
     config.cmd = THREAD_CTRL_CREATE;
     config.priv = priv;
     config.entry = entry;
+    config.param = param;
 
     arch_syscall(0, &config);
 
@@ -711,6 +716,12 @@ int thread_get_tid(void)
 {
     tcb* cur = thread_run;
     return cur ? cur->tid : -1;
+}
+
+void* thread_get_param(void)
+{
+    tcb* cur = thread_run;
+    return cur ? cur->param : 0;
 }
 
 tcb* thread_get_by_tid(int32_t tid)

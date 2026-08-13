@@ -16,6 +16,8 @@ struct bus {
     spinlock* splock;
 
     int (*match)(struct driver* drv, struct device* dev);
+    int (*probe)(struct driver* drv, struct device* dev);
+    int (*remove)(struct driver* drv, struct device* dev);
 };
 
 int bus_register_driver(struct bus *bus, struct driver *drv);

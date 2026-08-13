@@ -197,7 +197,7 @@ void sched_mix_test_main(void)
 
         /* Create 2 kernel-mode threads */
         for (int i = 0; i < 2; i++) {
-            int tid = thread_create(TASK_PRIV_KERNEL, mix_helper_entry);
+            int tid = thread_create(TASK_PRIV_KERNEL, mix_helper_entry, 0);
             if (tid >= 0) {
                 g_helper_tids[g_num_helpers] = tid;
                 g_num_helpers++;
@@ -210,7 +210,7 @@ void sched_mix_test_main(void)
 
         /* Create 2 user-mode threads */
         for (int i = 0; i < 2; i++) {
-            int tid = thread_create(TASK_PRIV_USER, mix_helper_entry);
+            int tid = thread_create(TASK_PRIV_USER, mix_helper_entry, 0);
             if (tid >= 0) {
                 g_helper_tids[g_num_helpers] = tid;
                 g_num_helpers++;

@@ -66,6 +66,7 @@ typedef struct tcb {
     list_node           proc_node;      /* node in parent->tcbs list */
     spinlock*           sp_lock;
     struct pcb*         parent;
+    void*               param;          /* per-thread parameter (entry reads via thread_get_param) */
     list_node           irqs;
 #ifdef PROCESS_SUPPORT_MAILBOX
     struct mailbox*     mailbox;
@@ -74,12 +75,13 @@ typedef struct tcb {
     wait_queue*         waiting_on;
 } tcb;
 
-int32_t thread_create       (task_priv priv, task_entry_t entry);
+int32_t thread_create       (task_priv priv, task_entry_t entry, void* param);
 void    thread_exit         (int32_t tid);
 void    thread_yield        (void);
 void    thread_block        (int32_t tid);
 void    thread_unblock      (int32_t tid);
 int     thread_get_tid      (void);
+void*   thread_get_param    (void);
 tcb*    thread_get_by_tid   (int32_t tid);
 
 int32_t proc_create         (proc_priv priv, task_entry_t entry, void* param);

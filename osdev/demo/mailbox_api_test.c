@@ -216,7 +216,7 @@ void mailbox_api_test_main(void)
 
         /* Create a listener thread but block it immediately so it
          * does NOT enter mailbox_listen before the mail is queued. */
-        int listener_tid = thread_create(TASK_PRIV_KERNEL, listener_thread_entry);
+        int listener_tid = thread_create(TASK_PRIV_KERNEL, listener_thread_entry, 0);
         if (listener_tid < 0) {
             term_fail("thread_create for listener");
             goto skip_test3;
@@ -281,7 +281,7 @@ void mailbox_api_test_main(void)
         reset_handler_state();
 
         /* Create a helper thread whose mailbox we'll register a handler on */
-        int host_tid = thread_create(TASK_PRIV_KERNEL, handler_host_thread);
+        int host_tid = thread_create(TASK_PRIV_KERNEL, handler_host_thread, 0);
         if (host_tid < 0) {
             term_fail("thread_create for handler host");
             goto skip_test4;
@@ -350,7 +350,7 @@ void mailbox_api_test_main(void)
         terminal_write("[TEST 5] Multiple handlers on one mailbox\n");
         reset_handler_state();
 
-        int host_tid = thread_create(TASK_PRIV_KERNEL, handler_host_thread);
+        int host_tid = thread_create(TASK_PRIV_KERNEL, handler_host_thread, 0);
         if (host_tid < 0) {
             term_fail("thread_create for handler host");
             goto skip_test5;
@@ -407,7 +407,7 @@ void mailbox_api_test_main(void)
         terminal_write("[TEST 6] Unregister handler\n");
         reset_handler_state();
 
-        int host_tid = thread_create(TASK_PRIV_KERNEL, handler_host_thread);
+        int host_tid = thread_create(TASK_PRIV_KERNEL, handler_host_thread, 0);
         if (host_tid < 0) {
             term_fail("thread_create");
             goto skip_test6;
@@ -468,8 +468,8 @@ void mailbox_api_test_main(void)
         reset_handler_state();
 
         /* Create two host threads, register handlers on both */
-        int host1_tid = thread_create(TASK_PRIV_KERNEL, handler_host_thread);
-        int host2_tid = thread_create(TASK_PRIV_KERNEL, handler_host_thread);
+        int host1_tid = thread_create(TASK_PRIV_KERNEL, handler_host_thread, 0);
+        int host2_tid = thread_create(TASK_PRIV_KERNEL, handler_host_thread, 0);
         if (host1_tid < 0 || host2_tid < 0) {
             term_fail("thread_create for broadcast hosts");
             goto skip_test7;

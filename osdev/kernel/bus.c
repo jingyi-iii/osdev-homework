@@ -1,5 +1,8 @@
 #include "kernel/bus.h"
 #include "lib/string.h"
+#include "kernel/process.h"
+#include "mm/heap.h"
+#include "drivers/log_driver.h"
 
 /* Returns non-zero if drv matches dev for binding attempt. */
 static int driver_matches(struct bus *bus, struct driver *drv, struct device *dev)
@@ -27,29 +30,21 @@ static int try_bind_and_probe(struct bus *bus, struct driver *drv, struct device
     if (!driver_matches(bus, drv, dev))
         return E_DRV_NOTFOUND;
 
-    if (!drv->probe)
-        return E_DRV_PROBE;
-
-    dev->driver = drv;
-    int ret = drv->probe(dev);
-    if (ret != 0) {
-        dev->driver = NULL;
-        return E_DRV_PROBE;
-    }
-
-    return 0;
+    int ret = bus->probe(drv, dev);
+    if (!ret)
+        dev->driver = drv;
+    return ret;
 }
 
 static int unbind_driver_from_device(struct driver *drv, struct device *dev)
 {
-    if (!drv || !dev || dev->driver != drv)
+    if (!drv || !dev || !dev->bus || dev->driver != drv)
         return E_INVAL;
 
-    if (drv->remove)
-        drv->remove(dev);
-
-    dev->driver = NULL;
-    return 0;
+    int ret = dev->bus->remove(drv, dev);
+    if (!ret)
+        dev->driver = NULL;
+    return ret;
 }
 
 int bus_register_driver(struct bus *bus, struct driver *drv)

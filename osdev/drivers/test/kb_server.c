@@ -318,7 +318,7 @@ static void kb_server_loop(void)
     }
 }
 
-void kb_main_thread(void)
+static int kb_start(struct device* dev)
 {
     ULOG("kb_main_thread");
 
@@ -332,11 +332,12 @@ void kb_main_thread(void)
     int ret = irq_request(&kb_device.irq, "kbd", KEYBOARD_IRQ_NO, IRQ_ANY_MINOR, 0, 0);
     if (ret) {
         KLOG("kb_server: irq_request failed %d", ret);
-        return;
+        return ret;
     }
     irq_unmask(kb_device.irq);
 
     kb_server_loop();
+    return 0;
 }
 
 int kb_thread_exit(void)
@@ -398,4 +399,16 @@ void kb_unregister_callback2(kb_callback_fn cb)
         }
     }
     spinlock_unlock(kb_device.lock);
+}
+
+struct driver kb_server = {
+    .class = DRIVER_CLASS_USER,
+    .type = "keyboard2",
+    .start = kb_start,
+    .stop = 0,
+};
+
+void kb_server_init(void)
+{
+    platform_driver_register(&kb_server);
 }

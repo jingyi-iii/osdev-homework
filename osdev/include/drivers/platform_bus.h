@@ -53,6 +53,11 @@ struct platform_bus_ops {
     int (*out_port32)(uint16_t port, uint32_t data);
 };
 
+typedef struct user_driver_param {
+    struct driver* drv;
+    struct device* dev;
+} user_driver_param;
+
 /* --- platform device helpers --- */
 struct platform_resource* platform_device_get_resource(
     struct platform_device* dev, enum platform_resource_type type, int index);

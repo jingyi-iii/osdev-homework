@@ -135,7 +135,7 @@ void thread_api_test_main(void)
         check_flush();
         terminal_write("\n");
         terminal_write("[TEST 3] thread_create() — spawning helper...\n");
-        helper_tid = thread_create(TASK_PRIV_KERNEL, helper_thread_entry);
+        helper_tid = thread_create(TASK_PRIV_KERNEL, helper_thread_entry, 0);
         if (helper_tid >= 0) {
             term_write_int("[TEST 3] Helper TID = ", helper_tid);
             term_pass("thread_create");

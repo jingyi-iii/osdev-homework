@@ -1,6 +1,9 @@
 #include "drivers/platform_devices.h"
+#include "drivers/platform_bus.h"
 #include "mm/heap.h"
 #include "lib/string.h"
+#include "kernel/capability.h"
+#include "kernel/process.h"
 
 /************************************************************************/
 /*                Platform Device Descriptor Table                      */
@@ -27,6 +30,14 @@ static const struct platform_device_desc device_table[] = {
     {
         .name = "keyboard",
         .type = "keyboard",
+        .num_res = 1,
+        .resources = {
+            { .type = PLAT_RES_IRQ, .irq = { .major = 0x21, .minor = 0 } },
+        },
+    },
+    {
+        .name = "keyboard2",
+        .type = "keyboard2",
         .num_res = 1,
         .resources = {
             { .type = PLAT_RES_IRQ, .irq = { .major = 0x21, .minor = 0 } },
@@ -88,4 +99,35 @@ void platform_devices_init(void)
 
         platform_device_register(&pdev->dev);
     }
+}
+
+#define PLATFORM_DEV_OF(ptr, type, member) \
+    ((type *)((char *)(ptr)-(uintptr_t)(&((type *)0)->member)))
+
+struct platform_device* get_platform_device(struct device* pdev)
+{
+    return PLATFORM_DEV_OF(pdev, struct platform_device, dev);
+}
+
+int platform_device_grant_capabilities(struct platform_device* dev)
+{
+    if (!dev)
+        return E_INVAL;
+
+    for (int i = 0; i < dev->num_res; i++) {
+        struct platform_resource* res = &dev->resources[i];
+        if (!res || !dev->dev.dev_data)
+            continue;
+
+        switch (res->type) {
+        case PLAT_RES_IRQ:
+            pcb* proc = get_process_by_pid(*((int*)dev->dev.dev_data));
+            cap_grant(proc, CAP_IRQ_OWN, &res->irq.major);
+            break;
+        default:
+            break;
+        }
+    }
+
+    return 0;
 }
