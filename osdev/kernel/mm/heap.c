@@ -31,12 +31,12 @@ static void kheap_init(void)
         return;
 
     spinlock_lock(pool.lock_dev);
-    pool.avail_size = HEAP_TOTAL_SIZE;
+    pool.avail_size = HEAP_TOTAL_SIZE - sizeof(heapchunk);
     pool.init = 1;
     pool.head_node.prev = &pool.head_node;
     pool.head_node.next = &pool.head_node;
 
-    chunk->size = HEAP_TOTAL_SIZE - sizeof(chunk);
+    chunk->size = HEAP_TOTAL_SIZE - sizeof(heapchunk);
     chunk->used = 0;
     list_add(&chunk->this_node, &pool.head_node);
     spinlock_unlock(pool.lock_dev);

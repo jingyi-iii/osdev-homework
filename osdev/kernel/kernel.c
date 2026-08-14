@@ -61,7 +61,6 @@ void crash_cmd(const char *args)
         __asm__ volatile ("ud2");
         terminal_write_color("Triggering #UD (Invalid Opcode)...\n", 0x0E);
     } else if (strcmp(args, "pf") == 0) {
-        __asm__ volatile ("ud2");
         terminal_write_color("Triggering #PF (Page Fault) via NULL deref...\n", 0x0E);
         *(volatile int *)0xDEAD0000 = 0;
     } else if (strcmp(args, "gp") == 0) {

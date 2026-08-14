@@ -3,12 +3,15 @@
 #include "kernel/errno.h"
 #include "mm/heap.h"
 
+/* The macros below run with proc->cap_lock held; failures set `ret` and
+ * jump to the `unlock:` label so the lock is always released exactly once. */
 #define CASE_CAP_CHECK(id, member, check_func) \
     case id: \
         if (args && check_func(&cap->member, (const typeof(cap->member)*)args) == 0) \
-            return 0; \
+            ret = 0; \
         else \
-            break;
+            ret = E_PERM; \
+        break;
 
 #define CASE_CAP_GRANT(id, member) \
     case id: \
@@ -27,18 +30,19 @@
 
 #define CASE_CAP_GRANT_CHECK(id, check_func) \
     case id: \
-        if (check_func((const void*)args) == 0) { \
-            break; \
-        } else { \
-            return E_INVAL; \
-        }
+        if (check_func((const void*)args) != 0) { \
+            ret = E_INVAL; \
+            goto unlock; \
+        } \
+        break;
 
 #define CASE_CAP_IS_DUP(id, member, cmp_func) \
     case id: \
         list_for_each(node, &proc->capabilities) { \
             capability* existing_cap = list_entry(node, capability, this_node); \
             if (existing_cap->type == id && cmp_func(&existing_cap->member, args)) { \
-                return E_EXISTS; \
+                ret = E_EXISTS; \
+                goto unlock; \
             } \
         } \
         break;
@@ -176,8 +180,12 @@ static inline int cap_permission_grant_check(const int* perm)
 
 int cap_check(struct pcb* proc, cap_type type, const void* args)
 {
-    if (!proc)
+    int ret = E_PERM;
+
+    if (!proc || !proc->cap_lock)
         return E_INVAL;
+
+    spinlock_lock(proc->cap_lock);
 
     list_for_each(node, &proc->capabilities) {
         capability* cap = list_entry(node, capability, this_node);
@@ -192,16 +200,26 @@ int cap_check(struct pcb* proc, cap_type type, const void* args)
         CASE_CAP_CHECK(CAP_PROC_CREATE,   issue_proc_create,   cap_permission_check)
         CASE_CAP_CHECK(CAP_THREAD_CREATE, issue_thread_create, cap_permission_check)
         }
+
+        if (ret == 0)
+            break;
     }
 
-    return E_PERM;
+    spinlock_unlock(proc->cap_lock);
+    return ret;
 }
 
 int cap_grant(struct pcb* proc, cap_type type, const void* args)
 {
-    if (!proc || !args)
+    capability* cap = 0;
+    int ret = 0;
+
+    if (!proc || !args || !proc->cap_lock)
         return E_INVAL;
 
+    spinlock_lock(proc->cap_lock);
+
+    /* 1. Validate the requested capability before doing anything. */
     switch (type) {
     CASE_CAP_GRANT_CHECK(CAP_IRQ_OWN,       cap_irq_grant_check)
     CASE_CAP_GRANT_CHECK(CAP_MEM_MAP,       cap_mem_grant_check)
@@ -209,8 +227,12 @@ int cap_grant(struct pcb* proc, cap_type type, const void* args)
     CASE_CAP_GRANT_CHECK(CAP_IPC,           cap_permission_grant_check)
     CASE_CAP_GRANT_CHECK(CAP_PROC_CREATE,   cap_permission_grant_check)
     CASE_CAP_GRANT_CHECK(CAP_THREAD_CREATE, cap_permission_grant_check)
+    default:
+        ret = E_INVAL;
+        goto unlock;
     }
 
+    /* 2. Refuse duplicates. */
     switch (type) {
     CASE_CAP_IS_DUP(CAP_IRQ_OWN,       irq,                 cap_irq_cmp)
     CASE_CAP_IS_DUP(CAP_MEM_MAP,       mem,                 cap_mem_cmp)
@@ -218,12 +240,18 @@ int cap_grant(struct pcb* proc, cap_type type, const void* args)
     CASE_CAP_IS_DUP(CAP_IPC,           issue_ipc,           cap_permission_cmp)
     CASE_CAP_IS_DUP(CAP_PROC_CREATE,   issue_proc_create,   cap_permission_cmp)
     CASE_CAP_IS_DUP(CAP_THREAD_CREATE, issue_thread_create, cap_permission_cmp)
+    default:
+        ret = E_INVAL;
+        goto unlock;
     }
 
-    capability *cap = kmalloc(sizeof(capability));
-    if (!cap)
-        return E_NOMEM;
+    cap = kmalloc(sizeof(capability));
+    if (!cap) {
+        ret = E_NOMEM;
+        goto unlock;
+    }
 
+    /* 3. Insert the new capability. */
     switch (type) {
     CASE_CAP_GRANT(CAP_IRQ_OWN,       irq)
     CASE_CAP_GRANT(CAP_MEM_MAP,       mem)
@@ -233,16 +261,21 @@ int cap_grant(struct pcb* proc, cap_type type, const void* args)
     CASE_CAP_GRANT(CAP_THREAD_CREATE, issue_thread_create)
     default:
         kfree(cap);
-        return E_INVAL;
+        ret = E_INVAL;
+        goto unlock;
     }
 
-    return 0;
+unlock:
+    spinlock_unlock(proc->cap_lock);
+    return ret;
 }
 
 int cap_revoke(struct pcb* proc, cap_type type, const void* args)
 {
-    if (!proc || !args)
+    if (!proc || !args || !proc->cap_lock)
         return E_INVAL;
+
+    spinlock_lock(proc->cap_lock);
 
     list_for_each_safe(node, n, &proc->capabilities) {
         capability* cap = list_entry(node, capability, this_node);
@@ -259,17 +292,22 @@ int cap_revoke(struct pcb* proc, cap_type type, const void* args)
         }
     }
 
+    spinlock_unlock(proc->cap_lock);
     return 0;
 }
 
 void cap_revoke_all(struct pcb* proc)
 {
-    if (!proc)
+    if (!proc || !proc->cap_lock)
         return;
+
+    spinlock_lock(proc->cap_lock);
 
     list_for_each_safe(node, n, &proc->capabilities) {
         capability* cap = list_entry(node, capability, this_node);
         list_del(node);
         kfree(cap);
     }
+
+    spinlock_unlock(proc->cap_lock);
 }

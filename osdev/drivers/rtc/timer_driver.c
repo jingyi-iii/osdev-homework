@@ -64,11 +64,15 @@ static void timer_update_rtc_time(struct timer_device* dev)
 
     /* Check if RTC is in BCD or binary mode */
     uint8_t reg_b = timer_read_reg(dev, RTC_REG_B);
+    int is_pm = 0;
 
     if (reg_b & RTC_BCD) {
         /* Binary mode */
         dev->cached_time.second  = last_second & 0x7F;
         dev->cached_time.minute  = last_minute & 0x7F;
+        /* In 12-hour mode bit 7 of the hours register is the PM flag;
+         * capture it before masking the hour value. */
+        is_pm = (last_hour & 0x80) ? 1 : 0;
         dev->cached_time.hour    = last_hour & 0x3F;
         dev->cached_time.day     = last_day & 0x3F;
         dev->cached_time.month   = last_month & 0x1F;
@@ -78,6 +82,7 @@ static void timer_update_rtc_time(struct timer_device* dev)
         /* BCD mode - convert to binary */
         dev->cached_time.second  = bcd_to_bin(last_second & 0x7F);
         dev->cached_time.minute  = bcd_to_bin(last_minute & 0x7F);
+        is_pm = (last_hour & 0x80) ? 1 : 0;
         dev->cached_time.hour    = bcd_to_bin(last_hour & 0x3F);
         dev->cached_time.day     = bcd_to_bin(last_day & 0x3F);
         dev->cached_time.month   = bcd_to_bin(last_month & 0x1F);
@@ -85,16 +90,25 @@ static void timer_update_rtc_time(struct timer_device* dev)
         dev->cached_time.century = bcd_to_bin(last_century & 0xFF);
     }
 
-    /* Handle 12-hour format if needed */
-    if (!(reg_b & RTC_24HOUR) && (dev->cached_time.hour & 0x80)) {
-        /* PM - add 12 hours (except for 12 PM which stays 12) */
-        if ((dev->cached_time.hour & 0x7F) != 12) {
-            dev->cached_time.hour = (dev->cached_time.hour & 0x7F) + 12;
+    /* Convert 12-hour format to 24-hour when the RTC is in 12-hour mode.
+     * 12 PM stays 12, 12 AM becomes 0, other PM hours get +12. */
+    if (!(reg_b & RTC_24HOUR)) {
+        if (is_pm) {
+            if (dev->cached_time.hour != 12)
+                dev->cached_time.hour += 12;
+        } else {
+            if (dev->cached_time.hour == 12)
+                dev->cached_time.hour = 0;
         }
     }
 
-    /* Beijing time: +8 hours */
+    /* Beijing time: +8 hours (UTC+8), wrapping past midnight.
+     * Note: month/year rollover is not handled here. */
     dev->cached_time.hour += 8;
+    if (dev->cached_time.hour >= 24) {
+        dev->cached_time.hour -= 24;
+        dev->cached_time.day++;
+    }
 }
 
 void timer_get_time(rtc_time_t* time)

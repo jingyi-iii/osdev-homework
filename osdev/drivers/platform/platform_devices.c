@@ -1,6 +1,7 @@
 #include "drivers/platform_devices.h"
 #include "drivers/platform_bus.h"
 #include "mm/heap.h"
+#include "mm/paging.h"
 #include "lib/string.h"
 #include "kernel/capability.h"
 #include "kernel/process.h"
@@ -119,10 +120,23 @@ int platform_device_grant_capabilities(struct platform_device* dev)
         if (!res || !dev->dev.dev_data)
             continue;
 
+        pcb* proc = get_process_by_pid(*((int*)dev->dev.dev_data));
+        if (!proc)
+            continue;
+
+        /* Translate each hardware resource into a capability for the
+         * user-mode driver process. */
         switch (res->type) {
         case PLAT_RES_IRQ:
-            pcb* proc = get_process_by_pid(*((int*)dev->dev.dev_data));
             cap_grant(proc, CAP_IRQ_OWN, &res->irq.major);
+            break;
+        case PLAT_RES_IO:
+            cap_io_port iop = { res->io.base, res->io.size };
+            cap_grant(proc, CAP_IO_ACCESS, &iop);
+            break;
+        case PLAT_RES_MEM:
+            cap_mem mem = { res->mem.addr, res->mem.size, PTE_USER_PAGE };
+            cap_grant(proc, CAP_MEM_MAP, &mem);
             break;
         default:
             break;

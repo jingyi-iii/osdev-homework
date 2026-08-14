@@ -363,6 +363,7 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
      * Kernel processes share the kernel's master page directory. */
     if (vmm_create(&proc->vcb, priv == PROC_PRIV_USER)) {
         KLOG("failed to create address space for pid %d", proc->pid);
+        spinlock_release(proc->cap_lock);
         spinlock_release(proc->sp_lock);
         kfree(proc);
         return E_NOMEM;
@@ -379,6 +380,18 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
     ret = t_create(proc, (task_priv)priv, main_thread_entry, proc->param);
     if (ret >= 0)
         return proc->pid;
+
+    /* t_create failed: nothing was linked into proc->tcbs, so just roll
+     * back the PCB (proc_head entry, address space, locks, memory). */
+    spinlock_lock(schedule_lock);
+    list_del(&proc->this_node);
+    spinlock_unlock(schedule_lock);
+    vmm_destroy(&proc->vcb);
+    spinlock_release(proc->cap_lock);
+    spinlock_release(proc->sp_lock);
+    kfree(proc);
+
+    return ret;
 }
 
 static void p_exit(int32_t pid)
@@ -455,7 +468,9 @@ static void p_exit(int32_t pid)
     spinlock_unlock(schedule_lock);
 
     if (found) {
+        cap_revoke_all(found);            /* free the process's capabilities */
         vmm_destroy(&found->vcb);
+        spinlock_release(found->cap_lock);
         spinlock_release(found->sp_lock);
         kfree(found);
     }
