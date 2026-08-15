@@ -2,7 +2,7 @@
 #include "lib/string.h"
 #include "kernel/process.h"
 #include "mm/heap.h"
-#include "drivers/log_driver.h"
+#include "drivers/log_server.h"
 
 /* Returns non-zero if drv matches dev for binding attempt. */
 static int driver_matches(struct bus *bus, struct driver *drv, struct device *dev)

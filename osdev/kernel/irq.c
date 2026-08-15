@@ -2,7 +2,7 @@
 #include "kernel/irq.h"
 #include "lib/string.h"
 #include "lib/module.h"
-#include "drivers/log_driver.h"
+#include "drivers/log_server.h"
 #include "mm/heap.h"
 #include "kernel/capability.h"
 #include "kernel/process.h"
@@ -275,7 +275,7 @@ static int irq_request_internal(irq **out, const char* name, uint32_t major,
     pcb* proc = get_current_process();
     if (proc && proc->priv != PROC_PRIV_KERNEL) {
         if (cap_check(proc, CAP_IRQ_OWN, &major) != 0) {
-            KLOG("no irq permission for pid %d", proc->pid);
+            LOG("no irq permission for pid %d", proc->pid);
             return E_PERM;
         }
     }
@@ -293,7 +293,7 @@ static int irq_request_internal(irq **out, const char* name, uint32_t major,
 
         minor = irqline_find_free_minor(irqlines[major]);
         if (minor == IRQ_ANY_MINOR) {
-            KLOG("%s: no free minor on major %d", __FUNCTION__, major);
+            LOG("%s: no free minor on major %d", __FUNCTION__, major);
             return E_IRQ_NOTAVAIL;
         }
     }
@@ -320,7 +320,7 @@ static int irq_request_internal(irq **out, const char* name, uint32_t major,
         }
 
         if (minor_existed) {
-            KLOG("%s: initialization failed - minor %d already exists", __FUNCTION__, minor);
+            LOG("%s: initialization failed - minor %d already exists", __FUNCTION__, minor);
             irq_release(*out);
             *out = 0;
             return E_IRQ_INUSE;

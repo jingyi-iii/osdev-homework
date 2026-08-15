@@ -1,12 +1,12 @@
 #include "sync/wait_queue.h"
 #include "kernel/process.h"
-#include "drivers/log_driver.h"
+#include "drivers/log_server.h"
 
 int wait_queue_init(wait_queue *wq)
 {
     wq->sp_lock = spinlock_alloc();
     if (!wq->sp_lock) {
-        KLOG("failed to alloc spin lock for wait queue\n");
+        LOG("failed to alloc spin lock for wait queue\n");
         return E_LIMIT;
     }
     list_init(&wq->waiters);

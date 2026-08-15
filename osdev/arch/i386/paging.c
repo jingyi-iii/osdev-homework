@@ -18,7 +18,7 @@
 #include "mm/pmm.h"
 #include "lib/string.h"
 #include "sync/spinlock.h"
-#include "drivers/log_driver.h"
+#include "drivers/log_server.h"
 
 /* ------------------------------------------------------------------ */
 /* Extern: linker-defined PMM bitmap section                          */
@@ -73,7 +73,7 @@ void* arch_paging_pool_alloc(void)
     }
     spinlock_unlock(paging_pool_lock);
 
-    KLOG("arch_paging_pool_alloc: paging-structures pool exhausted");
+    LOG("arch_paging_pool_alloc: paging-structures pool exhausted");
     return 0;
 }
 
@@ -120,17 +120,17 @@ void arch_map_4mb(void* cr3, void* va, void* pa, uint32_t flags)
     size_t pde_index = PD_INDEX(va);
 
     if (pde_index >= 1024) {
-        KLOG("arch_map_4mb: virtual address out of range");
+        LOG("arch_map_4mb: virtual address out of range");
         return;
     }
 
     if (!pdes) {
-        KLOG("arch_map_4mb: invalid cr3");
+        LOG("arch_map_4mb: invalid cr3");
         return;
     }
 
     if (!IS_4MB_ALIGN(va) || !IS_4MB_ALIGN(pa)) {
-        KLOG("arch_map_4mb: addresses must be 4MB-aligned");
+        LOG("arch_map_4mb: addresses must be 4MB-aligned");
         return;
     }
 
@@ -155,12 +155,12 @@ void arch_unmap_4mb(void* cr3, void* va)
     size_t pde_index = PD_INDEX(va);
 
     if (pde_index >= 1024) {
-        KLOG("arch_unmap_4mb: virtual address out of range");
+        LOG("arch_unmap_4mb: virtual address out of range");
         return;
     }
 
     if (!pdes) {
-        KLOG("arch_map_4mb: invalid cr3");
+        LOG("arch_map_4mb: invalid cr3");
         return;
     }
 
@@ -186,18 +186,18 @@ static inline int split_4mb_pde(pde_t* pde, uint32_t user_accessible)
     pte_t* ptl = 0;
 
     if (!pde) {
-        KLOG("split_4mb_pde: invalid pde");
+        LOG("split_4mb_pde: invalid pde");
         return -1;
     }
 
     if (!pde->present || !pde->page_size) {
-        KLOG("split_4mb_pde: PDE is not a 4MB page");
+        LOG("split_4mb_pde: PDE is not a 4MB page");
         return -1;
     }
 
     ptl = (pte_t*)arch_paging_pool_alloc();
     if (!ptl) {
-        KLOG("split_4mb_pde: failed to allocate page table");
+        LOG("split_4mb_pde: failed to allocate page table");
         return E_NOMEM;
     }
 
@@ -235,12 +235,12 @@ int arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
     size_t pte_index = PT_INDEX(va);
 
     if (pde_index >= 1024 || pte_index >= 1024) {
-        KLOG("arch_map_4kb: virtual address out of range");
+        LOG("arch_map_4kb: virtual address out of range");
         return E_INVAL;
     }
 
     if (!pdes) {
-        KLOG("arch_map_4kb: invalid cr3");
+        LOG("arch_map_4kb: invalid cr3");
         return E_INVAL;
     }
 
@@ -253,7 +253,7 @@ int arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
      */
     if (pdes[pde_index].present && pdes[pde_index].page_size) {
         if (split_4mb_pde(&pdes[pde_index], flags & PTE_USER) != 0) {
-            KLOG("arch_map_4kb: failed to split 4MB PDE at index %u", pde_index);
+            LOG("arch_map_4kb: failed to split 4MB PDE at index %u", pde_index);
             spinlock_unlock(paging_lock);
             return E_NOMEM;
         }
@@ -262,7 +262,7 @@ int arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
     if (!pdes[pde_index].present) {
         uint32_t pt_pa = (uint32_t)arch_paging_pool_alloc();
         if (!pt_pa) {
-            KLOG("arch_map_4kb: failed to allocate page table for vaddr 0x%x", va);
+            LOG("arch_map_4kb: failed to allocate page table for vaddr 0x%x", va);
             spinlock_unlock(paging_lock);
             return E_NOMEM;
         }
@@ -295,12 +295,12 @@ void arch_unmap_4kb(void* cr3, void* va)
     size_t pte_index = PT_INDEX(va);
 
     if (pde_index >= 1024 || pte_index >= 1024) {
-        KLOG("arch_unmap_4kb: virtual address out of range");
+        LOG("arch_unmap_4kb: virtual address out of range");
         return;
     }
 
     if (!pdes) {
-        KLOG("arch_map_4kb: invalid cr3");
+        LOG("arch_map_4kb: invalid cr3");
         return;
     }
 
@@ -326,12 +326,12 @@ void arch_unmap_4kb(void* cr3, void* va)
 void arch_map_4mb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t flags)
 {
     if (!cr3) {
-        KLOG("arch_map_4mb_range: invalid cr3");
+        LOG("arch_map_4mb_range: invalid cr3");
         return;
     }
 
     if (!IS_4MB_ALIGN(start_pa) || !IS_4MB_ALIGN(end_pa)) {
-        KLOG("arch_map_4mb_range: addresses must be 4MB-aligned");
+        LOG("arch_map_4mb_range: addresses must be 4MB-aligned");
         return;
     }
 
@@ -343,12 +343,12 @@ void arch_map_4mb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t 
 void arch_map_4kb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t flags)
 {
     if (!cr3) {
-        KLOG("arch_map_4kb_range: invalid cr3");
+        LOG("arch_map_4kb_range: invalid cr3");
         return;
     }
 
     if (!IS_4KB_ALIGN(start_pa) || !IS_4KB_ALIGN(end_pa)) {
-        KLOG("arch_map_4kb_range: addresses must be 4KB-aligned");
+        LOG("arch_map_4kb_range: addresses must be 4KB-aligned");
         return;
     }
 
@@ -370,17 +370,17 @@ void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
 
     paging_lock = spinlock_alloc();
     if (!paging_lock) {
-        KLOG("arch_paging_init: failed to allocate paging spinlock");
+        LOG("arch_paging_init: failed to allocate paging spinlock");
         return;
     }
 
     paging_pool_lock = spinlock_alloc();
     if (!paging_pool_lock) {
-        KLOG("arch_paging_init: failed to allocate paging pool spinlock");
+        LOG("arch_paging_init: failed to allocate paging pool spinlock");
         return;
     }
 
-    KLOG("arch_paging_init: total_memory=%u MB, bitmap=0x%x",
+    LOG("arch_paging_init: total_memory=%u MB, bitmap=0x%x",
          total_memory >> 20, (uint32_t)__pmm_bitmap_start);
 
     /* Step 1: Build the initial page directory.
@@ -404,12 +404,12 @@ void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
         "mov    %%eax,          %%cr4\n\t"
         : : : "eax", "memory"
     );
-    KLOG("Paging: PSE enabled (4MB pages)");
+    LOG("Paging: PSE enabled (4MB pages)");
 
     /* Step 3: Enable paging */
     arch_load_cr3((uint32_t)pdes);
     arch_enable_paging();
-    KLOG("Paging: enabled (CR0.PG=1), CR3=0x%x", (uint32_t)pdes);
+    LOG("Paging: enabled (CR0.PG=1), CR3=0x%x", (uint32_t)pdes);
 
     /* Step 4: Register the kernel master PD */
     kernel_pdir_phys = (uint32_t)pdes;
@@ -418,9 +418,9 @@ void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
      * sits below the PMM bitmap, so pmm_init() keeps it reserved and
      * user VAs (identity-mapped) can never collide with its PAs. */
     pmm_init(total_memory, __pmm_bitmap_start);
-    KLOG("Paging: paging-structures pool 0x%x-0x%x (%u slots)",
+    LOG("Paging: paging-structures pool 0x%x-0x%x (%u slots)",
          VMM_PDE_ALLOC_BASE, VMM_PDE_ALLOC_END, PAGING_POOL_SLOTS);
-    KLOG("Paging: bootstrap complete, %u pages free", pmm_get_free_page_count());
+    LOG("Paging: bootstrap complete, %u pages free", pmm_get_free_page_count());
 }
 
 void arch_load_cr3(uint32_t pdir_phys)
@@ -456,7 +456,7 @@ void arch_enable_paging(void)
 uint32_t arch_clone_kernel_pde(uint32_t pde_pa, int user_accessible)
 {
     if (!pde_pa) {
-        KLOG("VMM: failed to allocate page for PDE clone");
+        LOG("VMM: failed to allocate page for PDE clone");
         return 0;
     }
 
@@ -482,7 +482,7 @@ uint32_t arch_clone_kernel_pde(uint32_t pde_pa, int user_accessible)
 void arch_destroy_address_space(uint32_t pdir_phys)
 {
     if (!pdir_phys || pdir_phys == kernel_pdir_phys) {
-        KLOG("VMM: cannot destroy kernel address space");
+        LOG("VMM: cannot destroy kernel address space");
         return;
     }
 

@@ -12,8 +12,8 @@
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/terminal_driver.h"
-#include "drivers/timer_driver.h"
+#include "drivers/terminal_server.h"
+#include "drivers/timer_server.h"
 #include "kernel/process.h"
 #include "lib/rbtree.h"
 #include "lib/string.h"

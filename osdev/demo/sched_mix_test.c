@@ -8,14 +8,14 @@
  *      - thread_block / thread_unblock across privilege boundaries            *
  *      - thread_exit on both kernel and user threads                          *
  *                                                                             *
- *    All output goes through terminal_write / sys_terminal_write so          *
- *    results are visible in VGA text mode (mode 0x03).                        *
+ *    All output goes through terminal_write so results are visible        *
+ *    in VGA text mode (mode 0x03).                                        *
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/terminal_driver.h"
-#include "drivers/timer_driver.h"
-#include "drivers/log_driver.h"
+#include "drivers/terminal_server.h"
+#include "drivers/timer_server.h"
+#include "drivers/log_server.h"
 #include "kernel/process.h"
 #include "lib/string.h"
 
@@ -84,8 +84,9 @@ static void check_flush(void)
 /* ================================================================== *
  *  Helper thread entry — works for both kernel and user privilege     *
  *                                                                      *
- *  Terminal / timer access goes through the syscall gate               *
- *  (sys_terminal_write / sys_sleep_ms), so it is safe at CPL=3 too.    *
+ *  Terminal access writes VGA directly (works at CPL=3 too thanks to     *
+ *  user-mapped VGA + IOPL=3); timer delay is also a plain function       *
+ *  (timer_delay_ms), so it is safe at CPL=3 too.                         *
  *  All verification is done by the main thread reading g_run_count[].  *
  * ================================================================== */
 static void mix_helper_entry(void)
@@ -109,20 +110,21 @@ static void mix_helper_entry(void)
             thread_yield();
     }
 
-    /* Announce ourselves.  sys_terminal_write() goes through the
-     * terminal syscall gate, so it works from both kernel (CPL0) and
-     * user (CPL3) threads — no more #GP on VGA/CRT I/O. */
+    /* Announce ourselves.  terminal_write() writes VGA directly — it is
+     * plain RING3-callable code (VGA is user-mapped, IOPL=3 allows the
+     * CRT port I/O), so it works from both kernel (CPL0) and user (CPL3)
+     * threads. */
     {
         char buf[48];
         snprintf(buf, sizeof(buf), "  [HELPER] TID=%d started\n", my_tid);
-        sys_terminal_write(buf);
+        terminal_write(buf);
     }
 
-    /* Demonstrate the timer syscall from a USER helper thread.
+    /* Demonstrate a delay from a USER helper thread.
      * Helpers are created kernel×2 then user×2, so slot 2 is the
      * first user-mode helper. */
     if (my_idx == 2 && g_num_helpers > 2)
-        sys_sleep_ms(50);
+        timer_delay_ms(50);
 
     /*
      * Phase 1 — run several iterations, yielding each time.
@@ -148,7 +150,7 @@ static void mix_helper_entry(void)
             char buf[48];
             snprintf(buf, sizeof(buf),
                      "  [HELPER] TID=%d resumed after unblock\n", my_tid);
-            sys_terminal_write(buf);
+            terminal_write(buf);
         }
     }
 
@@ -223,7 +225,7 @@ void sched_mix_test_main(void)
 
         terminal_write("  Total helpers created: ");
         term_write_int("", g_num_helpers);
-        sys_sleep_ms(1000);   /* syscall version — works from any ring */
+        timer_delay_ms(1000);   /* plain function — works from any ring */
     }
 
     /*

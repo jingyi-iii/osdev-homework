@@ -1,8 +1,8 @@
 /*******************************************************************************
  *                                                                             *
  *    Breakout — A classic brick-breaking game running as a kernel process.    *
- *               Rendered via graphics_driver (VGA mode 0x13),                 *
- *               controlled via kb_driver keyboard callbacks.                  *
+ *               Rendered via graphics_server (VGA mode 0x13),                 *
+ *               controlled via kb_server keyboard callbacks.                  *
  *                                                                             *
  *    Controls:  A/D or Left/Right  —  move paddle                             *
  *               Space              —  launch ball / serve                     *
@@ -11,10 +11,10 @@
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/graphics_driver.h"
-#include "drivers/kb_driver.h"
-#include "drivers/log_driver.h"
-#include "drivers/timer_driver.h"
+#include "drivers/graphics_server.h"
+#include "drivers/kb_server.h"
+#include "drivers/log_server.h"
+#include "drivers/timer_server.h"
 #include "kernel/process.h"
 #include "lib/string.h"
 #include "mm/heap.h"
@@ -462,7 +462,7 @@ static void render_frame(void)
 
 void breakout_thread(void)
 {
-    KLOG("breakout_thread started");
+    LOG("breakout_thread started");
 
     kb_register_callback(breakout_kb_handler);
 
@@ -508,7 +508,7 @@ void breakout_thread(void)
 
     } while (game_restart && !game_quit);
 
-    KLOG("breakout_thread exiting, score=%d", score);
+    LOG("breakout_thread exiting, score=%d", score);
 
     kb_unregister_callback(breakout_kb_handler);
 

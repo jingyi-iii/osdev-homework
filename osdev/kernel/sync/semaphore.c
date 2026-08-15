@@ -1,7 +1,7 @@
 #include "sync/semaphore.h"
 #include "kernel/process.h"
 #include "lib/module.h"
-#include "drivers/log_driver.h"
+#include "drivers/log_server.h"
 
 DECLARE_HEAD_NODE(semaphore_head);
 static spinlock* semaphore_lock = 0;
@@ -10,7 +10,7 @@ static void semaphore_subsys_init(void)
 {
     semaphore_lock = spinlock_alloc();
     if (!semaphore_lock) {
-        KLOG("failed to alloc spin lock for semaphore registry\n");
+        LOG("failed to alloc spin lock for semaphore registry\n");
     }
 }
 module_init(semaphore_subsys_init);

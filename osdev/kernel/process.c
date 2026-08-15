@@ -4,7 +4,7 @@
 #include "arch_protm.h"
 #include "lib/module.h"
 #include "lib/string.h"
-#include "drivers/log_driver.h"
+#include "drivers/log_server.h"
 #include "kernel/irq.h"
 #include "ipc/mailbox.h"
 
@@ -85,15 +85,15 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry, void* p
     static uint32_t tid = 0;
 
     if (!parent) {
-        KLOG("failed to create thread without parent process");
+        LOG("failed to create thread without parent process");
         return E_INVAL;
     }
 
-    KLOG("adding thread, tid %d", tid);
+    LOG("adding thread, tid %d", tid);
 
     thread = (tcb*)kmalloc(sizeof(tcb));
     if (!thread) {
-        KLOG("failed to alloc memory for tcb");
+        LOG("failed to alloc memory for tcb");
         return E_NOMEM;
     }
 
@@ -101,7 +101,7 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry, void* p
     list_init(&thread->wait_node);
 
     if (arch_task_context_init(&parent->vcb, &thread->context, entry, priv)) {
-        KLOG("failed to init thread context");
+        LOG("failed to init thread context");
         kfree(thread);
         return E_THREAD_CREATE;
     }
@@ -111,7 +111,7 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry, void* p
     list_init(&thread->irqs);
     thread->sp_lock = spinlock_alloc();
     if (!thread->sp_lock) {
-        KLOG("failed to alloc spin lock for tcb");
+        LOG("failed to alloc spin lock for tcb");
         arch_task_context_release(&parent->vcb, &thread->context);
         kfree(thread);
         return E_LIMIT;
@@ -142,7 +142,7 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry, void* p
     thread->mailbox = alloc_mailbox(thread->parent->pid, thread->tid);
 #endif
 
-    KLOG("add thread, tid %d", thread->tid);
+    LOG("add thread, tid %d", thread->tid);
 
     return thread->tid;
 }
@@ -203,7 +203,7 @@ static void t_delete(int32_t tid)
         /* deleting the running thread: switch to next runnable first */
         tcb* next = find_next_runnable(thread_run);
         if (!next) {
-            KLOG("no more thread to run after deleting thread with tid %d", tid);
+            LOG("no more thread to run after deleting thread with tid %d", tid);
             spinlock_unlock(schedule_lock);
             return;
         }
@@ -336,19 +336,19 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
 
     struct pcb* proc = (struct pcb*)kmalloc(sizeof(struct pcb));
     if (!proc) {
-        KLOG("failed to alloc memory for pcb");
+        LOG("failed to alloc memory for pcb");
         return E_NOMEM;
     }
 
     proc->sp_lock = spinlock_alloc();
     if (!proc->sp_lock) {
-        KLOG("failed to alloc spin lock for pcb");
+        LOG("failed to alloc spin lock for pcb");
         kfree(proc);
         return E_LIMIT;
     }
     proc->cap_lock = spinlock_alloc();
     if (!proc->cap_lock) {
-        KLOG("failed to alloc spin lock for pcb capabilities");
+        LOG("failed to alloc spin lock for pcb capabilities");
         spinlock_release(proc->sp_lock);
         kfree(proc);
         return E_LIMIT;
@@ -362,7 +362,7 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
     /* Allocate a private page directory for user processes.
      * Kernel processes share the kernel's master page directory. */
     if (vmm_create(&proc->vcb, priv == PROC_PRIV_USER)) {
-        KLOG("failed to create address space for pid %d", proc->pid);
+        LOG("failed to create address space for pid %d", proc->pid);
         spinlock_release(proc->cap_lock);
         spinlock_release(proc->sp_lock);
         kfree(proc);
@@ -431,7 +431,7 @@ static void p_exit(int32_t pid)
                  */
                 tcb* next = find_next_runnable(thread_run);
                 if (!next) {
-                    KLOG("no more thread to run during proc exit, pid %d", pid);
+                    LOG("no more thread to run during proc exit, pid %d", pid);
                     break;
                 }
 
@@ -640,7 +640,7 @@ static void proc_env_init(void)
 {
     schedule_lock = spinlock_alloc();
     if (!schedule_lock) {
-        KLOG("failed to alloc spin lock for scheduler");
+        LOG("failed to alloc spin lock for scheduler");
         return;
     }
 

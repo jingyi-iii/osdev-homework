@@ -1,7 +1,7 @@
 #include "lib/module.h"
-#include "drivers/log_driver.h"
-#include "drivers/kb_driver.h"
-#include "drivers/terminal_driver.h"
+#include "drivers/log_server.h"
+#include "drivers/kb_server.h"
+#include "drivers/terminal_server.h"
 #include "kernel/process.h"
 #include "kernel/init.h"
 #include "drivers/platform_devices.h"
@@ -97,8 +97,6 @@ void kernel_start(void)
     /*
      * Phase 3: Rest of the kernel subsystems.
      */
-    kb_init();
-    terminal_register_cmd("crash", crash_cmd);
     kernel_do_initcalls();
     proc_create(PROC_PRIV_KERNEL, init_thread, 0);
 }

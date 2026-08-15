@@ -1,5 +1,5 @@
-#ifndef TIMER_DRIVER_H
-#define TIMER_DRIVER_H
+#ifndef TIMER_SERVER_H
+#define TIMER_SERVER_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -35,27 +35,6 @@ typedef struct {
     uint8_t century;
 } rtc_time_t;
 
-/* Timer syscall minor number for RING3 access */
-#define TIMER_SYSCALL_MINOR     (2)
-
-/* Timer syscall commands */
-typedef enum {
-    TIMER_SYSCALL_GET_TIME = 0,   /* read RTC time string */
-    TIMER_SYSCALL_DELAY_MS = 1,   /* busy-wait delay via PIT */
-} timer_syscall_cmd;
-
-/* Data structure for timer syscall */
-typedef struct timer_syscall_data {
-    uint32_t cmd;       /* timer_syscall_cmd */
-    char*    buf;       /* Buffer to write time string "YYYY-MM-DD HH:MM:SS" */
-    size_t   size;      /* Size of buffer */
-    uint32_t ms;        /* milliseconds for DELAY_MS */
-    int      ret;       /* out: result of GET_TIME */
-} timer_syscall_data;
-
-void timer_init(void);
-void timer_exit(void);
-
 /* Get current RTC time */
 void timer_get_time(rtc_time_t* time);
 
@@ -63,15 +42,17 @@ void timer_get_time(rtc_time_t* time);
 /* Returns number of bytes written, or -1 on error */
 int timer_read_time_str(char* buf, size_t size);
 
+/* Returns 1 once the timer server has been started (RTC/CMOS usable) */
+int timer_is_ready(void);
+
 /* Busy-wait delay using PIT channel 2 (one-shot mode).
  * timer_delay_ms: delay in milliseconds (max ~55ms per shot, loops for longer)
- * timer_delay_us: delay in microseconds (min ~1us resolution via PIT) */
+ * timer_delay_us: delay in microseconds (min ~1us resolution via PIT)
+ * Plain functions — callable from CPL0 and CPL3 (IOPL=3 allows direct I/O). */
 void timer_delay_ms(uint32_t ms);
 void timer_delay_us(uint32_t us);
 
-/* Ring-3 accessible wrappers — these go through the syscall gate, so they
- * can be called from both kernel (CPL0) and user (CPL3) threads. */
-int  sys_time_str(char* buf, size_t size);
-void sys_sleep_ms(uint32_t ms);
+/* Register the user-mode timer server (called from init_thread) */
+void timer_server_init(void);
 
-#endif
+#endif /* TIMER_SERVER_H */

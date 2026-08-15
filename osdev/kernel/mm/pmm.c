@@ -1,7 +1,7 @@
 #include "mm/pmm.h"
 #include "mm/paging.h"
 #include "lib/string.h"
-#include "drivers/log_driver.h"
+#include "drivers/log_server.h"
 #include "sync/spinlock.h"
 
 /*
@@ -56,13 +56,13 @@ void pmm_init(uint32_t total_memory, uint8_t* bitmap_pa)
         return;
 
     if (!bitmap_pa) {
-        KLOG("pmm_init: bitmap_pa is NULL");
+        LOG("pmm_init: bitmap_pa is NULL");
         return;
     }
 
     pmm_lock = spinlock_alloc();
     if (!pmm_lock) {
-        KLOG("pmm_init: failed to allocate PMM spinlock");
+        LOG("pmm_init: failed to allocate PMM spinlock");
         return;
     }
 
@@ -100,7 +100,7 @@ void pmm_init(uint32_t total_memory, uint8_t* bitmap_pa)
     pmm_initialized = 1;
     spinlock_unlock(pmm_lock);
 
-    KLOG("PMM: total %u pages (%u MB), %u pages free, bitmap at 0x%x",
+    LOG("PMM: total %u pages (%u MB), %u pages free, bitmap at 0x%x",
          total_blocks, total_memory >> 20, free_blocks, (uint32_t)bitmap_4k);
 }
 
@@ -123,7 +123,7 @@ uint32_t pmm_alloc_page(void)
     }
     spinlock_unlock(pmm_lock);
 
-    KLOG("PMM: out of memory!");
+    LOG("PMM: out of memory!");
     return 0;
 }
 
@@ -186,7 +186,7 @@ uint32_t pmm_alloc_pages(uint32_t num_pages)
     }
 
     spinlock_unlock(pmm_lock);
-    KLOG("PMM: out of memory for %u pages!", num_pages);
+    LOG("PMM: out of memory for %u pages!", num_pages);
     return 0;
 }
 

@@ -4,8 +4,8 @@
 #include "mm/vmm.h"
 #include "mm/pmm.h"
 
-#ifndef KLOG
-#define KLOG(x) 
+#ifndef LOG
+#define LOG(x) 
 #endif
 
 static volatile tss_t tss = {0};
@@ -20,7 +20,7 @@ int tss_init(void)
 
     tss_sel = arch_get_sel(TSS);
     if (!tss_sel) {
-        KLOG("failed to get TSS selector");
+        LOG("failed to get TSS selector");
         return E_INTERNAL;
     }
 
@@ -53,7 +53,7 @@ int arch_task_context_init(vmm_control_block* vcb, arch_task_context* context, t
     uint8_t ring = priv == TASK_PRIV_KERNEL ? 0 : 3;
 
     if (!context || !vcb) {
-        KLOG("task context or vcb is null");
+        LOG("task context or vcb is null");
         return E_INVAL;
     }
 
@@ -70,7 +70,7 @@ int arch_task_context_init(vmm_control_block* vcb, arch_task_context* context, t
         context->stack = kmalloc(0x1000);    // 4KB stack
     }
     if (!context->stack) {
-        KLOG("failed to alloc task stack");
+        LOG("failed to alloc task stack");
         return E_NOMEM;
     }
     context->regs = (regs_t*)((uint8_t*)context->stack + 0x1000 - sizeof(regs_t));

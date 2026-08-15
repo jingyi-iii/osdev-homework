@@ -13,9 +13,9 @@
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/terminal_driver.h"
-#include "drivers/timer_driver.h"
-#include "drivers/log_driver.h"
+#include "drivers/terminal_server.h"
+#include "drivers/timer_server.h"
+#include "drivers/log_server.h"
 #include "kernel/process.h"
 #include "mm/vmm.h"
 #include "ipc/shm.h"
@@ -293,22 +293,22 @@ void shm_stress_main(void)
         /* 每轮进度：屏幕 + serial 各一条，方便判断是卡住还是在进行中 */
         snprintf(msg, sizeof(msg), "[SHMS] round %d/%d\n", round + 1, SHM_STRESS_ROUNDS);
         terminal_write(msg);
-        KLOG("[SHMS] round %d/%d start", round + 1, SHM_STRESS_ROUNDS);
+        LOG("[SHMS] round %d/%d start", round + 1, SHM_STRESS_ROUNDS);
 
         if (shm_share((int32_t)shm_stress_pid, buf, shm_stress_size, &out_va) != 0) {
             terminal_write("[SHMS] FAIL: shm_share\n");
-            KLOG("[SHMS] round %d FAIL: shm_share", round + 1);
+            LOG("[SHMS] round %d FAIL: shm_share", round + 1);
             ok = 0;
             shm_stress_exit = 1;
             break;
         }
-        KLOG("[SHMS] round %d shared va=0x%x", round + 1, (uint32_t)out_va);
+        LOG("[SHMS] round %d shared va=0x%x", round + 1, (uint32_t)out_va);
         shm_stress_va = out_va;
         shm_stress_round = round + 1;        /* publish: target wakes */
 
         while (!shm_stress_done)
             thread_yield();
-        KLOG("[SHMS] round %d target done result=%d", round + 1, shm_stress_result);
+        LOG("[SHMS] round %d target done result=%d", round + 1, shm_stress_result);
 
         if (shm_stress_result != 0) {
             terminal_write("[SHMS] FAIL: target pattern mismatch\n");
@@ -327,10 +327,10 @@ void shm_stress_main(void)
 
         if (shm_unshare((int32_t)shm_stress_pid, out_va) != 0) {
             terminal_write("[SHMS] FAIL: shm_unshare\n");
-            KLOG("[SHMS] round %d FAIL: shm_unshare", round + 1);
+            LOG("[SHMS] round %d FAIL: shm_unshare", round + 1);
             ok = 0;
         } else {
-            KLOG("[SHMS] round %d unshared", round + 1);
+            LOG("[SHMS] round %d unshared", round + 1);
         }
     }
 
@@ -339,10 +339,10 @@ void shm_stress_main(void)
 
     if (ok) {
         snprintf(msg, sizeof(msg), "[SHMS] PASS: %d share/unshare rounds OK\n\n", SHM_STRESS_ROUNDS);
-        KLOG("[SHMS] PASS: %d share/unshare rounds OK", SHM_STRESS_ROUNDS);
+        LOG("[SHMS] PASS: %d share/unshare rounds OK", SHM_STRESS_ROUNDS);
     } else {
         snprintf(msg, sizeof(msg), "[SHMS] FAIL: stress test failed (round %d)\n\n", round);
-        KLOG("[SHMS] FAIL: stress test failed (round %d)", round);
+        LOG("[SHMS] FAIL: stress test failed (round %d)", round);
     }
     terminal_write(msg);
 

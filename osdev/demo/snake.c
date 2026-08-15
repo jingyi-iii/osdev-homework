@@ -1,8 +1,8 @@
 /*******************************************************************************
  *                                                                             *
  *    Snake Game — A classic snake game running as a kernel process.           *
- *                 Rendered via graphics_driver (VGA mode 0x13),              *
- *                 controlled via kb_driver keyboard callbacks.                *
+ *                 Rendered via graphics_server (VGA mode 0x13),              *
+ *                 controlled via kb_server keyboard callbacks.                *
  *                                                                             *
  *    Controls:  W/A/S/D  —  move Up/Left/Down/Right                          *
  *               R        —  restart after game over                          *
@@ -10,10 +10,10 @@
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/graphics_driver.h"
-#include "drivers/kb_driver.h"
-#include "drivers/log_driver.h"
-#include "drivers/timer_driver.h"
+#include "drivers/graphics_server.h"
+#include "drivers/kb_server.h"
+#include "drivers/log_server.h"
+#include "drivers/timer_server.h"
 #include "kernel/process.h"
 #include "lib/string.h"
 #include "mm/heap.h"
@@ -284,7 +284,7 @@ static void render_frame(void)
 
 void snake_thread(void)
 {
-    KLOG("snake_thread started");
+    LOG("snake_thread started");
 
     /* register keyboard listener */
     kb_register_callback(snake_kb_handler);
@@ -330,7 +330,7 @@ void snake_thread(void)
 
     } while (game_restart && !game_quit);
 
-    KLOG("snake_thread exiting, score=%d", score);
+    LOG("snake_thread exiting, score=%d", score);
 
     kb_unregister_callback(snake_kb_handler);
 

@@ -1,33 +1,28 @@
 /*******************************************************************************
  *                                                                             *
- *    Terminal Driver — VGA Text-Mode Output, Hardware Cursor,                 *
- *                       Keyboard Echo & Command Dispatch                      *
+ *    Terminal Server — user-mode VGA text-mode output, hardware cursor,       *
+ *                      keyboard echo & command dispatch                       *
  *                                                                             *
- *    AI-IMPLEMENTED  ·  NO HUMAN REVIEW REQUIRED                              *
+ *    Runs as a DRIVER_CLASS_USER server (ring-3 process, like kb_server.c).   *
+ *    All terminal_* APIs are plain functions callable directly from RING3 —   *
+ *    no syscall gate.  The VGA buffer (0xB8000) is identity-mapped with       *
+ *    PTE_USER_PAGE, and RING3 threads run with IOPL=3 (see task.c), so the    *
+ *    raw in/out on the CRT controller (0x3D4/0x3D5) and the VGA registers     *
+ *    work directly from ring 3.                                               *
  *                                                                             *
- *    All code in this file is safe for fully automated implementation         *
- *    by AI without manual review.  It operates entirely in userspace-         *
- *    visible I/O (VGA buffer at 0xB8000, CRT controller ports 0x3D4/5)        *
- *    and depends only on the platform_bus abstraction.  It cannot:            *
- *                                                                             *
- *      • corrupt kernel memory or page tables                                 *
- *      • cause triple-faults or double-faults                                 *
- *      • interfere with interrupt routing or the IDT                          *
- *      • deadlock the scheduler or process subsystem                          *
- *                                                                             *
- *    The worst-case failure mode is a garbled screen or a non-responsive      *
- *    command prompt — both immediately visible and trivial to revert.         *
+ *    Keyboard input comes from the user-mode kb_server via                *
+ *    kb_register_callback.                                               *
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/terminal_driver.h"
+#include "drivers/terminal_server.h"
 #include "sync/spinlock.h"
 #include "lib/module.h"
-#include "drivers/kb_driver.h"
+#include "drivers/kb_server.h"
 #include "mm/heap.h"
 #include "lib/string.h"
-#include "kernel/irq.h"
-#include "arch_irq.h"
+#include "kernel/process.h"
+#include "regs.h"
 
 /************************************************************************/
 /*                        Internal Definitions                          */
@@ -37,7 +32,7 @@
 #define VGA_BUF_ADDR   0xB8000
 
 struct terminal_device {
-    struct platform_bus_ops* bus_ops;
+    struct platform_bus_ops* bus_ops;   /* set at start(): RING3-safe wrappers */
     spinlock* lock;
     uint16_t* vga_buffer;
     size_t curr_row;
@@ -52,6 +47,49 @@ static struct terminal_device term_device = {
     .curr_col = 0,
     .curr_color = 0,
 };
+
+/* ---- RING3-safe VGA I/O -----------------------------------------------
+ * The platform bus ops are never attached to a DRIVER_CLASS_USER device
+ * (probe() is not called for user drivers), so the terminal server uses
+ * its own wrappers around the raw in/out instructions.  RING3 may execute
+ * them directly because user threads run with IOPL=3 (see task.c). */
+static int term_out8(uint16_t port, uint8_t data)
+{
+    arch_outb(port, data);
+    return 0;
+}
+
+static int term_in8(uint16_t port)
+{
+    return (int)arch_inb(port);
+}
+
+static struct platform_bus_ops term_bus_ops = {
+    .in_port8  = term_in8,
+    .out_port8 = term_out8,
+};
+
+/* ---- IRQ-safe terminal lock -------------------------------------------
+ * Terminal state is touched from RING3 apps, from kernel threads and from
+ * the keyboard ISR callback (IF=0).  On this single-CPU kernel, cli around
+ * the spinlock prevents a RING3/kernel holder from being preempted by the
+ * keyboard ISR (which would otherwise spin forever on the same lock).
+ * pushf/popf restores the previous IF; RING3 may run cli/sti thanks to
+ * IOPL=3. */
+static uint32_t term_lock(void)
+{
+    uint32_t eflags;
+    __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags) : : "memory");
+    arch_cli();
+    spinlock_lock(term_device.lock);
+    return eflags;
+}
+
+static void term_unlock(uint32_t eflags)
+{
+    spinlock_unlock(term_device.lock);
+    __asm__ __volatile__("pushl %0; popfl" : : "r"(eflags) : "memory");
+}
 
 /************************************************************************/
 /*                      Hardware Cursor Control                         */
@@ -217,7 +255,7 @@ void terminal_switch_to_text_mode(void)
     if (!ops)
         return;
 
-    spinlock_lock(term_device.lock);
+    uint32_t eflags = term_lock();
 
     /* Reprogram VGA registers for text mode 0x03 */
     vga_set_text_mode(ops);
@@ -238,7 +276,7 @@ void terminal_switch_to_text_mode(void)
     }
 
     cursor_update(term_device.curr_row, term_device.curr_col);
-    spinlock_unlock(term_device.lock);
+    term_unlock(eflags);
 
     /* Reset input state and show prompt */
     input_len = 0;
@@ -273,6 +311,22 @@ static void cmd_init(void)
         cmd_ready = 1;
 }
 
+/* IRQ-safe guard for the command registry (same rationale as term_lock) */
+static uint32_t cmd_lock_irq(void)
+{
+    uint32_t eflags;
+    __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags) : : "memory");
+    arch_cli();
+    spinlock_lock(cmd_lock);
+    return eflags;
+}
+
+static void cmd_unlock_irq(uint32_t eflags)
+{
+    spinlock_unlock(cmd_lock);
+    __asm__ __volatile__("pushl %0; popfl" : : "r"(eflags) : "memory");
+}
+
 static int str_cmp(const char* a, const char* b, size_t max)
 {
     for (size_t i = 0; i < max; i++) {
@@ -293,57 +347,15 @@ static size_t str_len(const char* s, size_t max)
 }
 
 /************************************************************************/
-/*                      Driver Probe / Remove                           */
-/************************************************************************/
-static int terminal_probe(struct device* dev)
-{
-    (void)dev;
-
-    struct platform_device* pdev = to_platform_device(dev);
-    term_device.bus_ops = platform_device_get_ops(pdev);
-
-    term_device.lock = spinlock_alloc();
-    if (!term_device.lock)
-        return E_LIMIT;
-
-    term_device.vga_buffer = (uint16_t*)VGA_BUF_ADDR;
-
-    return 0;
-}
-
-static int terminal_remove(struct device* dev)
-{
-    (void)dev;
-
-    if (term_device.lock) {
-        spinlock_release(term_device.lock);
-        term_device.lock = NULL;
-    }
-
-    return 0;
-}
-
-static struct driver terminal_driver = {
-    .type = "terminal",
-    .probe = terminal_probe,
-    .remove = terminal_remove,
-};
-
-/************************************************************************/
 /*                      Terminal Public API                             */
 /************************************************************************/
 void terminal_flush(const char* unused)
 {
-    if (arch_running_ring3()) {
-        terminal_syscall_data data = {0};
-        data.cmd = TERM_SYSCALL_FLUSH;
-        arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
-        return;
-    }
+    (void)unused;
 
     struct terminal_device* dev = &term_device;
 
-    spinlock_lock(dev->lock);
+    uint32_t eflags = term_lock();
 
     dev->curr_row = 0;
     dev->curr_col = 0;
@@ -357,7 +369,7 @@ void terminal_flush(const char* unused)
     }
 
     cursor_update(dev->curr_row, dev->curr_col);
-    spinlock_unlock(dev->lock);
+    term_unlock(eflags);
 }
 
 void terminal_write_at(char chr, uint8_t color, size_t x, size_t y)
@@ -367,7 +379,7 @@ void terminal_write_at(char chr, uint8_t color, size_t x, size_t y)
 
     struct terminal_device* dev = &term_device;
 
-    spinlock_lock(dev->lock);
+    uint32_t eflags = term_lock();
 
     const size_t index = y * VGA_WIDTH + x;
     dev->vga_buffer[index] = to_vga_char(chr, color);
@@ -384,7 +396,7 @@ void terminal_write_at(char chr, uint8_t color, size_t x, size_t y)
     }
 
     cursor_update(dev->curr_row, dev->curr_col);
-    spinlock_unlock(dev->lock);
+    term_unlock(eflags);
 }
 
 void terminal_write_at_str(const char* str, uint8_t color, size_t x, size_t y)
@@ -411,14 +423,6 @@ void terminal_write_at_str(const char* str, uint8_t color, size_t x, size_t y)
 
 void terminal_write(const char* str)
 {
-    if (arch_running_ring3()) {
-        terminal_syscall_data data = {0};
-        data.cmd = TERM_SYSCALL_WRITE;
-        data.buf = str;
-        arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
-        return;
-    }
-
     if (!str)
         return;
 
@@ -430,15 +434,6 @@ void terminal_write(const char* str)
 
 void terminal_write_color(const char* str, uint8_t color)
 {
-    if (arch_running_ring3()) {
-        terminal_syscall_data data = {0};
-        data.cmd   = TERM_SYSCALL_WRITE_COLOR;
-        data.buf   = str;
-        data.color = color;
-        arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
-        return;
-    }
-
     if (!str)
         return;
 
@@ -451,17 +446,9 @@ void terminal_write_color(const char* str, uint8_t color)
 
 void terminal_putchar(char c)
 {
-    if (arch_running_ring3()) {
-        terminal_syscall_data data = {0};
-        data.cmd = TERM_SYSCALL_PUTCHAR;
-        data.chr = c;
-        arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
-        return;
-    }
-
     struct terminal_device* dev = &term_device;
 
-    spinlock_lock(dev->lock);
+    uint32_t eflags = term_lock();
 
     if (c == '\n') {
         dev->curr_col = 0;
@@ -487,18 +474,11 @@ void terminal_putchar(char c)
     }
 
     cursor_update(dev->curr_row, dev->curr_col);
-    spinlock_unlock(dev->lock);
+    term_unlock(eflags);
 }
 
 size_t terminal_get_row(void)
 {
-    if (arch_running_ring3()) {
-        terminal_syscall_data data = {0};
-        data.cmd = TERM_SYSCALL_GET_ROW;
-        arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
-        return data.row;
-    }
-
     return term_device.curr_row;
 }
 
@@ -523,9 +503,9 @@ int terminal_register_cmd(const char* name, terminal_cmd_fn callback)
     entry->callback = callback;
     list_init(&entry->node);
 
-    spinlock_lock(cmd_lock);
+    uint32_t eflags = cmd_lock_irq();
     list_add(&entry->node, &cmd_registry);
-    spinlock_unlock(cmd_lock);
+    cmd_unlock_irq(eflags);
 
     return 0;
 }
@@ -535,18 +515,18 @@ void terminal_unregister_cmd(const char* name)
     if (!name || !cmd_ready)
         return;
 
-    spinlock_lock(cmd_lock);
+    uint32_t eflags = cmd_lock_irq();
     list_for_each(pos, &cmd_registry) {
         struct terminal_cmd_entry* entry =
             list_entry(pos, struct terminal_cmd_entry, node);
         if (str_cmp(entry->name, name, CMD_NAME_MAX)) {
             list_del(&entry->node);
-            spinlock_unlock(cmd_lock);
+            cmd_unlock_irq(eflags);
             kfree(entry);
             return;
         }
     }
-    spinlock_unlock(cmd_lock);
+    cmd_unlock_irq(eflags);
 }
 
 /************************************************************************/
@@ -570,7 +550,7 @@ static void terminal_kb_handler(const char* data, size_t size)
 
         int matched = 0;
         if (cmd_ready && input_len > 0) {
-            spinlock_lock(cmd_lock);
+            uint32_t eflags = cmd_lock_irq();
             list_for_each(pos, &cmd_registry) {
                 struct terminal_cmd_entry* entry =
                     list_entry(pos, struct terminal_cmd_entry, node);
@@ -597,7 +577,7 @@ static void terminal_kb_handler(const char* data, size_t size)
                     break;
                 }
             }
-            spinlock_unlock(cmd_lock);
+            cmd_unlock_irq(eflags);
         }
 
         if (!matched && input_len > 0) {
@@ -630,80 +610,6 @@ static void terminal_kb_handler(const char* data, size_t size)
 }
 
 /************************************************************************/
-/*                      Terminal Syscall (RING3)                        */
-/************************************************************************/
-
-static irq* terminal_scall = 0;
-
-static void terminal_syscall_handler(void* context)
-{
-    terminal_syscall_data* data = (terminal_syscall_data*)context;
-    if (!data)
-        return;
-
-    switch (data->cmd) {
-    case TERM_SYSCALL_WRITE:
-        terminal_write(data->buf);
-        break;
-    case TERM_SYSCALL_WRITE_COLOR:
-        terminal_write_color(data->buf, data->color);
-        break;
-    case TERM_SYSCALL_PUTCHAR:
-        terminal_putchar(data->chr);
-        break;
-    case TERM_SYSCALL_FLUSH:
-        terminal_flush(NULL);
-        break;
-    case TERM_SYSCALL_GET_ROW:
-        data->row = terminal_get_row();
-        break;
-    default:
-        break;
-    }
-}
-
-/* ---- Ring-3 wrappers: callable from CPL3 through the syscall gate ---- */
-void sys_terminal_write(const char* str)
-{
-    terminal_syscall_data data = {0};
-    data.cmd = TERM_SYSCALL_WRITE;
-    data.buf = str;
-    arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
-}
-
-void sys_terminal_write_color(const char* str, uint8_t color)
-{
-    terminal_syscall_data data = {0};
-    data.cmd   = TERM_SYSCALL_WRITE_COLOR;
-    data.buf   = str;
-    data.color = color;
-    arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
-}
-
-void sys_terminal_putchar(char c)
-{
-    terminal_syscall_data data = {0};
-    data.cmd = TERM_SYSCALL_PUTCHAR;
-    data.chr = c;
-    arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
-}
-
-void sys_terminal_flush(void)
-{
-    terminal_syscall_data data = {0};
-    data.cmd = TERM_SYSCALL_FLUSH;
-    arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
-}
-
-size_t sys_terminal_get_row(void)
-{
-    terminal_syscall_data data = {0};
-    data.cmd = TERM_SYSCALL_GET_ROW;
-    arch_syscall(TERMINAL_SYSCALL_MINOR, &data);
-    return data.row;
-}
-
-/************************************************************************/
 /*                      Init / Exit                                     */
 /************************************************************************/
 
@@ -713,34 +619,74 @@ static void terminal_textmode_cmd(const char* args)
     terminal_switch_to_text_mode();
 }
 
-void terminal_init(void)
+static void terminal_server_loop(void)
 {
-    platform_driver_register(&terminal_driver);
+    /* Keyboard echo and command dispatch are driven by the kb_server
+     * callback (kb_server → kb_register_callback → terminal_kb_handler).
+     * This server thread simply idles, keeping the server process alive. */
+    for (;;)
+        thread_yield();
+}
+
+int terminal_start(struct device* dev)
+{
+    (void)dev;
+
+    /* DRIVER_CLASS_USER drivers never get probe() called, so allocate the
+     * terminal lock here (inside the server process) instead.  Before this
+     * runs, term_lock() still provides mutual exclusion via cli alone. */
+    if (!term_device.lock) {
+        term_device.lock = spinlock_alloc();
+        if (!term_device.lock)
+            return E_LIMIT;
+    }
+
+    /* Attach RING3-safe VGA I/O (raw in/out — user threads have IOPL=3) */
+    term_device.bus_ops = &term_bus_ops;
 
     cursor_init();
-
-    /* Register terminal syscall for RING3 access */
-    int ret = irq_request(&terminal_scall, "terminal_syscall", 100,
-                          TERMINAL_SYSCALL_MINOR, terminal_syscall_handler, NULL);
-    if (ret == 0 && terminal_scall)
-        irq_unmask(terminal_scall);
 
     /* register keyboard echo + command dispatch */
     kb_register_callback(terminal_kb_handler);
 
     terminal_register_cmd("clear", terminal_flush);
     terminal_register_cmd("textmode", terminal_textmode_cmd);
+
+    terminal_write("#: ");
+
+    terminal_server_loop();   /* never returns */
+
+    return 0;
+}
+
+int terminal_stop(struct device* dev)
+{
+    (void)dev;
+
+    kb_unregister_callback(terminal_kb_handler);
+    terminal_unregister_cmd("clear");
+    terminal_unregister_cmd("textmode");
+    term_device.bus_ops = NULL;
+
+    return 0;
+}
+
+static struct driver terminal_server = {
+    .class = DRIVER_CLASS_USER,
+    .type = "terminal",
+    .start = terminal_start,
+    .stop = terminal_stop,
+};
+
+void terminal_init(void)
+{
+    platform_driver_register(&terminal_server);
 }
 
 void terminal_exit(void)
 {
-    if (terminal_scall) {
-        irq_release(terminal_scall);
-        terminal_scall = NULL;
-    }
-
-    platform_driver_unregister(&terminal_driver);
+    platform_driver_unregister(&terminal_server);
 }
 
-module_init(terminal_init);
-module_exit(terminal_exit);
+// module_init(terminal_init);
+// module_exit(terminal_exit);

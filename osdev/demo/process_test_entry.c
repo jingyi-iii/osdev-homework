@@ -2,7 +2,7 @@
  *                                                                             *
  *    Process Test Entry — Text-Mode Menu for Process API Test Suites          *
  *                                                                             *
- *    Uses terminal_driver (VGA text mode 0x03) instead of graphics_driver.    *
+ *    Uses terminal_server (VGA text mode 0x03) instead of graphics_server.    *
  *    Provides a keyboard-driven menu to launch thread-level or process-level  *
  *    API tests.  The test processes use terminal_write to report results      *
  *    so developers can observe whether the process.c interfaces behave        *
@@ -10,8 +10,8 @@
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/terminal_driver.h"
-#include "drivers/kb_driver.h"
+#include "drivers/terminal_server.h"
+#include "drivers/kb_server.h"
 #include "kernel/process.h"
 
 /* Test entry points (defined in demo/) */

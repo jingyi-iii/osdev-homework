@@ -1,7 +1,7 @@
 #include "kernel/init.h"
-#include "drivers/graphics_driver.h"
-#include "drivers/kb_driver.h"
-#include "drivers/timer_driver.h"
+#include "drivers/graphics_server.h"
+#include "drivers/kb_server.h"
+#include "drivers/timer_server.h"
 #include "kernel/process.h"
 
 /* Demo thread entry points (defined in demo/) */

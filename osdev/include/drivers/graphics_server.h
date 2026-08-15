@@ -1,5 +1,5 @@
-#ifndef GRAPHICS_DRIVER_H
-#define GRAPHICS_DRIVER_H
+#ifndef GRAPHICS_SERVER_H
+#define GRAPHICS_SERVER_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -44,11 +44,11 @@ enum gfx_color {
 /*                    Graphics Public API                               */
 /************************************************************************/
 
-/* Initialize graphics mode (switch from text to mode 0x13) */
-void gfx_init(void);
-
-/* Switch back to text mode */
-void gfx_exit(void);
+/* All gfx_* APIs below are plain functions, callable from CPL0 and CPL3:
+ * they draw directly to the VGA framebuffer (0xA0000) and program the
+ * VGA registers.  No syscall gate is involved — RING3 works because the
+ * framebuffer is identity-mapped with PTE_USER_PAGE and user threads run
+ * with IOPL=3. */
 
 /* Switch (back) to graphics mode 0x13 from text mode */
 void gfx_switch_to_mode(void);
@@ -80,4 +80,7 @@ void gfx_get_cursor(size_t* col, size_t* row);
 /* Set cursor position */
 void gfx_set_cursor(size_t col, size_t row);
 
-#endif /* GRAPHICS_DRIVER_H */
+/* Register the user-mode graphics server (called from init_thread) */
+void gfx_server_init(void);
+
+#endif /* GRAPHICS_SERVER_H */

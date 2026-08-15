@@ -2,7 +2,7 @@
 #include "mm/pmm.h"
 #include "mm/heap.h"
 #include "lib/string.h"
-#include "drivers/log_driver.h"
+#include "drivers/log_server.h"
 #include "kernel/process.h"
 #include "kernel/capability.h"
 

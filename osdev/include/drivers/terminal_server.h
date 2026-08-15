@@ -1,5 +1,5 @@
-#ifndef TERMINAL_DRIVER_H
-#define TERMINAL_DRIVER_H
+#ifndef TERMINAL_SERVER_H
+#define TERMINAL_SERVER_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -56,37 +56,15 @@ void terminal_switch_to_text_mode(void);
 void terminal_unregister_cmd(const char* name);
 
 /************************************************************************/
-/*                      Terminal Syscall (RING3)                        */
+/*                      RING3 Direct Access                             */
 /************************************************************************/
 
-/* Syscall minor number on the syscall gate (major 100) for RING3 access */
-#define TERMINAL_SYSCALL_MINOR  (4)
+/*
+ * The terminal_* APIs above are plain functions: callable from both kernel
+ * (CPL0) and user (CPL3) threads, writing the VGA hardware directly
+ * (buffer at 0xB8000 + CRT controller ports).  No syscall gate is
+ * involved — RING3 works because VGA is identity-mapped with
+ * PTE_USER_PAGE and user threads run with IOPL=3.
+ */
 
-/* Terminal syscall commands */
-typedef enum {
-    TERM_SYSCALL_WRITE       = 0,
-    TERM_SYSCALL_WRITE_COLOR = 1,
-    TERM_SYSCALL_PUTCHAR     = 2,
-    TERM_SYSCALL_FLUSH       = 3,
-    TERM_SYSCALL_GET_ROW     = 4,
-} terminal_syscall_cmd;
-
-/* Data structure for the terminal syscall */
-typedef struct terminal_syscall_data {
-    uint32_t    cmd;        /* terminal_syscall_cmd */
-    const char* buf;        /* string for WRITE / WRITE_COLOR */
-    size_t      size;       /* string length (unused, null-terminated) */
-    uint8_t     color;      /* color for WRITE_COLOR */
-    char        chr;        /* character for PUTCHAR */
-    size_t      row;        /* out: current row for GET_ROW */
-} terminal_syscall_data;
-
-/* Ring-3 accessible wrappers — these go through the syscall gate, so they
- * can be called from both kernel (CPL0) and user (CPL3) threads. */
-void sys_terminal_write(const char* str);
-void sys_terminal_write_color(const char* str, uint8_t color);
-void sys_terminal_putchar(char c);
-void sys_terminal_flush(void);
-size_t sys_terminal_get_row(void);
-
-#endif /* TERMINAL_DRIVER_H */
+#endif /* TERMINAL_SERVER_H */

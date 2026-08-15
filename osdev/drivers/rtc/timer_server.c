@@ -1,15 +1,15 @@
-#include "drivers/timer_driver.h"
-#include "kernel/irq.h"
-#include "lib/string.h"
-#include "lib/module.h"
-#include "arch_irq.h"
+#include "drivers/timer_server.h"
+#include "drivers/log_server.h"
+#include "sync/spinlock.h"
+#include "kernel/process.h"
+#include "regs.h"
 
 struct timer_device {
-    struct platform_device* plat_dev;
     spinlock* lock;
     uint16_t cmos_addr;
     uint16_t cmos_data;
     rtc_time_t cached_time;  /* cached RTC time */
+    int ready;               /* set once the user-mode server has started */
 };
 
 struct timer_device timer_device = {
@@ -17,18 +17,19 @@ struct timer_device timer_device = {
     .cmos_addr = 0x70,
     .cmos_data = 0x71,
     .cached_time = {0},
+    .ready = 0,
 };
 
 static uint8_t timer_read_reg(struct timer_device* dev, uint8_t reg)
 {
     uint8_t value = 0;
-    struct platform_bus_ops* ops = platform_device_get_ops(dev->plat_dev);
-    if (!ops || !ops->out_port8 || !ops->in_port8)
-        return 0;
 
+    /* Direct I/O: RING3 may run in/out thanks to IOPL=3, and the lock is a
+     * plain kernel spinlock, so no syscall / platform ops are needed.
+     * spinlock_lock(NULL) is a safe no-op before the lock is allocated. */
     spinlock_lock(dev->lock);
-    ops->out_port8(dev->cmos_addr, reg & 0x7F);  /* NMI bit cleared */
-    value = ops->in_port8(dev->cmos_data);
+    arch_outb(dev->cmos_addr, reg & 0x7F);  /* NMI bit cleared */
+    value = arch_inb(dev->cmos_data);
     spinlock_unlock(dev->lock);
 
     return value;
@@ -155,6 +156,12 @@ int timer_read_time_str(char* buf, size_t size)
     return 19;
 }
 
+/* True once timer_server_start() has run */
+int timer_is_ready(void)
+{
+    return timer_device.ready;
+}
+
 /* ---- PIT (8253/8254) based delay support ---- */
 
 #define PIT_CHANNEL2    0x42
@@ -170,45 +177,32 @@ int timer_read_time_str(char* buf, size_t size)
 /*
  * Program PIT channel 2 for a one-shot delay of `ticks` PIT cycles.
  * Uses mode 0 (interrupt on terminal count) and polls the OUT pin
- * via the read-back status command.
+ * via the read-back status command.  Direct I/O (works at CPL3, IOPL=3).
  */
 static void pit_delay_ticks(uint16_t ticks)
 {
-    struct platform_bus_ops* ops = platform_device_get_ops(timer_device.plat_dev);
-    if (!ops)
-        return;
-
     /* Enable PIT channel 2 gate via PPI port B (bit 0).
      * Save original state so we can restore it. */
-    uint8_t ppi_save = (uint8_t)ops->in_port8(PIT_PPI_PORT);
-    ops->out_port8(PIT_PPI_PORT, ppi_save | 0x01);
+    uint8_t ppi_save = (uint8_t)arch_inb(PIT_PPI_PORT);
+    arch_outb(PIT_PPI_PORT, ppi_save | 0x01);
 
     /* Program channel 2: mode 0 (one-shot), binary, lo/hi bytes */
-    ops->out_port8(PIT_COMMAND, 0xB0);
-    ops->out_port8(PIT_CHANNEL2, ticks & 0xFF);
-    ops->out_port8(PIT_CHANNEL2, (ticks >> 8) & 0xFF);
+    arch_outb(PIT_COMMAND, 0xB0);
+    arch_outb(PIT_CHANNEL2, ticks & 0xFF);
+    arch_outb(PIT_CHANNEL2, (ticks >> 8) & 0xFF);
 
     /* Poll OUT pin via read-back status until terminal count is reached.
      * In mode 0, OUT goes high when the counter reaches 0 and stays high. */
     do {
-        ops->out_port8(PIT_COMMAND, PIT_RB_CH2_STATUS);
-        /* First read from channel port after status latch returns the status byte */
-    } while (!(ops->in_port8(PIT_CHANNEL2) & 0x80));
+        arch_outb(PIT_COMMAND, PIT_RB_CH2_STATUS);
+    } while (!(arch_inb(PIT_CHANNEL2) & 0x80));
 
     /* Restore PPI port B to original state */
-    ops->out_port8(PIT_PPI_PORT, ppi_save);
+    arch_outb(PIT_PPI_PORT, ppi_save);
 }
 
 void timer_delay_ms(uint32_t ms)
 {
-    if (arch_running_ring3()) {
-        timer_syscall_data data = {0};
-        data.cmd = TIMER_SYSCALL_DELAY_MS;
-        data.ms  = ms;
-        arch_syscall(TIMER_SYSCALL_MINOR, &data);
-        return;
-    }
-
     if (ms == 0)
         return;
 
@@ -230,14 +224,6 @@ void timer_delay_ms(uint32_t ms)
 
 void timer_delay_us(uint32_t us)
 {
-    if (arch_running_ring3()) {
-        timer_syscall_data data = {0};
-        data.cmd = TIMER_SYSCALL_DELAY_MS;
-        data.ms  = (us + 999) / 1000;   /* syscall only has ms resolution */
-        arch_syscall(TIMER_SYSCALL_MINOR, &data);
-        return;
-    }
-
     if (us == 0)
         return;
 
@@ -259,95 +245,53 @@ void timer_delay_us(uint32_t us)
     }
 }
 
-static int timer_probe(struct device* dev)
+/* ======================= user-mode timer server ======================= */
+
+static void timer_server_loop(void)
 {
-    struct platform_device* device = to_platform_device(dev);
-
-    timer_device.plat_dev = device;
-    timer_device.lock = spinlock_alloc();
-    timer_device.cmos_addr = 0x70;
-    timer_device.cmos_data = 0x71;
-
-    return 0;
+    /* All timer_* APIs are plain functions callable from CPL0 and CPL3
+     * (direct I/O), so this server thread simply idles, keeping the
+     * server process alive. */
+    for (;;)
+        thread_yield();
 }
 
-static int timer_remove(struct device *dev)
+int timer_server_start(struct device* dev)
 {
     (void)dev;
 
-    spinlock_release(timer_device.lock);
-    timer_device.lock = NULL;
+    if (!timer_device.lock) {
+        timer_device.lock = spinlock_alloc();
+        if (!timer_device.lock)
+            return E_LIMIT;
+    }
+    timer_device.cmos_addr = 0x70;
+    timer_device.cmos_data = 0x71;
+    timer_device.ready = 1;
 
+    LOG("timer_server started");
+
+    timer_server_loop();   /* never returns */
     return 0;
 }
 
-struct driver timer_driver = {
-    .type = "timer",
-    .probe = timer_probe,
-    .remove = timer_remove,
+int timer_server_stop(struct device* dev)
+{
+    (void)dev;
+    timer_device.ready = 0;
+    return 0;
+}
+
+static struct driver timer_server = {
+    .class = DRIVER_CLASS_USER,
+    .type  = "timer",
+    .start = timer_server_start,
+    .stop  = timer_server_stop,
 };
 
-static irq* timer_scall = NULL;
-
-static void timer_syscall_handler(void* context)
+/* Register the user-mode timer server.  Called from init_thread() once the
+ * scheduler is up (like terminal_init / log_server_init). */
+void timer_server_init(void)
 {
-    timer_syscall_data* data = (timer_syscall_data*)context;
-    if (!data)
-        return;
-
-    switch (data->cmd) {
-    case TIMER_SYSCALL_GET_TIME:
-        if (data->buf && data->size > 0)
-            data->ret = timer_read_time_str(data->buf, data->size);
-        break;
-    case TIMER_SYSCALL_DELAY_MS:
-        timer_delay_ms(data->ms);
-        break;
-    default:
-        break;
-    }
+    platform_driver_register(&timer_server);
 }
-
-/* ---- Ring-3 wrappers: callable from CPL3 through the syscall gate ---- */
-int sys_time_str(char* buf, size_t size)
-{
-    timer_syscall_data data = {0};
-    data.cmd  = TIMER_SYSCALL_GET_TIME;
-    data.buf  = buf;
-    data.size = size;
-    arch_syscall(TIMER_SYSCALL_MINOR, &data);
-    return data.ret;
-}
-
-void sys_sleep_ms(uint32_t ms)
-{
-    timer_syscall_data data = {0};
-    data.cmd = TIMER_SYSCALL_DELAY_MS;
-    data.ms  = ms;
-    arch_syscall(TIMER_SYSCALL_MINOR, &data);
-}
-
-void timer_init(void)
-{
-    platform_driver_register(&timer_driver);
-
-    /* Register timer syscall for RING3 access */
-    int ret = irq_request(&timer_scall, "timer_syscall", 100,
-                          TIMER_SYSCALL_MINOR, timer_syscall_handler, NULL);
-    if (ret == 0 && timer_scall) {
-        irq_unmask(timer_scall);
-    }
-}
-
-void timer_exit(void)
-{
-    if (timer_scall) {
-        irq_release(timer_scall);
-        timer_scall = NULL;
-    }
-
-    platform_driver_unregister(&timer_driver);
-}
-
-module_init(timer_init);
-module_exit(timer_exit);

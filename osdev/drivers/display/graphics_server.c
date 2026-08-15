@@ -1,42 +1,27 @@
 /*******************************************************************************
  *                                                                             *
- *    Graphics Driver — VGA Mode 0x13 Graphics, Pixel Operations,              *
- *                       Bitmap Font Rendering & Terminal Emulation            *
+ *    Graphics Server — user-mode VGA mode 0x13 graphics driver                *
+ *                      (pixel ops, bitmap font, terminal emulation)          *
  *                                                                             *
- *    AI-IMPLEMENTED  ·  NO HUMAN REVIEW REQUIRED                              *
+ *    Runs as a DRIVER_CLASS_USER server (ring-3 process, like the other      *
+ *    *_server drivers).  All gfx_* APIs are plain functions callable from    *
+ *    CPL0 and CPL3: the framebuffer (0xA0000) is identity-mapped with        *
+ *    PTE_USER_PAGE and RING3 threads run with IOPL=3, so ring-3 code can     *
+ *    write pixels directly and program the VGA registers directly.           *
  *                                                                             *
- *    All code in this file is safe for fully automated implementation         *
- *    by AI without manual review.  It operates on the VGA framebuffer at      *
- *    0xA0000 and VGA I/O ports (CRT, Sequencer, Graphics Controller,          *
- *    Attribute Controller, DAC) via the platform_bus abstraction.  It         *
- *    cannot:                                                                  *
- *                                                                             *
- *      • corrupt kernel memory or page tables                                 *
- *      • cause triple-faults or double-faults                                 *
- *      • interfere with interrupt routing or the IDT                          *
- *      • deadlock the scheduler or process subsystem                          *
- *                                                                             *
- *    The worst-case failure mode is a garbled screen, incorrect colors,       *
- *    or failure to switch video modes — all immediately visible and           *
- *    trivial to revert by reboot.  The text-mode terminal_driver at           *
- *    0xB8000 operates independently and is unaffected.                        *
- *                                                                             *
- *    Key differences from the text-mode terminal_driver:                      *
- *                                                                             *
- *      • Framebuffer at 0xA0000 instead of 0xB8000                            *
- *      • 320×200 pixels vs 80×25 character cells                              *
- *      • 256 colors via palette vs 16 colors via attribute byte               *
- *      • No hardware cursor — uses a software-blinking underscore             *
- *      • Text rendered via bitmap font (8×16 glyphs) instead of VGA ROM       *
- *      • Mode switch requires VGA register programming (safe I/O)             *
+ *    The server itself does not switch video modes at startup — the games    *
+ *    call gfx_switch_to_mode() on demand so the text-mode terminal server    *
+ *    (0xB8000) keeps working until then.                                      *
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/graphics_driver.h"
+#include "drivers/graphics_server.h"
 #include "sync/spinlock.h"
 #include "lib/module.h"
-#include "mm/heap.h"
 #include "lib/string.h"
+#include "drivers/log_server.h"
+#include "kernel/process.h"
+#include "regs.h"
 
 /************************************************************************/
 /*                        Internal Definitions                          */
@@ -86,6 +71,27 @@ static struct graphics_device gfx_dev = {
     .curr_row = 0,
     .curr_fg  = GFX_LIGHT_GREY,
     .curr_bg  = GFX_BLACK,
+};
+
+/* ---- RING3-safe VGA I/O -----------------------------------------------
+ * The platform bus ops are never attached to a DRIVER_CLASS_USER device
+ * (probe() is not called for user drivers), so the graphics server uses
+ * its own wrappers around the raw in/out instructions.  RING3 may execute
+ * them directly because user threads run with IOPL=3 (see task.c). */
+static int gfx_out8(uint16_t port, uint8_t data)
+{
+    arch_outb(port, data);
+    return 0;
+}
+
+static int gfx_in8(uint16_t port)
+{
+    return (int)arch_inb(port);
+}
+
+static struct platform_bus_ops gfx_bus_ops = {
+    .in_port8  = gfx_in8,
+    .out_port8 = gfx_out8,
 };
 
 /************************************************************************/
@@ -417,70 +423,83 @@ static void vga_set_mode_0x13(struct platform_bus_ops* ops)
     }
 }
 
-/************************************************************************/
-/*                      Driver Probe / Remove                           */
-/************************************************************************/
+/* ======================= user-mode graphics server =================== */
 
-static int graphics_probe(struct device* dev)
+static void gfx_server_loop(void)
 {
-    struct platform_device* pdev = to_platform_device(dev);
-    gfx_dev.bus_ops = platform_device_get_ops(pdev);
-
-    gfx_dev.lock = spinlock_alloc();
-    if (!gfx_dev.lock)
-        return E_LIMIT;
-
-    gfx_dev.fb = (uint8_t*)GFX_BUF_ADDR;
-
-    /* Switch to graphics mode */
-    vga_set_mode_0x13(gfx_dev.bus_ops);
-
-    /* Clear the screen */
-    gfx_clear(GFX_GREEN);
-
-    gfx_write("hello world", 0, 0, GFX_WHITE, GFX_GREEN);
-
-    return 0;
+    /* All gfx_* APIs are plain functions that draw directly to the VGA
+     * framebuffer / registers (RING3 can access 0xA0000 and run in/out
+     * thanks to IOPL=3), so this server thread simply idles, keeping the
+     * server process alive.  Games switch to graphics mode on demand via
+     * gfx_switch_to_mode(). */
+    for (;;)
+        thread_yield();
 }
 
-static int graphics_remove(struct device* dev)
+int gfx_server_start(struct device* dev)
 {
     (void)dev;
 
-    /* Return to text mode: set mode 0x03 (80×25 text) via BIOS-compatible
-     * register programming.  A full VGA mode-3 register table would go here.
-     * For now, the simplest approach is to let the next boot reset the card. */
-
-    if (gfx_dev.lock) {
-        spinlock_release(gfx_dev.lock);
-        gfx_dev.lock = NULL;
+    /* DRIVER_CLASS_USER drivers never get probe() called, so attach the
+     * RING3-safe VGA I/O wrapper and allocate the lock here instead. */
+    if (!gfx_dev.lock) {
+        gfx_dev.lock = spinlock_alloc();
+        if (!gfx_dev.lock)
+            return E_LIMIT;
     }
+    gfx_dev.bus_ops = &gfx_bus_ops;
+    gfx_dev.fb = (uint8_t*)GFX_BUF_ADDR;
 
+    LOG("graphics_server started");
+
+    gfx_server_loop();   /* never returns */
     return 0;
 }
 
-static struct driver graphics_driver = {
-    .type   = "graphics",
-    .probe  = graphics_probe,
-    .remove = graphics_remove,
+int gfx_server_stop(struct device* dev)
+{
+    (void)dev;
+    gfx_dev.bus_ops = NULL;
+    return 0;
+}
+
+static struct driver graphics_server = {
+    .class = DRIVER_CLASS_USER,
+    .type  = "graphics",
+    .start = gfx_server_start,
+    .stop  = gfx_server_stop,
 };
+
+/* Register the user-mode graphics server.  Called from init_thread().
+ *
+ * The lock and RING3-safe VGA I/O wrapper are set up HERE (synchronously,
+ * before platform_driver_register) so that any game process created right
+ * after — which may be scheduled before the graphics server thread — finds
+ * a working bus_ops when it calls gfx_switch_to_mode().  gfx_server_start()
+ * then only keeps the server process alive. */
+void gfx_server_init(void)
+{
+    if (!gfx_dev.lock) {
+        gfx_dev.lock = spinlock_alloc();
+        if (!gfx_dev.lock)
+            return;
+    }
+    gfx_dev.bus_ops = &gfx_bus_ops;
+    gfx_dev.fb = (uint8_t*)GFX_BUF_ADDR;
+
+    platform_driver_register(&graphics_server);
+}
 
 /************************************************************************/
 /*                    Graphics Public API                               */
 /************************************************************************/
 
-void gfx_init(void)
-{
-    platform_driver_register(&graphics_driver);
-}
-
-void gfx_exit(void)
-{
-    platform_driver_unregister(&graphics_driver);
-}
-
 void gfx_switch_to_mode(void)
 {
+    /* Safe to call before the graphics server has started: lazily attach
+     * the RING3-safe VGA I/O wrapper so the mode switch always works. */
+    if (!gfx_dev.bus_ops)
+        gfx_dev.bus_ops = &gfx_bus_ops;
     vga_set_mode_0x13(gfx_dev.bus_ops);
     gfx_clear(GFX_BLACK);
 }
@@ -662,20 +681,3 @@ void gfx_set_cursor(size_t col, size_t row)
     gfx_dev.curr_col = col;
     gfx_dev.curr_row = row;
 }
-
-/************************************************************************/
-/*                      Module Init / Exit                              */
-/************************************************************************/
-
-void graphics_module_init(void)
-{
-    platform_driver_register(&graphics_driver);
-}
-
-void graphics_module_exit(void)
-{
-    platform_driver_unregister(&graphics_driver);
-}
-
-// module_init(graphics_module_init);
-// module_exit(graphics_module_exit);
