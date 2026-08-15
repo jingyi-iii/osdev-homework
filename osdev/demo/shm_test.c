@@ -2,8 +2,8 @@
  *                                                                             *
  *    SHM Test — verify shm_share / shm_unshare really share data             *
  *                                                                             *
- *    Uses two KERNEL processes (kernel processes share the kernel address     *
- *    space, so plain globals can be used for handshaking).  The source        *
+ *    Uses two USER processes.  All processes (KERNEL and USER) share the      *
+ *    same address space, so plain globals can be used for handshaking.  The   *
  *    process allocates a buffer and fills it with a known pattern, then       *
  *    shares it into the target process via shm_share().  The target reads     *
  *    the pattern through the shared VA returned by shm_share(), writes a      *
@@ -128,8 +128,8 @@ void shm_test_main(void)
 
     shm_source_size = SHM_TEST_SIZE;
 
-    /* 2. spawn the target process (KERNEL: shares the address space) */
-    proc_create(PROC_PRIV_KERNEL, shm_target_main, 0);
+    /* 2. spawn the target process (USER: all processes share the address space) */
+    proc_create(PROC_PRIV_USER, shm_target_main, 0);
     while (!shm_target_ready)
         thread_yield();
 
@@ -279,7 +279,7 @@ void shm_stress_main(void)
     }
     shm_stress_size = SHM_STRESS_PAGES * PAGE_SIZE;
 
-    proc_create(PROC_PRIV_KERNEL, shm_stress_target_main, 0);
+    proc_create(PROC_PRIV_USER, shm_stress_target_main, 0);
     while (!shm_stress_ready)
         thread_yield();
 

@@ -19,11 +19,11 @@ void init_thread(void)
      terminal_init();
      timer_server_init();
      log_server_init();
-     proc_create(PROC_PRIV_KERNEL, process_test_main_thread, 0);
+     proc_create(PROC_PRIV_USER, process_test_main_thread, 0);
 
      // /* case2: game mode */
      // gfx_server_init();
-     // proc_create(PROC_PRIV_KERNEL, game_proc_main_thread, 0);
+     // proc_create(PROC_PRIV_USER, game_proc_main_thread, 0);
 
      proc_exit(proc_get_pid());
 }

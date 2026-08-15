@@ -133,6 +133,15 @@ static i32 t_create(pcb* parent, task_priv priv, task_entry_t entry, void* param
 
     if (!thread_run) {    // the first thread
         thread_run = thread;
+        /*
+         * The very first thread is switched to directly (no scheduler
+         * round-trip), so its process's page directory must be loaded here.
+         * Without this, a ring-3 first thread faults on its user stack: the
+         * user stack is mapped only in the process's private page directory,
+         * not in the kernel master PD, so on the kernel CR3 it is a
+         * supervisor region that ring 3 cannot write -> #PF.
+         */
+        vmm_switch(&parent->vcb);
         arch_task_restore_context(&thread->context);
     }
 

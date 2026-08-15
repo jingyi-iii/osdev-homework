@@ -96,6 +96,6 @@ void kernel_start(void)
      * Phase 3: Rest of the kernel subsystems.
      */
     kernel_do_initcalls();
-    proc_create(PROC_PRIV_KERNEL, init_thread, 0);
+    proc_create(PROC_PRIV_USER, init_thread, 0);
 }
 

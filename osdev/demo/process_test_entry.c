@@ -133,9 +133,9 @@ static void run_all_test_suites(proc_priv priv)
     run_test_suite("Mailbox API Test Suite",     mailbox_api_test_main, priv);
     run_test_suite("Red-Black Tree Test Suite",  rbtree_test_main, priv);
     run_test_suite("Mixed Scheduling Test Suite", sched_mix_test_main, priv);
-    /* SHM tests need the shared kernel address space for handshaking */
-    run_test_suite("SHM Test Suite", shm_test_main, PROC_PRIV_KERNEL);
-    run_test_suite("SHM Stress Test", shm_stress_main, PROC_PRIV_KERNEL);
+    /* SHM tests handshake via globals — all processes share the address space */
+    run_test_suite("SHM Test Suite", shm_test_main, PROC_PRIV_USER);
+    run_test_suite("SHM Stress Test", shm_stress_main, PROC_PRIV_USER);
 
     terminal_write("\n========== ALL TEST SUITES COMPLETE ==========\n\n");
 }
@@ -171,10 +171,10 @@ void process_test_main_thread(void)
         } else if (menu_choice == 5) {
             priv = menu_ask_priv("Mixed Scheduling Test Suite");
         } else if (menu_choice == 7) {
-            /* SHM tests need the shared kernel address space for handshaking */
-            priv = PROC_PRIV_KERNEL;
+            /* SHM tests handshake via globals — all processes share the address space */
+            priv = PROC_PRIV_USER;
         } else if (menu_choice == 8) {
-            priv = PROC_PRIV_KERNEL;
+            priv = PROC_PRIV_USER;
         } else {
             priv = menu_ask_priv("Red-Black Tree Test Suite");
         }
