@@ -1,45 +1,47 @@
 #include "drivers/platform_bus.h"
 #include "drivers/platform_devices.h"
-#include "lib/module.h"
 #include "lib/string.h"
 #include "sync/spinlock.h"
 #include <stddef.h>
 
-static int in8(uint16_t port)
+static DECLARE_HEAD_NODE(servers);
+static spinlock* servers_lock = 0;
+
+static int in8(u16 port)
 {
-    uint8_t data = 0;
+    u8 data = 0;
     __asm__ volatile("inb %1, %0" : "=a"(data) : "dN"(port));
 
     return data;
 }
 
-static int in16(uint16_t port)
+static int in16(u16 port)
 {
-    uint16_t data = 0;
+    u16 data = 0;
     __asm__ volatile("inw %1, %0" : "=a"(data) : "dN"(port));
     return data;
 }
 
-static int in32(uint16_t port)
+static int in32(u16 port)
 {
-    uint32_t data = 0;
+    u32 data = 0;
     __asm__ volatile("inl %1, %0" : "=a"(data) : "dN"(port));
     return data;
 }
 
-static int out8(uint16_t port, uint8_t data)
+static int out8(u16 port, u8 data)
 {
     __asm__ volatile("outb %0, %1" : : "a"(data), "dN"(port));
     return 0;
 }
 
-static int out16(uint16_t port, uint16_t data)
+static int out16(u16 port, u16 data)
 {
     __asm__ volatile("outw %0, %1" : : "a"(data), "dN"(port));
     return 0;
 }
 
-static int out32(uint16_t port, uint32_t data)
+static int out32(u16 port, u32 data)
 {
     __asm__ volatile("outl %0, %1" : : "a"(data), "dN"(port));
     return 0;
@@ -109,11 +111,17 @@ static int platform_probe(struct driver *drv, struct device *dev)
             return E_DRV_PROBE;
         }
 
-        /* dev_data must be set BEFORE granting: grant reads the pid from
-         * dev->dev_data (see platform_device_grant_capabilities). */
-        dev->dev_data = (int*)kmalloc(sizeof(int));
-        if (dev->dev_data)
-            *((int*)dev->dev_data) = pid;
+        get_platform_device(dev)->server_pid = pid;
+
+        /* Register the server synchronously on the parent side, right after
+         * server_pid is stored, so platform_server_lookup() is immediately
+         * consistent (no async window where the child thread has not run
+         * yet and the pid would be stale/zero).  servers_lock is allocated
+         * in platform_bus_init() (CPL0, single-threaded).  Lock order here:
+         * bus->splock (held by the caller) -> servers_lock. */
+        spinlock_lock(servers_lock);
+        list_add(&get_platform_device(dev)->this_node, &servers);
+        spinlock_unlock(servers_lock);
 
         platform_device_grant_capabilities(get_platform_device(dev));
     } else {
@@ -135,6 +143,15 @@ static int platform_remove(struct driver *drv, struct device *dev)
         if (drv->stop) {
             drv->stop(dev);
         }
+
+        /* Drop the server entry so a stale pid is never returned by
+         * platform_server_lookup().  Safe: remove is only reached for
+         * bound devices, and probe always added the entry. */
+        if (servers_lock) {
+            spinlock_lock(servers_lock);
+            list_del(&get_platform_device(dev)->this_node);
+            spinlock_unlock(servers_lock);
+        }
     }
 
     return 0;
@@ -151,6 +168,7 @@ void platform_bus_init(void)
     platform_bus.remove = platform_remove;
     platform_bus.bus_ops = (void*)&ops;
     platform_bus.splock = spinlock_alloc();
+    servers_lock = spinlock_alloc();
 }
 
 int platform_driver_register(struct driver* drv)
@@ -187,6 +205,27 @@ int platform_device_unregister(struct device* dev)
     return bus_remove_device(&platform_bus, dev);
 }
 
+int platform_server_lookup(const char* name)
+{
+    if (!name)
+        return E_INVAL;
+    if (!servers_lock)
+        return E_IDLE;
+
+    spinlock_lock(servers_lock);
+    list_for_each(node, &servers) {
+        platform_device* dev = list_entry(node, platform_device, this_node);
+        if (!dev || strcmp(name, dev->dev.name))
+            continue;
+
+        spinlock_unlock(servers_lock);
+        return dev->server_pid;
+    }
+    spinlock_unlock(servers_lock);
+
+    return E_NOTFOUND;
+}
+
 /* ================================================================
  * Platform Device Helpers (merged from platform_device.c)
  * ================================================================ */
@@ -215,12 +254,4 @@ struct platform_bus_ops* platform_device_get_ops(struct platform_device* dev)
         return NULL;
 
     return (struct platform_bus_ops*)dev->dev.bus->bus_ops;
-}
-
-struct platform_device* to_platform_device(struct device* dev)
-{
-    if (!dev)
-        return NULL;
-
-    return container_of(dev, struct platform_device, dev);
 }

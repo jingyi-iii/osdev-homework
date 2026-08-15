@@ -1,5 +1,4 @@
 #include "sync/semaphore.h"
-#include "kernel/process.h"
 #include "lib/module.h"
 #include "drivers/log_server.h"
 

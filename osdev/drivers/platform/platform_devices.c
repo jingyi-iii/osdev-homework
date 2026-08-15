@@ -103,7 +103,7 @@ void platform_devices_init(void)
 }
 
 #define PLATFORM_DEV_OF(ptr, type, member) \
-    ((type *)((char *)(ptr)-(uintptr_t)(&((type *)0)->member)))
+    ((type *)((char *)(ptr)-(uptr)(&((type *)0)->member)))
 
 struct platform_device* get_platform_device(struct device* pdev)
 {
@@ -117,10 +117,10 @@ int platform_device_grant_capabilities(struct platform_device* dev)
 
     for (int i = 0; i < dev->num_res; i++) {
         struct platform_resource* res = &dev->resources[i];
-        if (!res || !dev->dev.dev_data)
+        if (!res || !dev->server_pid)
             continue;
 
-        pcb* proc = get_process_by_pid(*((int*)dev->dev.dev_data));
+        pcb* proc = get_process_by_pid(dev->server_pid);
         if (!proc)
             continue;
 

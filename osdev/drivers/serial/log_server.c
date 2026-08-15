@@ -9,7 +9,7 @@
 
 struct log_device {
     spinlock* lock;
-    uint16_t io_port;
+    u16 io_port;
     int ready;
 };
 
@@ -20,7 +20,7 @@ static struct log_device log_device = {
 };
 
 /* ---- serial port init (raw I/O, no device probing needed) ------------ */
-static void serial_port_init(uint16_t port)
+static void serial_port_init(u16 port)
 {
     arch_outb(port + 1, 0x00);    /* Disable all interrupts          */
     arch_outb(port + 3, 0x80);    /* Enable DLAB (baud rate divisor) */
@@ -43,7 +43,7 @@ static void log_write_direct(const char* buf, size_t size)
     for (size_t i = 0; i < size; i++) {
         while ((arch_inb(log_device.io_port + SERIAL_LSR_OFF) & LSR_THR_EMPTY) == 0)
             ;
-        arch_outb(log_device.io_port, (uint8_t)buf[i]);
+        arch_outb(log_device.io_port, (u8)buf[i]);
     }
     spinlock_unlock(log_device.lock);
 }

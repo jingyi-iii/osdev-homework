@@ -2,7 +2,7 @@
 #define MAILBOX_H
 
 #include <stddef.h>
-#include <stdint.h>
+#include "lib/types.h"
 #include "lib/list.h"
 #include "sync/spinlock.h"
 #include "kernel/process.h"
@@ -63,7 +63,7 @@ enum mailbox_ctrl_cmd {
 };
 
 typedef struct mailbox_ctrl_config {
-    uint8_t     cmd;
+    u8     cmd;
     mail*       m;          /* in: mail to send / out: received mail from listen / alloc_mail */
     mailbox*    mb;         /* in: target mailbox / out: allocated mailbox */
     mail_handler handler;   /* in: handler function */

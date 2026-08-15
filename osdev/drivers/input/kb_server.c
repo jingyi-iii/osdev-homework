@@ -23,7 +23,6 @@
 #include "lib/string.h"
 #include "mm/heap.h"
 #include "drivers/log_server.h"
-#include "lib/module.h"
 #include "kernel/process.h"
 #include "ipc/mailbox.h"
 
@@ -164,7 +163,7 @@ typedef struct kbuf {
     char *head;
     char *tail;
     char buf[MAX_KB_SIZE];
-    uint32_t count;
+    u32 count;
 } kbuf;
 
 struct kb_listener {
@@ -220,14 +219,14 @@ static int kbuf_is_empty(const kbuf* kb)
     return kb->count == 0;
 }
 
-static uint8_t parse(uint8_t code)
+static u8 parse(u8 code)
 {
     static int lshift = 0;
     static int rshift = 0;
     static int isCapsLocked = 0;
     static int e0_prefix = 0;
     int isPressed = 0;
-    uint8_t key = 0;
+    u8 key = 0;
 
     /* Handle E0 / E1 extended-key prefixes */
     switch (code) {
@@ -309,8 +308,8 @@ static void kb_server_loop(void)
         }
         mailbox_release_mail(m);
 
-        uint8_t scancode = arch_inb(0x60);
-        uint8_t key = parse(scancode);
+        u8 scancode = arch_inb(0x60);
+        u8 key = parse(scancode);
         if (key)
             kbuf_add(&kb_device.buf, (char)key);
 

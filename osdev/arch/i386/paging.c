@@ -23,14 +23,14 @@
 /* ------------------------------------------------------------------ */
 /* Extern: linker-defined PMM bitmap section                          */
 /* ------------------------------------------------------------------ */
-extern uint8_t __pmm_bitmap_start[];   /* defined in linker.ld */
+extern u8 __pmm_bitmap_start[];   /* defined in linker.ld */
 
-static pde_t pdes[1024] __attribute__((aligned(PAGE_SIZE)));
+static pde pdes[1024] __attribute__((aligned(PAGE_SIZE)));
 static spinlock* paging_lock;
 
 /* The kernel's master page directory (physical address).
  * All user processes clone kernel-space entries from here. */
-static uint32_t kernel_pdir_phys = 0;
+static u32 kernel_pdir_phys = 0;
 
 /* ------------------------------------------------------------------ */
 /* Paging-structures pool                                              */
@@ -42,19 +42,19 @@ static uint32_t kernel_pdir_phys = 0;
 /* that the PMM never hands out — the free pool starts after           */
 /* __page_table_end.                                                   */
 /* ------------------------------------------------------------------ */
-extern uint32_t __page_table_base[];
-extern uint32_t __page_table_end[];
+extern u32 __page_table_base[];
+extern u32 __page_table_end[];
 
-#define VMM_PDE_ALLOC_BASE  ((uint32_t)__page_table_base)
+#define VMM_PDE_ALLOC_BASE  ((u32)__page_table_base)
 #define VMM_PDE_ALLOC_SIZE  (8u * 1024 * 1024)
-#define VMM_PDE_ALLOC_END   ((uint32_t)__page_table_end)
+#define VMM_PDE_ALLOC_END   ((u32)__page_table_end)
 
 /* one 4 KB slot per page table / directory; 8 MB pool => 2048 slots */
 #define PAGING_POOL_SLOTS (VMM_PDE_ALLOC_SIZE / PAGE_SIZE)
 
 static spinlock* paging_pool_lock = 0;
 /* one bit per slot: 1 = in use */
-static uint32_t paging_pool_used[(PAGING_POOL_SLOTS + 31) / 32];
+static u32 paging_pool_used[(PAGING_POOL_SLOTS + 31) / 32];
 
 void* arch_paging_pool_alloc(void)
 {
@@ -65,7 +65,7 @@ void* arch_paging_pool_alloc(void)
     for (size_t i = 0; i < PAGING_POOL_SLOTS; i++) {
         if (!(paging_pool_used[i / 32] & (1u << (i % 32)))) {
             paging_pool_used[i / 32] |= (1u << (i % 32));
-            uint32_t pa = VMM_PDE_ALLOC_BASE + i * PAGE_SIZE;
+            u32 pa = VMM_PDE_ALLOC_BASE + i * PAGE_SIZE;
             memset((void*)pa, 0, PAGE_SIZE);
             spinlock_unlock(paging_pool_lock);
             return (void*)pa;
@@ -77,7 +77,7 @@ void* arch_paging_pool_alloc(void)
     return 0;
 }
 
-void arch_paging_pool_free(uint32_t pa)
+void arch_paging_pool_free(u32 pa)
 {
     if (!paging_pool_lock)
         return;
@@ -93,30 +93,30 @@ void arch_paging_pool_free(uint32_t pa)
     spinlock_unlock(paging_pool_lock);
 }
 
-static inline pde_t* pdir_of(uint32_t pdir_phys)
+static inline pde* pdir_of(u32 pdir_phys)
 {
-    return (pde_t*)pdir_phys;
+    return (pde*)pdir_phys;
 }
 
-static inline pte_t* ptbl_of(uint32_t ptbl_phys)
+static inline pte* ptbl_of(u32 ptbl_phys)
 {
-    return (pte_t*)ptbl_phys;
+    return (pte*)ptbl_phys;
 }
 
-static inline pte_t* ptbl_of_pde(pde_t* pde)
+static inline pte* ptbl_of_pde(pde* pde)
 {
-    return (pte_t*)(pde->paddr << 12);
+    return (pte*)(pde->paddr << 12);
 }
 
 /* Invalidate a single TLB entry */
-void arch_tlb_invlpg(uint32_t vaddr)
+void arch_tlb_invlpg(u32 vaddr)
 {
     __asm__ __volatile__("invlpg (%0)" : : "r"(vaddr) : "memory");
 }
 
-void arch_map_4mb(void* cr3, void* va, void* pa, uint32_t flags)
+void arch_map_4mb(void* cr3, void* va, void* pa, u32 flags)
 {
-    pde_t* pdes = (pde_t*)cr3;
+    pde* pdes = (pde*)cr3;
     size_t pde_index = PD_INDEX(va);
 
     if (pde_index >= 1024) {
@@ -143,15 +143,15 @@ void arch_map_4mb(void* cr3, void* va, void* pa, uint32_t flags)
     pdes[pde_index].pwt         = (flags & PTE_PWT)      ? 1 : 0;
     pdes[pde_index].pcd         = (flags & PTE_PCD)      ? 1 : 0;
     pdes[pde_index].global      = (flags & PTE_GLOBAL)   ? 1 : 0;
-    pdes[pde_index].paddr       = ((uint32_t)pa) >> 12;
+    pdes[pde_index].paddr       = ((u32)pa) >> 12;
     spinlock_unlock(paging_lock);
 
-    arch_tlb_invlpg((uint32_t)va);
+    arch_tlb_invlpg((u32)va);
 }
 
 void arch_unmap_4mb(void* cr3, void* va)
 {
-    pde_t* pdes = (pde_t*)cr3;
+    pde* pdes = (pde*)cr3;
     size_t pde_index = PD_INDEX(va);
 
     if (pde_index >= 1024) {
@@ -168,7 +168,7 @@ void arch_unmap_4mb(void* cr3, void* va)
     pdes[pde_index].raw = 0;
     spinlock_unlock(paging_lock);
 
-    arch_tlb_invlpg((uint32_t)va);
+    arch_tlb_invlpg((u32)va);
 }
 
 /*
@@ -181,56 +181,56 @@ void arch_unmap_4mb(void* cr3, void* va)
  * Caller MUST hold paging_lock.
  * Returns 0 on success, negative on failure.
  */
-static inline int split_4mb_pde(pde_t* pde, uint32_t user_accessible)
+static inline int split_4mb_pde(pde* p, u32 user_accessible)
 {
-    pte_t* ptl = 0;
+    pte* ptl = 0;
 
-    if (!pde) {
+    if (!p) {
         LOG("split_4mb_pde: invalid pde");
         return -1;
     }
 
-    if (!pde->present || !pde->page_size) {
+    if (!p->present || !p->page_size) {
         LOG("split_4mb_pde: PDE is not a 4MB page");
         return -1;
     }
 
-    ptl = (pte_t*)arch_paging_pool_alloc();
+    ptl = (pte*)arch_paging_pool_alloc();
     if (!ptl) {
         LOG("split_4mb_pde: failed to allocate page table");
         return E_NOMEM;
     }
 
-    if (user_accessible && pde->user == 0)
-        pde->user = 1;
+    if (user_accessible && p->user == 0)
+        p->user = 1;
 
     for (size_t i = 0; i < 1024; i++) {
         ptl[i].raw         = 0;
-        ptl[i].present     = pde->present;
-        ptl[i].rw          = pde->rw;
-        ptl[i].user        = pde->user;
-        ptl[i].pwt         = pde->pwt;
-        ptl[i].pcd         = pde->pcd;
-        ptl[i].global      = pde->global;
-        ptl[i].paddr       = pde->paddr + i;
+        ptl[i].present     = p->present;
+        ptl[i].rw          = p->rw;
+        ptl[i].user        = p->user;
+        ptl[i].pwt         = p->pwt;
+        ptl[i].pcd         = p->pcd;
+        ptl[i].global      = p->global;
+        ptl[i].paddr       = p->paddr + i;
     }
 
     {
-        pde_t new_pde;
-        new_pde.raw = pde->raw;
+        pde new_pde;
+        new_pde.raw = p->raw;
         new_pde.present = 1;
         new_pde.rw = 1;         /* writable PTEs take effect */
         new_pde.page_size = 0;  /* 4KB page table */
-        new_pde.paddr = (uint32_t)ptl >> 12;
-        pde->raw = new_pde.raw;
+        new_pde.paddr = (u32)ptl >> 12;
+        p->raw = new_pde.raw;
     }
 
     return 0;
 }
 
-int arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
+int arch_map_4kb(void* cr3, void* va, void* pa, u32 flags)
 {
-    pde_t* pdes = (pde_t*)cr3;
+    pde* pdes = (pde*)cr3;
     size_t pde_index = PD_INDEX(va);
     size_t pte_index = PT_INDEX(va);
 
@@ -260,7 +260,7 @@ int arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
     }
 
     if (!pdes[pde_index].present) {
-        uint32_t pt_pa = (uint32_t)arch_paging_pool_alloc();
+        u32 pt_pa = (u32)arch_paging_pool_alloc();
         if (!pt_pa) {
             LOG("arch_map_4kb: failed to allocate page table for vaddr 0x%x", va);
             spinlock_unlock(paging_lock);
@@ -276,21 +276,21 @@ int arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
         memset((void*)pt_pa, 0, PAGE_SIZE);
     }
 
-    pte_t* ptbl = ptbl_of_pde(&pdes[pde_index]);
+    pte* ptbl = ptbl_of_pde(&pdes[pde_index]);
     ptbl[pte_index].raw         = 0;
     ptbl[pte_index].present     = (flags & PTE_PRESENT) ? 1 : 0;
     ptbl[pte_index].rw          = (flags & PTE_RW)      ? 1 : 0;
     ptbl[pte_index].user        = (flags & PTE_USER)    ? 1 : 0;
-    ptbl[pte_index].paddr       = ((uint32_t)pa) >> 12;
+    ptbl[pte_index].paddr       = ((u32)pa) >> 12;
     spinlock_unlock(paging_lock);
 
-    arch_tlb_invlpg((uint32_t)va);
+    arch_tlb_invlpg((u32)va);
     return 0;
 }
 
 void arch_unmap_4kb(void* cr3, void* va)
 {
-    pde_t* pdes = (pde_t*)cr3;
+    pde* pdes = (pde*)cr3;
     size_t pde_index = PD_INDEX(va);
     size_t pte_index = PT_INDEX(va);
 
@@ -310,7 +310,7 @@ void arch_unmap_4kb(void* cr3, void* va)
         return;
     }
 
-    pte_t* ptbl = ptbl_of_pde(&pdes[pde_index]);
+    pte* ptbl = ptbl_of_pde(&pdes[pde_index]);
     if (!ptbl[pte_index].present) {
         spinlock_unlock(paging_lock);
         return;
@@ -320,10 +320,10 @@ void arch_unmap_4kb(void* cr3, void* va)
     ptbl[pte_index].raw = 0;
     spinlock_unlock(paging_lock);
 
-    arch_tlb_invlpg((uint32_t)va);
+    arch_tlb_invlpg((u32)va);
 }
 
-void arch_map_4mb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t flags)
+void arch_map_4mb_range(void* cr3, u32 start_pa, u32 end_pa, u32 flags)
 {
     if (!cr3) {
         LOG("arch_map_4mb_range: invalid cr3");
@@ -335,12 +335,12 @@ void arch_map_4mb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t 
         return;
     }
 
-    for (uint32_t pa = start_pa; pa < end_pa; pa += 0x400000) {
+    for (u32 pa = start_pa; pa < end_pa; pa += 0x400000) {
         arch_map_4mb(cr3, (void*)pa, (void*)pa, flags);
     }
 }
 
-void arch_map_4kb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t flags)
+void arch_map_4kb_range(void* cr3, u32 start_pa, u32 end_pa, u32 flags)
 {
     if (!cr3) {
         LOG("arch_map_4kb_range: invalid cr3");
@@ -352,7 +352,7 @@ void arch_map_4kb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t 
         return;
     }
 
-    for (uint32_t pa = start_pa; pa < end_pa; pa += PAGE_SIZE) {
+    for (u32 pa = start_pa; pa < end_pa; pa += PAGE_SIZE) {
         arch_map_4kb(cr3, (void*)pa, (void*)pa, flags);
     }
 }
@@ -360,11 +360,11 @@ void arch_map_4kb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t 
 /* ------------------------------------------------------------------ */
 /* Public entry point                                                  */
 /* ------------------------------------------------------------------ */
-void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
+void arch_paging_init(u32 total_memory, u32 reserved_end)
 {
-    uint32_t total_4mb_chunks;
-    uint32_t hi_pd_idx;
-    uint32_t i;
+    u32 total_4mb_chunks;
+    u32 hi_pd_idx;
+    u32 i;
     (void)reserved_end;  /* currently unused — the paging pool sits below
                           * the PMM bitmap, so pmm_init() keeps it reserved */
 
@@ -381,7 +381,7 @@ void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
     }
 
     LOG("arch_paging_init: total_memory=%u MB, bitmap=0x%x",
-         total_memory >> 20, (uint32_t)__pmm_bitmap_start);
+         total_memory >> 20, (u32)__pmm_bitmap_start);
 
     /* Step 1: Build the initial page directory.
      * Use PTE_USER_PAGE so that user-mode (ring-3) threads can
@@ -391,7 +391,7 @@ void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
     arch_map_4mb_range((void*)pdes, 0x0, 0x1000000, PTE_USER_PAGE);  /* identity map first 16MB */
     arch_map_4mb((void*)pdes, (void*)0xC0000000, (void*)0x0, PTE_USER_PAGE);
 
-    for (uint32_t addr = 0x1000000; addr < total_memory; addr += 0x400000) {
+    for (u32 addr = 0x1000000; addr < total_memory; addr += 0x400000) {
         if (addr == 0xC0000000)
             continue;  /* skip the higher-half slot */
         arch_map_4mb((void*)pdes, (void*)addr, (void*)addr, PTE_KERNEL);
@@ -407,12 +407,12 @@ void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
     LOG("Paging: PSE enabled (4MB pages)");
 
     /* Step 3: Enable paging */
-    arch_load_cr3((uint32_t)pdes);
+    arch_load_cr3((u32)pdes);
     arch_enable_paging();
-    LOG("Paging: enabled (CR0.PG=1), CR3=0x%x", (uint32_t)pdes);
+    LOG("Paging: enabled (CR0.PG=1), CR3=0x%x", (u32)pdes);
 
     /* Step 4: Register the kernel master PD */
-    kernel_pdir_phys = (uint32_t)pdes;
+    kernel_pdir_phys = (u32)pdes;
 
     /* Step 5: Initialise the physical memory manager.  The paging pool
      * sits below the PMM bitmap, so pmm_init() keeps it reserved and
@@ -423,15 +423,15 @@ void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
     LOG("Paging: bootstrap complete, %u pages free", pmm_get_free_page_count());
 }
 
-void arch_load_cr3(uint32_t pdir_phys)
+void arch_load_cr3(u32 pdir_phys)
 {
     /* Writing CR3 flushes the TLB for all non-global entries */
     __asm__ __volatile__("mov %0, %%cr3" : : "r"(pdir_phys) : "memory");
 }
 
-uint32_t arch_get_cr3(void)
+u32 arch_get_cr3(void)
 {
-    uint32_t cr3 = 0;
+    u32 cr3 = 0;
     __asm__ __volatile__("mov %%cr3, %0" : "=r"(cr3));
     return cr3;
 }
@@ -453,15 +453,15 @@ void arch_enable_paging(void)
     );
 }
 
-uint32_t arch_clone_kernel_pde(uint32_t pde_pa, int user_accessible)
+u32 arch_clone_kernel_pde(u32 pde_pa, int user_accessible)
 {
     if (!pde_pa) {
         LOG("VMM: failed to allocate page for PDE clone");
         return 0;
     }
 
-    pde_t* new_pde = (pde_t*)pde_pa;
-    pde_t* kern_pde = (pde_t*)kernel_pdir_phys;
+    pde* new_pde = (pde*)pde_pa;
+    pde* kern_pde = (pde*)kernel_pdir_phys;
 
     /*
      * Clone ALL PDEs from the kernel master PD, including the low
@@ -473,24 +473,24 @@ uint32_t arch_clone_kernel_pde(uint32_t pde_pa, int user_accessible)
      * processes therefore live in the same address space.
      */
     (void)user_accessible;
-    for (uint32_t i = 0; i < 1024; i++)
+    for (u32 i = 0; i < 1024; i++)
         new_pde[i].raw = kern_pde[i].raw;
 
     return pde_pa;
 }
 
-void arch_destroy_address_space(uint32_t pdir_phys)
+void arch_destroy_address_space(u32 pdir_phys)
 {
     if (!pdir_phys || pdir_phys == kernel_pdir_phys) {
         LOG("VMM: cannot destroy kernel address space");
         return;
     }
 
-    pde_t* pdes = pdir_of(pdir_phys);
-    pde_t* kern_pdes = pdir_of(kernel_pdir_phys);
+    pde* pdes = pdir_of(pdir_phys);
+    pde* kern_pdes = pdir_of(kernel_pdir_phys);
 
     /* only release user pages */
-    for (uint32_t i = 0; i < 768; i++) {
+    for (u32 i = 0; i < 768; i++) {
         if (!pdes[i].present)
             continue;
         if (pdes[i].paddr == kern_pdes[i].paddr)

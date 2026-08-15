@@ -151,11 +151,11 @@ typedef struct {
     int thread_id;
     int iterations;
     int *shared_counter;
-} thread_arg_t;
+} thread_arg;
 
 // Thread function for concurrent testing
 void* thread_func(void *arg) {
-    thread_arg_t *targ = (thread_arg_t*)arg;
+    thread_arg *targ = (thread_arg*)arg;
 
     for (int i = 0; i < targ->iterations; i++) {
         // Lock and increment counter
@@ -180,7 +180,7 @@ void test_concurrent_access(void) {
     assert(lock != NULL);
 
     pthread_t threads[NUM_THREADS];
-    thread_arg_t thread_args[NUM_THREADS];
+    thread_arg thread_args[NUM_THREADS];
     int shared_counter = 0;
 
     // Create threads
@@ -208,7 +208,7 @@ void test_concurrent_access(void) {
 
 // Thread function for trylock testing
 void* trylock_thread_func(void *arg) {
-    thread_arg_t *targ = (thread_arg_t*)arg;
+    thread_arg *targ = (thread_arg*)arg;
     int success_count = 0;
 
     for (int i = 0; i < targ->iterations; i++) {
@@ -232,7 +232,7 @@ void test_concurrent_trylock(void) {
     assert(lock != NULL);
 
     pthread_t threads[NUM_THREADS];
-    thread_arg_t thread_args[NUM_THREADS];
+    thread_arg thread_args[NUM_THREADS];
     int shared_counter = 0;
     int total_successes = 0;
 
@@ -307,7 +307,7 @@ void test_multiple_locks_concurrent(void) {
     // Create threads that use different locks
     for (int i = 0; i < NUM_THREADS; i++) {
         int lock_index = i % 5;
-        thread_arg_t *arg = malloc(sizeof(thread_arg_t));
+        thread_arg *arg = malloc(sizeof(thread_arg));
         arg->lock = locks[lock_index];
         arg->thread_id = i;
         arg->iterations = NUM_ITERATIONS / 2;

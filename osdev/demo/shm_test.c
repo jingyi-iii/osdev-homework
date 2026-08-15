@@ -35,7 +35,7 @@ static volatile int     shm_target_ready   = 0;  /* target is up and knows its p
 static volatile int     shm_target_done    = 0;  /* target finished verification   */
 static volatile int     shm_target_result  = -1; /* 0 = pattern matched            */
 static volatile int     shm_target_release = 0;  /* source done; target may exit   */
-static volatile int32_t shm_target_pid     = -1;
+static volatile i32 shm_target_pid     = -1;
 static          int     shm_source_size    = 0;
 static volatile void*   shm_target_va      = 0;  /* VA returned by shm_share()     */
 
@@ -134,7 +134,7 @@ void shm_test_main(void)
         thread_yield();
 
     /* 3. share the buffer into the target; out_va is the target's VA */
-    if (shm_share((int32_t)shm_target_pid, buf, SHM_TEST_SIZE, &out_va) != 0) {
+    if (shm_share((i32)shm_target_pid, buf, SHM_TEST_SIZE, &out_va) != 0) {
         terminal_write("[SHM] FAIL: shm_share\n");
         shm_target_release = 1;         /* tell the target to give up and exit */
         while (!shm_target_done)
@@ -168,7 +168,7 @@ void shm_test_main(void)
     }
 
     /* 6. tear down the shared mapping + capability */
-    if (shm_unshare((int32_t)shm_target_pid, out_va) != 0)
+    if (shm_unshare((i32)shm_target_pid, out_va) != 0)
         terminal_write("[SHM] FAIL: shm_unshare\n");
     else
         terminal_write("[SHM] OK: shm_unshare\n");
@@ -204,7 +204,7 @@ void shm_test_main(void)
 static volatile int     shm_stress_ready  = 0;   /* target is up */
 static volatile int     shm_stress_done   = 0;   /* target finished current round */
 static volatile int     shm_stress_result = -1;  /* 0 = pattern matched */
-static volatile int32_t shm_stress_pid    = -1;
+static volatile i32 shm_stress_pid    = -1;
 static          int     shm_stress_size   = 0;
 static volatile void*   shm_stress_va     = 0;   /* VA for the current round */
 static volatile int     shm_stress_round  = 0;   /* publish counter */
@@ -295,14 +295,14 @@ void shm_stress_main(void)
         terminal_write(msg);
         LOG("[SHMS] round %d/%d start", round + 1, SHM_STRESS_ROUNDS);
 
-        if (shm_share((int32_t)shm_stress_pid, buf, shm_stress_size, &out_va) != 0) {
+        if (shm_share((i32)shm_stress_pid, buf, shm_stress_size, &out_va) != 0) {
             terminal_write("[SHMS] FAIL: shm_share\n");
             LOG("[SHMS] round %d FAIL: shm_share", round + 1);
             ok = 0;
             shm_stress_exit = 1;
             break;
         }
-        LOG("[SHMS] round %d shared va=0x%x", round + 1, (uint32_t)out_va);
+        LOG("[SHMS] round %d shared va=0x%x", round + 1, (u32)out_va);
         shm_stress_va = out_va;
         shm_stress_round = round + 1;        /* publish: target wakes */
 
@@ -325,7 +325,7 @@ void shm_stress_main(void)
                 terminal_write("[SHMS] FAIL: write-back not visible\n");
         }
 
-        if (shm_unshare((int32_t)shm_stress_pid, out_va) != 0) {
+        if (shm_unshare((i32)shm_stress_pid, out_va) != 0) {
             terminal_write("[SHMS] FAIL: shm_unshare\n");
             LOG("[SHMS] round %d FAIL: shm_unshare", round + 1);
             ok = 0;

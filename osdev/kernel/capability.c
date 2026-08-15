@@ -47,7 +47,7 @@
         } \
         break;
 
-static inline int cap_irq_check(const uint32_t* defender, const uint32_t* challenger)
+static inline int cap_irq_check(const u32* defender, const u32* challenger)
 {
     if (!defender || !challenger)
         return E_INVAL;
@@ -108,7 +108,7 @@ static inline int cap_permission_check(int* defender, const int* unused)
 
 static inline int cap_irq_cmp(const void* a, const void* b)
 {
-    return *(const uint32_t*)a == *(const uint32_t*)b;
+    return *(const u32*)a == *(const u32*)b;
 }
 
 static inline int cap_mem_cmp(const void* a, const void* b)
@@ -129,7 +129,7 @@ static inline int cap_permission_cmp(const void* a, const void* b)
     return *(const int*)a == *(const int*)b;
 }
 
-static inline int cap_irq_grant_check(const uint32_t* perm)
+static inline int cap_irq_grant_check(const u32* perm)
 {
     if (!perm)
         return E_INVAL;

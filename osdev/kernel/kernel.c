@@ -1,12 +1,10 @@
 #include "lib/module.h"
 #include "drivers/log_server.h"
-#include "drivers/kb_server.h"
 #include "drivers/terminal_server.h"
 #include "kernel/process.h"
 #include "kernel/init.h"
 #include "drivers/platform_devices.h"
 #include "kernel/process.h"
-#include "mm/vmm.h"
 #include "lib/string.h"
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */

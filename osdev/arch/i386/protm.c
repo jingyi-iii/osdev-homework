@@ -2,19 +2,19 @@
 #include "kernel/errno.h"
 
 #define GDT_MAX_COUNT   (255)
-static uint64_t gdt[GDT_MAX_COUNT] = { 0 };
-static uint16_t segsels[GDT_MAX_COUNT] = { 0 };
+static u64 gdt[GDT_MAX_COUNT] = { 0 };
+static u16 segsels[GDT_MAX_COUNT] = { 0 };
 static struct {
-    uint16_t limit;
-    uint32_t base;
+    u16 limit;
+    u32 base;
 } ATTR_PACKED gdtmeta = { 0 };
 
-#define GENMASK32(l, h) (((uint32_t)~0U >> (31 - (h))) & ((uint32_t)~0U << (l)))
-#define GENMASK64(l, h) (((uint64_t)~0ULL >> (63 - (h))) & ((uint64_t)~0ULL << (l)))
+#define GENMASK32(l, h) (((u32)~0U >> (31 - (h))) & ((u32)~0U << (l)))
+#define GENMASK64(l, h) (((u64)~0ULL >> (63 - (h))) & ((u64)~0ULL << (l)))
 
-uint64_t arch_gen_desc(uint32_t base, uint32_t limit, uint16_t flags)
+u64 arch_gen_desc(u32 base, u32 limit, u16 flags)
 {
-    uint64_t desc = 0;
+    u64 desc = 0;
 
     desc  = limit        & 0x000f0000;
     desc |= (flags << 8) & 0x00f0ff00;
@@ -28,14 +28,14 @@ uint64_t arch_gen_desc(uint32_t base, uint32_t limit, uint16_t flags)
     return desc;
 }
 
-static uint16_t add_seg(uint32_t base, uint32_t limit, uint16_t flags)
+static u16 add_seg(u32 base, u32 limit, u16 flags)
 {
     int i = 0;
 
     for (i = 1; i < GDT_MAX_COUNT; i++) {
         if (gdt[i] == 0) {
             gdt[i] = arch_gen_desc(base, limit, flags);
-            return (i * sizeof(uint64_t));
+            return (i * sizeof(u64));
         }
     }
 
@@ -53,7 +53,7 @@ static void prepare_protect_mode(void)
     segsels[LDT]       = add_seg(0, 0, 0);
 
     gdtmeta.limit = sizeof(gdt) - 1;
-    gdtmeta.base = (uint32_t)gdt;
+    gdtmeta.base = (u32)gdt;
     arch_reload_gdt(&gdtmeta);
 }
 
@@ -68,12 +68,12 @@ void arch_switch_rm(void)
     arch_clr_cr0(0);
 }
 
-uint16_t arch_get_sel(enum arch_seltype type)
+u16 arch_get_sel(enum arch_seltype type)
 {
-    return ((uint32_t)&gdt[type] - (uint32_t)&gdt[0]);
+    return ((u32)&gdt[type] - (u32)&gdt[0]);
 }
 
-uint64_t arch_get_desc(enum arch_seltype type)
+u64 arch_get_desc(enum arch_seltype type)
 {
     if (type < SELTYPE_START || type > SELTYPE_END)
         return E_INVAL;
@@ -81,7 +81,7 @@ uint64_t arch_get_desc(enum arch_seltype type)
     return gdt[type];
 }
 
-int arch_set_desc(enum arch_seltype type, uint64_t val)
+int arch_set_desc(enum arch_seltype type, u64 val)
 {
     if (type < SELTYPE_START || type > SELTYPE_END)
         return E_INVAL;

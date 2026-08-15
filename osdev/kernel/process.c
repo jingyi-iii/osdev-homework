@@ -79,10 +79,10 @@ static void switch_address_space(tcb* old, tcb* next)
     vmm_switch(&next->parent->vcb);
 }
 
-static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry, void* param)
+static i32 t_create(pcb* parent, task_priv priv, task_entry_t entry, void* param)
 {
     tcb* thread = 0;
-    static uint32_t tid = 0;
+    static u32 tid = 0;
 
     if (!parent) {
         LOG("failed to create thread without parent process");
@@ -122,7 +122,7 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry, void* p
     thread->tid = tid++;
     thread->wake_pending = 0;
 
-    spinlock_lock(schedule_lock);
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
     spinlock_lock(parent->sp_lock);
     list_add(&thread->proc_node, &parent->tcbs);
@@ -136,7 +136,7 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry, void* p
         arch_task_restore_context(&thread->context);
     }
 
-    spinlock_unlock(schedule_lock);
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
     
 #ifdef PROCESS_SUPPORT_MAILBOX
     thread->mailbox = alloc_mailbox(thread->parent->pid, thread->tid);
@@ -147,12 +147,12 @@ static int32_t t_create(pcb* parent, task_priv priv, task_entry_t entry, void* p
     return thread->tid;
 }
 
-static void t_delete(int32_t tid)
+static void t_delete(i32 tid)
 {
     if (!thread_run)
         return;
 
-    spinlock_lock(schedule_lock);
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
     /* find the target thread */
     tcb* target = 0;
@@ -165,7 +165,7 @@ static void t_delete(int32_t tid)
     }
 
     if (!target) {
-        spinlock_unlock(schedule_lock);
+        spinlock_unlock_irqrestore(schedule_lock, eflags);
         return;
     }
 
@@ -186,7 +186,7 @@ static void t_delete(int32_t tid)
         list_del(&target->proc_node);
         spinlock_unlock(target->parent->sp_lock);
 
-        spinlock_unlock(schedule_lock);
+        spinlock_unlock_irqrestore(schedule_lock, eflags);
 
         list_for_each_safe(n, next, &target->irqs) {
             irq* curr_irq = list_entry(n, irq, thread_node);
@@ -204,7 +204,7 @@ static void t_delete(int32_t tid)
         tcb* next = find_next_runnable(thread_run);
         if (!next) {
             LOG("no more thread to run after deleting thread with tid %d", tid);
-            spinlock_unlock(schedule_lock);
+            spinlock_unlock_irqrestore(schedule_lock, eflags);
             return;
         }
 
@@ -242,16 +242,16 @@ static void t_delete(int32_t tid)
 #endif
         kfree(old);
 
-        spinlock_unlock(schedule_lock);
+        spinlock_unlock_irqrestore(schedule_lock, eflags);
     }
 }
 
-static void t_block(int32_t tid)
+static void t_block(i32 tid)
 {
     if (!thread_run)
         return;
 
-    spinlock_lock(schedule_lock);
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
     list_for_each(node, &thread_head) {
         tcb* t = list_entry(node, tcb, this_node);
@@ -283,15 +283,15 @@ static void t_block(int32_t tid)
         break;
     }
 
-    spinlock_unlock(schedule_lock);
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
 }
 
-static void t_unblock(int32_t tid)
+static void t_unblock(i32 tid)
 {
     if (!thread_run)
         return;
 
-    spinlock_lock(schedule_lock);
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
     list_for_each(node, &thread_head) {
         tcb* t = list_entry(node, tcb, this_node);
@@ -305,7 +305,7 @@ static void t_unblock(int32_t tid)
         break;
     }
 
-    spinlock_unlock(schedule_lock);
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
 }
 
 static void t_yield(void)
@@ -313,7 +313,7 @@ static void t_yield(void)
     if (!thread_run)
         return;
 
-    spinlock_lock(schedule_lock);
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
     tcb* next = find_next_runnable(thread_run);
     if (next) {
@@ -326,13 +326,14 @@ static void t_yield(void)
         arch_task_restore_context(&next->context);
     }
 
-    spinlock_unlock(schedule_lock);
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
 }
 
 static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
 {
-    static uint32_t pid = 0;
+    static u32 pid = 0;
     int ret = 0;
+    u32 eflags = 0;
 
     struct pcb* proc = (struct pcb*)kmalloc(sizeof(struct pcb));
     if (!proc) {
@@ -373,9 +374,9 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
     list_init(&proc->tcbs);
     list_init(&proc->capabilities);
 
-    spinlock_lock(schedule_lock);
+    eflags = spinlock_lock_irqsave(schedule_lock);
     list_add(&proc->this_node, &proc_head);
-    spinlock_unlock(schedule_lock);
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
 
     ret = t_create(proc, (task_priv)priv, main_thread_entry, proc->param);
     if (ret >= 0)
@@ -383,9 +384,9 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
 
     /* t_create failed: nothing was linked into proc->tcbs, so just roll
      * back the PCB (proc_head entry, address space, locks, memory). */
-    spinlock_lock(schedule_lock);
+    eflags = spinlock_lock_irqsave(schedule_lock);
     list_del(&proc->this_node);
-    spinlock_unlock(schedule_lock);
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
     vmm_destroy(&proc->vcb);
     spinlock_release(proc->cap_lock);
     spinlock_release(proc->sp_lock);
@@ -394,12 +395,12 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
     return ret;
 }
 
-static void p_exit(int32_t pid)
+static void p_exit(i32 pid)
 {
     struct pcb* found = 0;
     int self_in_proc = 0;
 
-    spinlock_lock(schedule_lock);
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
     list_for_each(node, &proc_head) {
         struct pcb* proc = list_entry(node, struct pcb, this_node);
@@ -465,7 +466,7 @@ static void p_exit(int32_t pid)
         break;
     }
 
-    spinlock_unlock(schedule_lock);
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
 
     if (found) {
         cap_revoke_all(found);            /* free the process's capabilities */
@@ -484,9 +485,9 @@ static void p_exit(int32_t pid)
     (void)self_in_proc;
 }
 
-static int p_block(int32_t pid)
+static int p_block(i32 pid)
 {
-    spinlock_lock(schedule_lock);
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
     list_for_each(node, &proc_head) {
         struct pcb* proc = list_entry(node, struct pcb, this_node);
@@ -515,13 +516,13 @@ static int p_block(int32_t pid)
         break;
     }
 
-    spinlock_unlock(schedule_lock);
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
     return 0;
 }
 
-static int p_unblock(int32_t pid)
+static int p_unblock(i32 pid)
 {
-    spinlock_lock(schedule_lock);
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
     list_for_each(node, &proc_head) {
         struct pcb* proc = list_entry(node, struct pcb, this_node);
@@ -550,23 +551,23 @@ static int p_unblock(int32_t pid)
         break;
     }
 
-    spinlock_unlock(schedule_lock);
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
     return 0;
 }
 
 static void schedule_isr(void* p)
 {
     (void)p;
-    static uint32_t timeslice = 0;
+    static u32 timeslice = 0;
 
     timeslice++;
     if (timeslice < 5)
         return;
 
-    spinlock_lock(schedule_lock);
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
     if (!thread_run) {
-        spinlock_unlock(schedule_lock);
+        spinlock_unlock_irqrestore(schedule_lock, eflags);
         return;
     }
 
@@ -583,7 +584,7 @@ static void schedule_isr(void* p)
         arch_task_restore_context(&next->context);
     }
 
-    spinlock_unlock(schedule_lock);
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
 }
 
 static void syscall_isr(void* data)
@@ -595,9 +596,9 @@ static void syscall_isr(void* data)
      * Read thread_run into a local variable under schedule_lock to prevent
      * a race with schedule_isr on another CPU.
      */
-    spinlock_lock(schedule_lock);
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
     cur = thread_run;
-    spinlock_unlock(schedule_lock);
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
 
     switch (config->cmd) {
     case THREAD_CTRL_CREATE:
@@ -687,7 +688,7 @@ void thread_yield(void)
     arch_syscall(0, &config);
 }
 
-void thread_block(int32_t tid)
+void thread_block(i32 tid)
 {
     proc_thread_ctrl_config config = {0};
     config.cmd = THREAD_CTRL_BLOCK;
@@ -696,7 +697,7 @@ void thread_block(int32_t tid)
     arch_syscall(0, &config);  
 }
 
-void thread_unblock(int32_t tid)
+void thread_unblock(i32 tid)
 {
     proc_thread_ctrl_config config = {0};
     config.cmd = THREAD_CTRL_UNBLOCK;
@@ -705,7 +706,7 @@ void thread_unblock(int32_t tid)
     arch_syscall(0, &config);
 }
 
-int32_t thread_create(task_priv priv, task_entry_t entry, void* param)
+i32 thread_create(task_priv priv, task_entry_t entry, void* param)
 {
     proc_thread_ctrl_config config = {0};
     config.cmd = THREAD_CTRL_CREATE;
@@ -718,7 +719,7 @@ int32_t thread_create(task_priv priv, task_entry_t entry, void* param)
     return config.tid;
 }
 
-void thread_exit(int32_t tid)
+void thread_exit(i32 tid)
 {
     proc_thread_ctrl_config config = {0};
     config.cmd = THREAD_CTRL_DELETE;
@@ -739,11 +740,11 @@ void* thread_get_param(void)
     return cur ? cur->param : 0;
 }
 
-tcb* thread_get_by_tid(int32_t tid)
+tcb* thread_get_by_tid(i32 tid)
 {
     tcb* target = 0;
 
-    spinlock_lock(schedule_lock);
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
     list_for_each(node, &thread_head) {
         tcb* t = list_entry(node, tcb, this_node);
@@ -753,11 +754,11 @@ tcb* thread_get_by_tid(int32_t tid)
         }
     }
 
-    spinlock_unlock(schedule_lock);
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
     return target;
 }
 
-int32_t proc_create(proc_priv priv, task_entry_t entry, void* param)
+i32 proc_create(proc_priv priv, task_entry_t entry, void* param)
 {
     proc_thread_ctrl_config config = {0};
     config.cmd = PROC_CTRL_CREATE;
@@ -770,7 +771,7 @@ int32_t proc_create(proc_priv priv, task_entry_t entry, void* param)
     return config.pid;
 }
 
-void proc_exit(int32_t pid)
+void proc_exit(i32 pid)
 {
     proc_thread_ctrl_config config = {0};
     config.cmd = PROC_CTRL_EXIT;
@@ -779,7 +780,7 @@ void proc_exit(int32_t pid)
     arch_syscall(0, &config);
 }
 
-int proc_block(int32_t pid)
+int proc_block(i32 pid)
 {
     proc_thread_ctrl_config config = {0};
     config.cmd = PROC_CTRL_BLOCK;
@@ -790,7 +791,7 @@ int proc_block(int32_t pid)
     return 0;
 }
 
-int proc_unblock(int32_t pid)
+int proc_unblock(i32 pid)
 {
     proc_thread_ctrl_config config = {0};
     config.cmd = PROC_CTRL_UNBLOCK;
@@ -813,11 +814,11 @@ pcb* get_current_process(void)
     return cur ? cur->parent : 0;
 }
 
-pcb* get_process_by_pid(int32_t pid)
+pcb* get_process_by_pid(i32 pid)
 {
     pcb* target = 0;
 
-    spinlock_lock(schedule_lock);
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
     list_for_each(node, &proc_head) {
         pcb* p = list_entry(node, pcb, this_node);
@@ -827,7 +828,7 @@ pcb* get_process_by_pid(int32_t pid)
         }
     }
 
-    spinlock_unlock(schedule_lock);
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
     return target;
 }
 

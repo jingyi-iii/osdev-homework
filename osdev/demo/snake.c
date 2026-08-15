@@ -47,7 +47,7 @@ typedef enum {
     DIR_DOWN  = 1,
     DIR_LEFT  = 2,
     DIR_RIGHT = 3,
-} direction_t;
+} direction;
 
 /* ===========================================================
  *  Game State
@@ -56,12 +56,12 @@ typedef enum {
 typedef struct {
     int x;
     int y;
-} point_t;
+} point;
 
-static point_t   snake[SNAKE_MAX_LEN];    /* ring buffer: [0] = head       */
+static point   snake[SNAKE_MAX_LEN];    /* ring buffer: [0] = head       */
 static int       snake_len;               /* current length                */
-static direction_t dir;                   /* current movement direction    */
-static point_t   food;                    /* food position                 */
+static direction dir;                   /* current movement direction    */
+static point   food;                    /* food position                 */
 static int       game_over;               /* 0 = running, 1 = over         */
 static int       game_quit;               /* 0 = running, 1 = quit by user */
 static int       game_restart;            /* 0 = no,      1 = restart game */
@@ -133,7 +133,7 @@ static void snake_kb_handler(const char* data, size_t size)
  *  Drawing Helpers
  * =========================================================== */
 
-static void draw_tile(int gx, int gy, uint8_t color)
+static void draw_tile(int gx, int gy, u8 color)
 {
     gfx_fill_rect(
         (size_t)(gx * SNAKE_TILE),
@@ -159,7 +159,7 @@ static void draw_snake(void)
 {
     /* draw body segments (back to front so head overwrites overlaps) */
     for (int i = snake_len - 1; i >= 0; i--) {
-        uint8_t color = (i == 0) ? CLR_SNAKE_HEAD : CLR_SNAKE_BODY;
+        u8 color = (i == 0) ? CLR_SNAKE_HEAD : CLR_SNAKE_BODY;
         draw_tile(snake[i].x, snake[i].y, color);
     }
 }

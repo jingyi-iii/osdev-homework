@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
-#include <stdint.h>
+#include "lib/types.h"
 #include <pthread.h>
 #include <string.h>
 #include <unistd.h>
@@ -144,11 +144,11 @@ typedef struct {
     int thread_id;
     int* init_count;
     pthread_mutex_t* count_mutex;
-} guard_thread_arg_t;
+} guard_thread_arg;
 
 // Thread function for concurrent guard testing
 void* guard_thread_func(void *arg) {
-    guard_thread_arg_t *targ = (guard_thread_arg_t*)arg;
+    guard_thread_arg *targ = (guard_thread_arg*)arg;
 
     if (__cxa_guard_acquire(targ->guard) == 1) {
         // We got the initialization right
@@ -173,7 +173,7 @@ void test_concurrent_guard_access(void) {
     int init_count = 0;
     pthread_mutex_t count_mutex = PTHREAD_MUTEX_INITIALIZER;
     pthread_t threads[10];
-    guard_thread_arg_t args[10];
+    guard_thread_arg args[10];
 
     // Initialize guard system
     guard_init();
@@ -332,7 +332,7 @@ void test_concurrent_multiple_guards(void) {
 
     char guards[5] = {0};
     pthread_t threads[5];
-    guard_thread_arg_t args[5];
+    guard_thread_arg args[5];
     int init_counts[5] = {0};
     pthread_mutex_t count_mutexes[5];
 

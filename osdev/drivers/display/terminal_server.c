@@ -17,7 +17,6 @@
 
 #include "drivers/terminal_server.h"
 #include "sync/spinlock.h"
-#include "lib/module.h"
 #include "drivers/kb_server.h"
 #include "mm/heap.h"
 #include "lib/string.h"
@@ -34,15 +33,15 @@
 struct terminal_device {
     struct platform_bus_ops* bus_ops;   /* set at start(): RING3-safe wrappers */
     spinlock* lock;
-    uint16_t* vga_buffer;
+    u16* vga_buffer;
     size_t curr_row;
     size_t curr_col;
-    uint8_t curr_color;
+    u8 curr_color;
 };
 
 static struct terminal_device term_device = {
     .lock = NULL,
-    .vga_buffer = (uint16_t*)VGA_BUF_ADDR,
+    .vga_buffer = (u16*)VGA_BUF_ADDR,
     .curr_row = 0,
     .curr_col = 0,
     .curr_color = 0,
@@ -53,13 +52,13 @@ static struct terminal_device term_device = {
  * (probe() is not called for user drivers), so the terminal server uses
  * its own wrappers around the raw in/out instructions.  RING3 may execute
  * them directly because user threads run with IOPL=3 (see task.c). */
-static int term_out8(uint16_t port, uint8_t data)
+static int term_out8(u16 port, u8 data)
 {
     arch_outb(port, data);
     return 0;
 }
 
-static int term_in8(uint16_t port)
+static int term_in8(u16 port)
 {
     return (int)arch_inb(port);
 }
@@ -76,16 +75,16 @@ static struct platform_bus_ops term_bus_ops = {
  * keyboard ISR (which would otherwise spin forever on the same lock).
  * pushf/popf restores the previous IF; RING3 may run cli/sti thanks to
  * IOPL=3. */
-static uint32_t term_lock(void)
+static u32 term_lock(void)
 {
-    uint32_t eflags;
+    u32 eflags;
     __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags) : : "memory");
     arch_cli();
     spinlock_lock(term_device.lock);
     return eflags;
 }
 
-static void term_unlock(uint32_t eflags)
+static void term_unlock(u32 eflags)
 {
     spinlock_unlock(term_device.lock);
     __asm__ __volatile__("pushl %0; popfl" : : "r"(eflags) : "memory");
@@ -124,12 +123,12 @@ static void cursor_init(void)
  */
 
 /* Sequencer registers for mode 0x03 */
-static const uint8_t seq_0x03[] = {
+static const u8 seq_0x03[] = {
     0x03, 0x00, 0x03, 0x00, 0x02
 };
 
 /* CRT Controller registers for mode 0x03 */
-static const uint8_t crtc_0x03[] = {
+static const u8 crtc_0x03[] = {
     0x5F, 0x4F, 0x50, 0x82, 0x55, 0x81, 0xBF, 0x1F,
     0x00, 0x4F, 0x0D, 0x0E, 0x00, 0x00, 0x00, 0x50,
     0x9C, 0x0E, 0x8F, 0x28, 0x1F, 0x96, 0xB9, 0xA3,
@@ -137,12 +136,12 @@ static const uint8_t crtc_0x03[] = {
 };
 
 /* Graphics Controller registers for mode 0x03 */
-static const uint8_t gc_0x03[] = {
+static const u8 gc_0x03[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x0E, 0x0F, 0xFF
 };
 
 /* Attribute Controller registers for mode 0x03 (16 palette + mode ctrl) */
-static const uint8_t ac_0x03[] = {
+static const u8 ac_0x03[] = {
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
     0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
     0x0C
@@ -163,11 +162,11 @@ static const uint8_t ac_0x03[] = {
 #define VGA_DAC_DATA    0x3C9
 
 static void vga_write_regs(struct platform_bus_ops* ops,
-                           uint16_t addr_port, uint16_t data_port,
-                           const uint8_t* regs, size_t count)
+                           u16 addr_port, u16 data_port,
+                           const u8* regs, size_t count)
 {
     for (size_t i = 0; i < count; i++) {
-        ops->out_port8(addr_port, (uint8_t)i);
+        ops->out_port8(addr_port, (u8)i);
         ops->out_port8(data_port, regs[i]);
     }
 }
@@ -196,7 +195,7 @@ static void vga_set_text_mode(struct platform_bus_ops* ops)
     /* 6. Unlock CRTC */
     ops->out_port8(VGA_CRT_ADDR, 0x11);
     ops->out_port8(VGA_CRT_DATA,
-                   (uint8_t)(ops->in_port8(VGA_CRT_DATA) & 0x7F));
+                   (u8)(ops->in_port8(VGA_CRT_DATA) & 0x7F));
 
     /* 7. Program CRTC registers */
     vga_write_regs(ops, VGA_CRT_ADDR, VGA_CRT_DATA, crtc_0x03, 25);
@@ -207,7 +206,7 @@ static void vga_set_text_mode(struct platform_bus_ops* ops)
     /* 9. Program Attribute Controller registers */
     ops->in_port8(0x3DA);
     for (size_t i = 0; i < 17; i++) {
-        ops->out_port8(VGA_AC_ADDR, (uint8_t)i);
+        ops->out_port8(VGA_AC_ADDR, (u8)i);
         ops->out_port8(VGA_AC_DATA, ac_0x03[i]);
     }
     /* Re-enable video output */
@@ -215,7 +214,7 @@ static void vga_set_text_mode(struct platform_bus_ops* ops)
 
     /* 10. Set DAC palette for text mode (standard 16-color palette) */
     {
-        static const uint8_t text_palette[16][3] = {
+        static const u8 text_palette[16][3] = {
             {0x00,0x00,0x00},{0x00,0x00,0x2A},{0x00,0x2A,0x00},{0x00,0x2A,0x2A},
             {0x2A,0x00,0x00},{0x2A,0x00,0x2A},{0x2A,0x15,0x00},{0x2A,0x2A,0x2A},
             {0x15,0x15,0x15},{0x15,0x15,0x3F},{0x15,0x3F,0x15},{0x15,0x3F,0x3F},
@@ -237,12 +236,12 @@ static void cursor_update(size_t row, size_t col)
     if (!ops)
         return;
 
-    uint16_t pos = (uint16_t)(row * VGA_WIDTH + col);
+    u16 pos = (u16)(row * VGA_WIDTH + col);
 
     ops->out_port8(VGA_CRT_ADDR, 0x0E);
-    ops->out_port8(VGA_CRT_DATA, (uint8_t)(pos >> 8));
+    ops->out_port8(VGA_CRT_DATA, (u8)(pos >> 8));
     ops->out_port8(VGA_CRT_ADDR, 0x0F);
-    ops->out_port8(VGA_CRT_DATA, (uint8_t)(pos & 0xFF));
+    ops->out_port8(VGA_CRT_DATA, (u8)(pos & 0xFF));
 }
 
 /*
@@ -255,7 +254,7 @@ void terminal_switch_to_text_mode(void)
     if (!ops)
         return;
 
-    uint32_t eflags = term_lock();
+    u32 eflags = term_lock();
 
     /* Reprogram VGA registers for text mode 0x03 */
     vga_set_text_mode(ops);
@@ -312,16 +311,16 @@ static void cmd_init(void)
 }
 
 /* IRQ-safe guard for the command registry (same rationale as term_lock) */
-static uint32_t cmd_lock_irq(void)
+static u32 cmd_lock_irq(void)
 {
-    uint32_t eflags;
+    u32 eflags;
     __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags) : : "memory");
     arch_cli();
     spinlock_lock(cmd_lock);
     return eflags;
 }
 
-static void cmd_unlock_irq(uint32_t eflags)
+static void cmd_unlock_irq(u32 eflags)
 {
     spinlock_unlock(cmd_lock);
     __asm__ __volatile__("pushl %0; popfl" : : "r"(eflags) : "memory");
@@ -355,7 +354,7 @@ void terminal_flush(const char* unused)
 
     struct terminal_device* dev = &term_device;
 
-    uint32_t eflags = term_lock();
+    u32 eflags = term_lock();
 
     dev->curr_row = 0;
     dev->curr_col = 0;
@@ -372,14 +371,14 @@ void terminal_flush(const char* unused)
     term_unlock(eflags);
 }
 
-void terminal_write_at(char chr, uint8_t color, size_t x, size_t y)
+void terminal_write_at(char chr, u8 color, size_t x, size_t y)
 {
     if (x >= VGA_WIDTH || y >= VGA_HEIGHT)
         return;
 
     struct terminal_device* dev = &term_device;
 
-    uint32_t eflags = term_lock();
+    u32 eflags = term_lock();
 
     const size_t index = y * VGA_WIDTH + x;
     dev->vga_buffer[index] = to_vga_char(chr, color);
@@ -399,7 +398,7 @@ void terminal_write_at(char chr, uint8_t color, size_t x, size_t y)
     term_unlock(eflags);
 }
 
-void terminal_write_at_str(const char* str, uint8_t color, size_t x, size_t y)
+void terminal_write_at_str(const char* str, u8 color, size_t x, size_t y)
 {
     if (!str)
         return;
@@ -432,13 +431,13 @@ void terminal_write(const char* str)
     }
 }
 
-void terminal_write_color(const char* str, uint8_t color)
+void terminal_write_color(const char* str, u8 color)
 {
     if (!str)
         return;
 
     struct terminal_device* dev = &term_device;
-    uint8_t old_color = dev->curr_color;
+    u8 old_color = dev->curr_color;
     dev->curr_color = color;
     terminal_write(str);
     dev->curr_color = old_color;
@@ -448,7 +447,7 @@ void terminal_putchar(char c)
 {
     struct terminal_device* dev = &term_device;
 
-    uint32_t eflags = term_lock();
+    u32 eflags = term_lock();
 
     if (c == '\n') {
         dev->curr_col = 0;
@@ -503,7 +502,7 @@ int terminal_register_cmd(const char* name, terminal_cmd_fn callback)
     entry->callback = callback;
     list_init(&entry->node);
 
-    uint32_t eflags = cmd_lock_irq();
+    u32 eflags = cmd_lock_irq();
     list_add(&entry->node, &cmd_registry);
     cmd_unlock_irq(eflags);
 
@@ -515,7 +514,7 @@ void terminal_unregister_cmd(const char* name)
     if (!name || !cmd_ready)
         return;
 
-    uint32_t eflags = cmd_lock_irq();
+    u32 eflags = cmd_lock_irq();
     list_for_each(pos, &cmd_registry) {
         struct terminal_cmd_entry* entry =
             list_entry(pos, struct terminal_cmd_entry, node);
@@ -550,7 +549,7 @@ static void terminal_kb_handler(const char* data, size_t size)
 
         int matched = 0;
         if (cmd_ready && input_len > 0) {
-            uint32_t eflags = cmd_lock_irq();
+            u32 eflags = cmd_lock_irq();
             list_for_each(pos, &cmd_registry) {
                 struct terminal_cmd_entry* entry =
                     list_entry(pos, struct terminal_cmd_entry, node);

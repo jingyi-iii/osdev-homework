@@ -1,7 +1,7 @@
 #ifndef ARCH_SEGMENTS_H
 #define ARCH_SEGMENTS_H
 
-#include <stdint.h>
+#include "lib/types.h"
 
 // 
 // Note: The following content is copied from https://wiki.osdev.org/GDT_Tutorial
@@ -66,17 +66,17 @@ inline void arch_reload_idt(void* idtmeta)
     __asm__ __volatile__("lidt (%0)" : : "r"(idtmeta) : "memory");
 }
 
-inline void arch_reload_tss(uint16_t tss_sel)
+inline void arch_reload_tss(u16 tss_sel)
 {
     __asm__ __volatile__("ltr %0" : : "r"(tss_sel) : "memory");
 }
 
-inline void arch_reload_ldt(uint16_t ldt_sel)
+inline void arch_reload_ldt(u16 ldt_sel)
 {
     __asm__ __volatile__("lldt %0" : : "r"(ldt_sel) : "memory");
 }
 
-inline void arch_set_cr0(uint8_t pos)
+inline void arch_set_cr0(u8 pos)
 {
     if (pos > 31)
         return;
@@ -91,7 +91,7 @@ inline void arch_set_cr0(uint8_t pos)
     );
 }
 
-inline void arch_clr_cr0(uint8_t pos)
+inline void arch_clr_cr0(u8 pos)
 {
     if (pos > 31)
         return;
@@ -103,7 +103,7 @@ inline void arch_clr_cr0(uint8_t pos)
         "andl   %%ebx,          %%eax   \n\t"
         "movl   %%eax,          %%cr0   \n\t"
         :
-        : "r"((uint32_t)1 << pos)
+        : "r"((u32)1 << pos)
         : "%eax", "memory"
     );
 }
@@ -111,12 +111,12 @@ inline void arch_clr_cr0(uint8_t pos)
 inline void arch_cli(void) { __asm__ __volatile__ ("cli"); }
 inline void arch_sti(void) { __asm__ __volatile__ ("sti"); }
 
-inline void arch_outb(uint16_t port, uint8_t val)
+inline void arch_outb(u16 port, u8 val)
 {
     __asm__ __volatile__("outb %0, %1" : : "a"(val), "Nd"(port));
 }
 
-inline uint8_t arch_inb(uint16_t port)
+inline u8 arch_inb(u16 port)
 {
     unsigned char value = 0;
     __asm__ __volatile__("inb %1, %0" : "=a"(value) : "Nd"(port));

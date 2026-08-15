@@ -2,7 +2,7 @@
 #define RBTREE_H
 
 #include <stddef.h>
-#include <stdint.h>
+#include "lib/types.h"
 
 typedef enum color {
 	RED = 0,

@@ -17,8 +17,6 @@
 
 #include "drivers/graphics_server.h"
 #include "sync/spinlock.h"
-#include "lib/module.h"
-#include "lib/string.h"
 #include "drivers/log_server.h"
 #include "kernel/process.h"
 #include "regs.h"
@@ -57,16 +55,16 @@
 struct graphics_device {
     struct platform_bus_ops* bus_ops;
     spinlock* lock;
-    uint8_t* fb;            /* framebuffer pointer (0xA0000) */
+    u8* fb;            /* framebuffer pointer (0xA0000) */
     size_t    curr_col;     /* cursor column (0..GFX_COLS-1) */
     size_t    curr_row;     /* cursor row    (0..GFX_ROWS-1) */
-    uint8_t   curr_fg;      /* current foreground color */
-    uint8_t   curr_bg;      /* current background color */
+    u8   curr_fg;      /* current foreground color */
+    u8   curr_bg;      /* current background color */
 };
 
 static struct graphics_device gfx_dev = {
     .lock     = NULL,
-    .fb       = (uint8_t*)GFX_BUF_ADDR,
+    .fb       = (u8*)GFX_BUF_ADDR,
     .curr_col = 0,
     .curr_row = 0,
     .curr_fg  = GFX_LIGHT_GREY,
@@ -78,13 +76,13 @@ static struct graphics_device gfx_dev = {
  * (probe() is not called for user drivers), so the graphics server uses
  * its own wrappers around the raw in/out instructions.  RING3 may execute
  * them directly because user threads run with IOPL=3 (see task.c). */
-static int gfx_out8(uint16_t port, uint8_t data)
+static int gfx_out8(u16 port, u8 data)
 {
     arch_outb(port, data);
     return 0;
 }
 
-static int gfx_in8(uint16_t port)
+static int gfx_in8(u16 port)
 {
     return (int)arch_inb(port);
 }
@@ -101,7 +99,7 @@ static struct platform_bus_ops gfx_bus_ops = {
 /* Only the first 8 rows are non-zero for most glyphs.                  */
 /************************************************************************/
 
-static const uint8_t font_8x16[95][16] = {
+static const u8 font_8x16[95][16] = {
     /* ' ' (32) */
     { 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 },
     /* '!' (33) */
@@ -307,7 +305,7 @@ static const uint8_t font_8x16[95][16] = {
  */
 
 /* CRT Controller registers for mode 0x13 */
-static const uint8_t crtc_0x13[] = {
+static const u8 crtc_0x13[] = {
     0x5F, 0x4F, 0x50, 0x82, 0x54, 0x80, 0xBF, 0x1F,
     0x00, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x9C, 0x0E, 0x8F, 0x28, 0x40, 0x96, 0xB9, 0xA3,
@@ -315,11 +313,11 @@ static const uint8_t crtc_0x13[] = {
 };
 
 static void vga_write_regs(struct platform_bus_ops* ops,
-                           uint16_t addr_port, uint16_t data_port,
-                           const uint8_t* regs, size_t count)
+                           u16 addr_port, u16 data_port,
+                           const u8* regs, size_t count)
 {
     for (size_t i = 0; i < count; i++) {
-        ops->out_port8(addr_port, (uint8_t)i);
+        ops->out_port8(addr_port, (u8)i);
         ops->out_port8(data_port, regs[i]);
     }
 }
@@ -340,7 +338,7 @@ static void vga_set_mode_0x13(struct platform_bus_ops* ops)
 
     /* 4. Program Sequencer registers */
     {
-        static const uint8_t seq[] = {
+        static const u8 seq[] = {
             0x03, 0x01, 0x0F, 0x00, 0x0E
         };
         vga_write_regs(ops, VGA_SEQ_ADDR, VGA_SEQ_DATA, seq, 5);
@@ -353,14 +351,14 @@ static void vga_set_mode_0x13(struct platform_bus_ops* ops)
     /* 6. Unlock CRTC (unlock write to CRTC index 0-7) */
     ops->out_port8(VGA_CRT_ADDR, 0x11);
     ops->out_port8(VGA_CRT_DATA,
-                   (uint8_t)(ops->in_port8(VGA_CRT_DATA) & 0x7F));
+                   (u8)(ops->in_port8(VGA_CRT_DATA) & 0x7F));
 
     /* 7. Program CRTC registers */
     vga_write_regs(ops, VGA_CRT_ADDR, VGA_CRT_DATA, crtc_0x13, 25);
 
     /* 8. Program Graphics Controller registers */
     {
-        static const uint8_t gc[] = {
+        static const u8 gc[] = {
             0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x05, 0x0F, 0xFF
         };
         vga_write_regs(ops, VGA_GC_ADDR, VGA_GC_DATA, gc, 9);
@@ -368,14 +366,14 @@ static void vga_set_mode_0x13(struct platform_bus_ops* ops)
 
     /* 9. Program Attribute Controller registers */
     {
-        static const uint8_t ac[] = {
+        static const u8 ac[] = {
             0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
             0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
             0x41
         };
         ops->in_port8(0x3DA);  /* reset flip-flop */
         for (size_t i = 0; i < 17; i++) {
-            ops->out_port8(VGA_AC_ADDR, (uint8_t)i);
+            ops->out_port8(VGA_AC_ADDR, (u8)i);
             ops->out_port8(VGA_AC_DATA, ac[i]);
         }
         /* Enable palette / text mode off */
@@ -384,7 +382,7 @@ static void vga_set_mode_0x13(struct platform_bus_ops* ops)
 
     /* 10. Set DAC palette (default 256-color palette) */
     {
-        static const uint8_t default_palette[256][3] = {
+        static const u8 default_palette[256][3] = {
             /* 0-15: standard EGA/VGA colors */
             {0x00,0x00,0x00},{0x00,0x00,0x2A},{0x00,0x2A,0x00},{0x00,0x2A,0x2A},
             {0x2A,0x00,0x00},{0x2A,0x00,0x2A},{0x2A,0x15,0x00},{0x2A,0x2A,0x2A},
@@ -413,9 +411,9 @@ static void vga_set_mode_0x13(struct platform_bus_ops* ops)
         /* 32-255: color cube (6×6×6 = 216 colors) */
         for (int i = 32; i < 256; i++) {
             int idx = i - 32;
-            uint8_t r = (uint8_t)((idx / 36) % 6 * 0x0C);
-            uint8_t g = (uint8_t)((idx / 6)  % 6 * 0x0C);
-            uint8_t b = (uint8_t)( idx        % 6 * 0x0C);
+            u8 r = (u8)((idx / 36) % 6 * 0x0C);
+            u8 g = (u8)((idx / 6)  % 6 * 0x0C);
+            u8 b = (u8)( idx        % 6 * 0x0C);
             ops->out_port8(VGA_DAC_DATA, r);
             ops->out_port8(VGA_DAC_DATA, g);
             ops->out_port8(VGA_DAC_DATA, b);
@@ -448,7 +446,7 @@ int gfx_server_start(struct device* dev)
             return E_LIMIT;
     }
     gfx_dev.bus_ops = &gfx_bus_ops;
-    gfx_dev.fb = (uint8_t*)GFX_BUF_ADDR;
+    gfx_dev.fb = (u8*)GFX_BUF_ADDR;
 
     LOG("graphics_server started");
 
@@ -485,7 +483,7 @@ void gfx_server_init(void)
             return;
     }
     gfx_dev.bus_ops = &gfx_bus_ops;
-    gfx_dev.fb = (uint8_t*)GFX_BUF_ADDR;
+    gfx_dev.fb = (u8*)GFX_BUF_ADDR;
 
     platform_driver_register(&graphics_server);
 }
@@ -504,13 +502,13 @@ void gfx_switch_to_mode(void)
     gfx_clear(GFX_BLACK);
 }
 
-void gfx_clear(uint8_t color)
+void gfx_clear(u8 color)
 {
     struct graphics_device* dev = &gfx_dev;
 
     spinlock_lock(dev->lock);
 
-    uint8_t* fb = dev->fb;
+    u8* fb = dev->fb;
     size_t total = GFX_WIDTH * GFX_HEIGHT;
     for (size_t i = 0; i < total; i++)
         fb[i] = color;
@@ -521,7 +519,7 @@ void gfx_clear(uint8_t color)
     spinlock_unlock(dev->lock);
 }
 
-void gfx_put_pixel(size_t x, size_t y, uint8_t color)
+void gfx_put_pixel(size_t x, size_t y, u8 color)
 {
     if (x >= GFX_WIDTH || y >= GFX_HEIGHT)
         return;
@@ -533,7 +531,7 @@ void gfx_put_pixel(size_t x, size_t y, uint8_t color)
     spinlock_unlock(dev->lock);
 }
 
-void gfx_fill_rect(size_t x, size_t y, size_t w, size_t h, uint8_t color)
+void gfx_fill_rect(size_t x, size_t y, size_t w, size_t h, u8 color)
 {
     if (x >= GFX_WIDTH || y >= GFX_HEIGHT) return;
     if (x + w > GFX_WIDTH)  w = GFX_WIDTH  - x;
@@ -543,7 +541,7 @@ void gfx_fill_rect(size_t x, size_t y, size_t w, size_t h, uint8_t color)
 
     spinlock_lock(dev->lock);
 
-    uint8_t* fb = dev->fb;
+    u8* fb = dev->fb;
     for (size_t row = y; row < y + h; row++) {
         size_t offset = row * GFX_WIDTH + x;
         for (size_t col = 0; col < w; col++)
@@ -553,7 +551,7 @@ void gfx_fill_rect(size_t x, size_t y, size_t w, size_t h, uint8_t color)
     spinlock_unlock(dev->lock);
 }
 
-void gfx_put_char(char c, size_t col, size_t row, uint8_t fg, uint8_t bg)
+void gfx_put_char(char c, size_t col, size_t row, u8 fg, u8 bg)
 {
     if (col >= GFX_COLS || row >= GFX_ROWS)
         return;
@@ -566,13 +564,13 @@ void gfx_put_char(char c, size_t col, size_t row, uint8_t fg, uint8_t bg)
 
     spinlock_lock(dev->lock);
 
-    const uint8_t* glyph = font_8x16[c - 32];
-    uint8_t* fb = dev->fb;
+    const u8* glyph = font_8x16[c - 32];
+    u8* fb = dev->fb;
     size_t px = col * FONT_WIDTH;
     size_t py = row * FONT_HEIGHT;
 
     for (size_t fy = 0; fy < FONT_HEIGHT; fy++) {
-        uint8_t row_bits = glyph[fy];
+        u8 row_bits = glyph[fy];
         size_t offset = (py + fy) * GFX_WIDTH + px;
         for (size_t fx = 0; fx < FONT_WIDTH; fx++) {
             fb[offset + fx] = (row_bits & (0x80 >> fx)) ? fg : bg;
@@ -582,7 +580,7 @@ void gfx_put_char(char c, size_t col, size_t row, uint8_t fg, uint8_t bg)
     spinlock_unlock(dev->lock);
 }
 
-void gfx_write(const char* str, size_t col, size_t row, uint8_t fg, uint8_t bg)
+void gfx_write(const char* str, size_t col, size_t row, u8 fg, u8 bg)
 {
     if (!str) return;
 
@@ -604,13 +602,13 @@ void gfx_write(const char* str, size_t col, size_t row, uint8_t fg, uint8_t bg)
     }
 }
 
-void gfx_scroll(uint8_t bg)
+void gfx_scroll(u8 bg)
 {
     struct graphics_device* dev = &gfx_dev;
 
     spinlock_lock(dev->lock);
 
-    uint8_t* fb = dev->fb;
+    u8* fb = dev->fb;
     size_t row_bytes = GFX_WIDTH * FONT_HEIGHT;
 
     /* Move all rows up by one character row */

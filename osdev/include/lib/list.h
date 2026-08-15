@@ -1,7 +1,7 @@
 #ifndef __LIST_H__
 #define __LIST_H__
 
-#include <stdint.h>
+#include "lib/types.h"
 
 typedef struct list_node {
     struct list_node* prev;
@@ -55,7 +55,7 @@ static inline int list_empty(list_node* head)
 }
 
 #define list_entry(ptr, type, member) \
-    ((type *)((char *)(ptr)-(uintptr_t)(&((type *)0)->member)))
+    ((type *)((char *)(ptr)-(uptr)(&((type *)0)->member)))
 
 #define list_for_each(pos, head) \
     for (list_node* pos = (head)->next; pos != (head); pos = pos->next)

@@ -4,7 +4,6 @@
 #include "kernel/errno.h"
 #include "arch_irq.h"
 #include "kernel/irq.h"
-#include "lib/module.h"
 
 mail* alloc_mail(void)
 {
@@ -31,13 +30,13 @@ mail* alloc_mail(void)
 static void release_mail(mail* m)
 {
     if (m) {
-        spinlock_lock(m->sp_lock);
+        u32 eflags = spinlock_lock_irqsave(m->sp_lock);
         m->ref_count--;
         if (m->ref_count > 0) {
-            spinlock_unlock(m->sp_lock);
+            spinlock_unlock_irqrestore(m->sp_lock, eflags);
             return;
         }
-        spinlock_unlock(m->sp_lock);
+        spinlock_unlock_irqrestore(m->sp_lock, eflags);
         spinlock_release(m->sp_lock);
         memset(m, 0, sizeof(mail));
         kfree(m);
@@ -67,7 +66,7 @@ mailbox* alloc_mailbox(int owner_pid, int owner_tid)
 void release_mailbox(mailbox* mb)
 {
     if (mb) {
-        spinlock_lock(mb->sp_lock);
+        u32 eflags = spinlock_lock_irqsave(mb->sp_lock);
 
         /* Release all pending mails, safely removing each from the list first */
         while (!list_empty(&mb->mails)) {
@@ -83,7 +82,7 @@ void release_mailbox(mailbox* mb)
             kfree(mh);
         }
 
-        spinlock_unlock(mb->sp_lock);
+        spinlock_unlock_irqrestore(mb->sp_lock, eflags);
         spinlock_release(mb->sp_lock);
         memset(mb, 0, sizeof(mailbox));
         kfree(mb);
@@ -95,7 +94,10 @@ int send_mail(mailbox* mb, mail* m)
     if (!mb || !m)
         return -EINVAL;
 
-    while (spinlock_trylock(mb->sp_lock));
+    /* IRQ-safe lock: every holder disables interrupts, so even from an ISR
+     * this blocking acquisition can never deadlock on a preempted holder
+     * (replaces the previous unbounded busy-wait). */
+    u32 eflags = spinlock_lock_irqsave(mb->sp_lock);
     if (!list_empty(&mb->handlers)) {
         /*
          * Deliver to all registered handlers synchronously.
@@ -109,7 +111,7 @@ int send_mail(mailbox* mb, mail* m)
             if (mh->handler)
                 mh->handler(m);
         }
-        spinlock_unlock(mb->sp_lock);
+        spinlock_unlock_irqrestore(mb->sp_lock, eflags);
 
         /* All handlers have run; consume one reference for this delivery. */
         release_mail(m);
@@ -117,7 +119,7 @@ int send_mail(mailbox* mb, mail* m)
     } else {
         /* No handler: queue the mail for later retrieval via mailbox_listen */
         list_add(&m->this_node, &mb->mails);
-        spinlock_unlock(mb->sp_lock);
+        spinlock_unlock_irqrestore(mb->sp_lock, eflags);
     }
 
     return 0;
@@ -140,7 +142,7 @@ int send(mail* m)
         int handler_recipients = 0;
         int has_any_mailbox = 0;
 
-        spinlock_lock(schedule_lock);
+        u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
         /*
          * First pass: count only threads whose mailboxes have handlers.
@@ -154,14 +156,14 @@ int send(mail* m)
 
             has_any_mailbox = 1;
 
-            spinlock_lock(t->mailbox->sp_lock);
+            u32 eflags = spinlock_lock_irqsave(t->mailbox->sp_lock);
             if (!list_empty(&t->mailbox->handlers))
                 handler_recipients++;
-            spinlock_unlock(t->mailbox->sp_lock);
+            spinlock_unlock_irqrestore(t->mailbox->sp_lock, eflags);
         }
 
         if (!has_any_mailbox) {
-            spinlock_unlock(schedule_lock);
+            spinlock_unlock_irqrestore(schedule_lock, eflags);
             release_mail(m);
             return 0;
         }
@@ -181,9 +183,9 @@ int send(mail* m)
                 continue;
 
             int has_handler;
-            spinlock_lock(t->mailbox->sp_lock);
+            u32 eflags = spinlock_lock_irqsave(t->mailbox->sp_lock);
             has_handler = !list_empty(&t->mailbox->handlers);
-            spinlock_unlock(t->mailbox->sp_lock);
+            spinlock_unlock_irqrestore(t->mailbox->sp_lock, eflags);
 
             if (has_handler) {
                 /* send_mail() calls handlers then release_mail(m) */
@@ -205,14 +207,14 @@ int send(mail* m)
                     clone->receiver_pid = m->receiver_pid;
                     clone->receiver_tid = m->receiver_tid;
                     clone->ref_count = 1;
-                    spinlock_lock(t->mailbox->sp_lock);
+                    u32 eflags = spinlock_lock_irqsave(t->mailbox->sp_lock);
                     list_add(&clone->this_node, &t->mailbox->mails);
-                    spinlock_unlock(t->mailbox->sp_lock);
+                    spinlock_unlock_irqrestore(t->mailbox->sp_lock, eflags);
                 }
             }
         }
 
-        spinlock_unlock(schedule_lock);
+        spinlock_unlock_irqrestore(schedule_lock, eflags);
 
         /* Release the sender's reference */
         release_mail(m);
@@ -233,15 +235,15 @@ static mail* try_get_mail(mailbox* mb)
     if (!mb)
         return 0;
 
-    spinlock_lock(mb->sp_lock);
+    u32 eflags = spinlock_lock_irqsave(mb->sp_lock);
     if (list_empty(&mb->mails)) {
-        spinlock_unlock(mb->sp_lock);
+        spinlock_unlock_irqrestore(mb->sp_lock, eflags);
         return 0;
     }
 
     mail* m = list_entry(mb->mails.prev, mail, this_node);
     list_del(&m->this_node);
-    spinlock_unlock(mb->sp_lock);
+    spinlock_unlock_irqrestore(mb->sp_lock, eflags);
 
     return m;
 }
@@ -258,9 +260,9 @@ static int register_handler(mailbox* mb, mail_handler handler)
     mh->handler = handler;
     list_init(&mh->this_node);
 
-    spinlock_lock(mb->sp_lock);
+    u32 eflags = spinlock_lock_irqsave(mb->sp_lock);
     list_add(&mh->this_node, &mb->handlers);
-    spinlock_unlock(mb->sp_lock);
+    spinlock_unlock_irqrestore(mb->sp_lock, eflags);
 
     return 0;
 }
@@ -270,17 +272,17 @@ static int unregister_handler(mailbox* mb, mail_handler handler)
     if (!mb || !handler)
         return -EINVAL;
 
-    spinlock_lock(mb->sp_lock);
+    u32 eflags = spinlock_lock_irqsave(mb->sp_lock);
     list_for_each(pos, &mb->handlers) {
         mailhandler* mh = list_entry(pos, mailhandler, this_node);
         if (mh->handler == handler) {
             list_del(pos);
-            spinlock_unlock(mb->sp_lock);
+            spinlock_unlock_irqrestore(mb->sp_lock, eflags);
             kfree(mh);
             return 0;
         }
     }
-    spinlock_unlock(mb->sp_lock);
+    spinlock_unlock_irqrestore(mb->sp_lock, eflags);
 
     return 0;
 }

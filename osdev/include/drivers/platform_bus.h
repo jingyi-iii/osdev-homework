@@ -1,7 +1,7 @@
 #ifndef PLATFORM_BUS_H
 #define PLATFORM_BUS_H
 
-#include <stdint.h>
+#include "lib/types.h"
 #include "kernel/bus.h"
 #include "kernel/device.h"
 
@@ -22,35 +22,37 @@ struct platform_resource {
     enum platform_resource_type type;
     union {
         struct {
-            uint16_t base;
-            uint16_t size;
+            u16 base;
+            u16 size;
         } io;
 
         struct {
-            uint32_t major;
-            uint32_t minor;
+            u32 major;
+            u32 minor;
         } irq;
 
         struct {
-            uint32_t addr;
-            uint32_t size;
+            u32 addr;
+            u32 size;
         } mem;
     };
 };
 
-struct platform_device {
+typedef struct platform_device {
     struct device dev;
     struct platform_resource resources[MAX_PLATFORM_RES];
     int num_res;
-};
+    list_node this_node;
+    int server_pid;
+} platform_device;
 
 struct platform_bus_ops {
-    int (*in_port8)(uint16_t port);
-    int (*in_port16)(uint16_t port);
-    int (*in_port32)(uint16_t port);
-    int (*out_port8)(uint16_t port, uint8_t data);
-    int (*out_port16)(uint16_t port, uint16_t data);
-    int (*out_port32)(uint16_t port, uint32_t data);
+    int (*in_port8)(u16 port);
+    int (*in_port16)(u16 port);
+    int (*in_port32)(u16 port);
+    int (*out_port8)(u16 port, u8 data);
+    int (*out_port16)(u16 port, u16 data);
+    int (*out_port32)(u16 port, u32 data);
 };
 
 typedef struct user_driver_param {
@@ -64,7 +66,8 @@ struct platform_resource* platform_device_get_resource(
 
 struct platform_bus_ops* platform_device_get_ops(struct platform_device* dev);
 
-struct platform_device* to_platform_device(struct device* dev);
+/* --- platform server registry --- */
+int platform_server_lookup(const char* name);
 
 /* --- platform bus registration --- */
 int platform_driver_register(struct driver* drv);

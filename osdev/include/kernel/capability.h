@@ -1,7 +1,7 @@
 #ifndef CAPABILITY_H
 #define CAPABILITY_H
 
-#include <stdint.h>
+#include "lib/types.h"
 #include "lib/list.h"
 
 typedef enum {
@@ -14,21 +14,21 @@ typedef enum {
 } cap_type;
 
 typedef struct cap_mem {
-    uint32_t base;
-    uint32_t size;
-    uint32_t flags;
+    u32 base;
+    u32 size;
+    u32 flags;
 } cap_mem;
 
 typedef struct cam_io_port {
-    uint32_t base;
-    uint32_t count;
+    u32 base;
+    u32 count;
 } cap_io_port;
 
 typedef struct capability {
     list_node this_node;
     cap_type type;
     union {
-        uint32_t irq;
+        u32 irq;
         cap_mem mem;
         cap_io_port io_port;
         int issue_ipc;

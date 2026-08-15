@@ -68,23 +68,23 @@
 
 typedef struct {
     int x, y;
-} point_t;
+} point;
 
 typedef struct {
     int x, y;
     int alive;
-    uint8_t color;
-} brick_t;
+    u8 color;
+} brick;
 
 /* ===========================================================
  *  Game State
  * =========================================================== */
 
-static point_t   paddle;
-static point_t   ball;
+static point   paddle;
+static point   ball;
 static int       ball_dx, ball_dy;
 static int       ball_attached;     /* 1 = ball riding on paddle */
-static brick_t   bricks[MAX_BRICKS];
+static brick   bricks[MAX_BRICKS];
 static int       bricks_left;
 static int       player_lives;
 static int       score;
@@ -95,9 +95,9 @@ static int       victory;
 
 /* Particle effects for brick destruction */
 #define MAX_PARTICLES   20
-static point_t   particles[MAX_PARTICLES];
+static point   particles[MAX_PARTICLES];
 static int       particle_timers[MAX_PARTICLES];
-static uint8_t   particle_colors[MAX_PARTICLES];
+static u8   particle_colors[MAX_PARTICLES];
 
 /* ===========================================================
  *  Forward Declarations
@@ -113,7 +113,7 @@ static void draw_game_over_screen(void);
 static void init_bricks(void);
 static void move_ball(void);
 static void check_collisions(void);
-static void spawn_particles(int x, int y, uint8_t color);
+static void spawn_particles(int x, int y, u8 color);
 static void update_particles(void);
 static void render_frame(void);
 
@@ -182,7 +182,7 @@ static void breakout_kb_handler(const char* data, size_t size)
  *  Drawing Helpers
  * =========================================================== */
 
-static void draw_tile(int gx, int gy, uint8_t color)
+static void draw_tile(int gx, int gy, u8 color)
 {
     gfx_fill_rect(
         (size_t)(gx * TILE_SIZE),
@@ -196,7 +196,7 @@ static void draw_paddle(void)
     int gy = paddle.y;
 
     for (int i = 0; i < PADDLE_W; i++) {
-        uint8_t clr = (i == 0 || i == PADDLE_W - 1)
+        u8 clr = (i == 0 || i == PADDLE_W - 1)
                       ? CLR_PADDLE_EDGE : CLR_PADDLE;
         draw_tile(gx + i, gy, clr);
     }
@@ -297,7 +297,7 @@ static void draw_particles(void)
 
 static void init_bricks(void)
 {
-    static const uint8_t row_colors[BRICK_ROWS] = CLR_BRICK_COLORS;
+    static const u8 row_colors[BRICK_ROWS] = CLR_BRICK_COLORS;
 
     int idx = 0;
     for (int row = 0; row < BRICK_ROWS; row++) {
@@ -320,7 +320,7 @@ static void clear_particles(void)
     }
 }
 
-static void spawn_particles(int x, int y, uint8_t color)
+static void spawn_particles(int x, int y, u8 color)
 {
     for (int i = 0; i < MAX_PARTICLES; i++) {
         if (particle_timers[i] <= 0) {

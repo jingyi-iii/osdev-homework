@@ -7,10 +7,11 @@
 #include "kernel/capability.h"
 #include "kernel/process.h"
 #include "ipc/mailbox.h"
+#include <stdint.h>
 
 static irqline* irqlines[IDT_ENTRIES] = {0};
 
-static int irqline_alloc(uint32_t major, irqline **out)
+static int irqline_alloc(u32 major, irqline **out)
 {
     if (!out)
         return E_INVAL;
@@ -119,7 +120,7 @@ static int irqline_remove_all(struct irqline* line)
     return 0;
 }
 
-static int irqline_init(irqline** out_line, uint32_t major)
+static int irqline_init(irqline** out_line, u32 major)
 {
     if (!out_line || major >= IDT_ENTRIES)
         return E_INVAL;
@@ -142,9 +143,9 @@ static void irqline_release(irqline* line)
  * Find the first free (unused) minor number on the given irqline.
  * Returns IRQ_ANY_MINOR if none is available.
  */
-static uint32_t irqline_find_free_minor(struct irqline* line)
+static u32 irqline_find_free_minor(struct irqline* line)
 {
-    for (uint32_t candidate = 0; candidate < UINT32_MAX; candidate++) {
+    for (u32 candidate = 0; candidate < UINT32_MAX; candidate++) {
         int used = 0;
         list_for_each(each, &line->irqs) {
             irq* p = list_entry(each, irq, node);
@@ -177,7 +178,7 @@ static void dispatch_user_mode_irq(irq* p)
     send_mail(t->mailbox, m);
 }
 
-void irqline_handler(uint32_t major, uint32_t minor, void* context)
+void irqline_handler(u32 major, u32 minor, void* context)
 {
     (void)minor;
 
@@ -206,7 +207,7 @@ void irqline_handler(uint32_t major, uint32_t minor, void* context)
     }
 }
 
-static int irq_alloc(uint32_t major, uint32_t minor, int is_user_irq, int tid, const char *name,
+static int irq_alloc(u32 major, u32 minor, int is_user_irq, int tid, const char *name,
     void *context, irq_handler_fn handler, irq **out)
 {
     if (!out)
@@ -260,8 +261,8 @@ static int irq_free(irq *p)
  * The value is decided by the kernel (from the caller's privilege), never
  * taken blindly from the caller, so a user process cannot spoof a kernel irq.
  */
-static int irq_request_internal(irq **out, const char* name, uint32_t major,
-                                uint32_t minor, irq_handler_fn cb, void* cb_param,
+static int irq_request_internal(irq **out, const char* name, u32 major,
+                                u32 minor, irq_handler_fn cb, void* cb_param,
                                 int is_user_irq, int tid)
 {
     if (!out || major >= IDT_ENTRIES)
@@ -343,7 +344,7 @@ static int irq_request_internal(irq **out, const char* name, uint32_t major,
     return 0;
 }
 
-int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
+int irq_request(irq **out, const char* name, u32 major, u32 minor,
                     irq_handler_fn cb, void* cb_param)
 {
     /* User mode (CPL3): go through the syscall gate (major 100). */

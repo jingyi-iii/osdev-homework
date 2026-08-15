@@ -2,7 +2,7 @@
 #define TERMINAL_SERVER_H
 
 #include <stddef.h>
-#include <stdint.h>
+#include "lib/types.h"
 #include "drivers/platform_bus.h"
 
 /************************************************************************/
@@ -27,24 +27,24 @@ enum VgaColor {
     VGA_COLOR_WHITE         = 15,
 };
 
-static inline uint8_t to_vga_color(enum VgaColor fg, enum VgaColor bg)
+static inline u8 to_vga_color(enum VgaColor fg, enum VgaColor bg)
 {
-    return (uint8_t)(fg | bg << 4);
+    return (u8)(fg | bg << 4);
 }
 
-static inline uint16_t to_vga_char(uint8_t chr, uint8_t color)
+static inline u16 to_vga_char(u8 chr, u8 color)
 {
-    return (uint16_t)chr | (uint16_t)color << 8;
+    return (u16)chr | (u16)color << 8;
 }
 
 /************************************************************************/
 /*                      Terminal Public API                             */
 /************************************************************************/
 void terminal_flush(const char* unused);
-void terminal_write_at(char chr, uint8_t color, size_t x, size_t y);
-void terminal_write_at_str(const char* str, uint8_t color, size_t x, size_t y);
+void terminal_write_at(char chr, u8 color, size_t x, size_t y);
+void terminal_write_at_str(const char* str, u8 color, size_t x, size_t y);
 void terminal_write(const char* str);
-void terminal_write_color(const char* str, uint8_t color);
+void terminal_write_color(const char* str, u8 color);
 void terminal_putchar(char c);
 size_t terminal_get_row(void);
 

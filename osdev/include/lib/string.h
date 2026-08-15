@@ -1,7 +1,7 @@
 #ifndef __STRING_H__
 #define __STRING_H__
 
-#include <stdint.h>
+#include "lib/types.h"
 #include <stddef.h>
 #include <stdarg.h>
 

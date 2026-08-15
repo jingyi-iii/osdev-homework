@@ -1,6 +1,6 @@
 #include "sync/spinlock.h"
 #include "lib/module.h"
-#include <stdint.h>
+#include "lib/types.h"
 
 static spinlock* guard_spinlock;
 
@@ -13,7 +13,7 @@ module_init(guard_init);
 
 int __cxa_guard_acquire(char* guard)
 {
-    uint8_t* guard_byte = (uint8_t*)guard;
+    u8* guard_byte = (u8*)guard;
 
     if (*guard_byte & 1)
         return 0;
@@ -43,7 +43,7 @@ int __cxa_guard_acquire(char* guard)
 
 void __cxa_guard_release(char* guard)
 {
-    uint8_t* guard_byte = (uint8_t*)guard;
+    u8* guard_byte = (u8*)guard;
 
     spinlock_lock(guard_spinlock);
     *guard_byte = 1;
@@ -52,7 +52,7 @@ void __cxa_guard_release(char* guard)
 
 void __cxa_guard_abort(char* guard)
 {
-    uint8_t* guard_byte = (uint8_t*)guard;
+    u8* guard_byte = (u8*)guard;
 
     spinlock_lock(guard_spinlock);
     *guard_byte = 0;

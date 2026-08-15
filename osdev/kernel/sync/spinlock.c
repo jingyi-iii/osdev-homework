@@ -57,3 +57,28 @@ int spinlock_unlock(spinlock *lock)
     __atomic_store_n(&lock->state, LOCK_UNLOCKED, __ATOMIC_RELEASE);
     return 0;
 }
+
+/*
+ * spinlock_lock_irqsave - disable interrupts (save EFLAGS), then acquire
+ * the lock.  Returns the saved EFLAGS; pass it to
+ * spinlock_unlock_irqrestore() when releasing.
+ *
+ * Guarantees the holder can never be preempted by an interrupt handler, so
+ * an ISR-side acquisition (spinlock_lock) always terminates.  RING3 may run
+ * cli/popfl thanks to IOPL=3.  spinlock_lock(NULL) is a no-op, so a NULL
+ * lock still gets a correct save/restore of the interrupt flag.
+ */
+u32 spinlock_lock_irqsave(spinlock* lock)
+{
+    u32 eflags;
+    __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags) : : "memory");
+    __asm__ __volatile__("cli" ::: "memory");
+    spinlock_lock(lock);
+    return eflags;
+}
+
+void spinlock_unlock_irqrestore(spinlock* lock, u32 eflags)
+{
+    spinlock_unlock(lock);
+    __asm__ __volatile__("pushl %0; popfl" : : "r"(eflags) : "memory");
+}

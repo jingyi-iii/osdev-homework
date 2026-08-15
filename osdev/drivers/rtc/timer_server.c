@@ -6,9 +6,9 @@
 
 struct timer_device {
     spinlock* lock;
-    uint16_t cmos_addr;
-    uint16_t cmos_data;
-    rtc_time_t cached_time;  /* cached RTC time */
+    u16 cmos_addr;
+    u16 cmos_data;
+    rtc_time cached_time;  /* cached RTC time */
     int ready;               /* set once the user-mode server has started */
 };
 
@@ -20,9 +20,9 @@ struct timer_device timer_device = {
     .ready = 0,
 };
 
-static uint8_t timer_read_reg(struct timer_device* dev, uint8_t reg)
+static u8 timer_read_reg(struct timer_device* dev, u8 reg)
 {
-    uint8_t value = 0;
+    u8 value = 0;
 
     /* Direct I/O: RING3 may run in/out thanks to IOPL=3, and the lock is a
      * plain kernel spinlock, so no syscall / platform ops are needed.
@@ -35,15 +35,15 @@ static uint8_t timer_read_reg(struct timer_device* dev, uint8_t reg)
     return value;
 }
 
-static uint8_t bcd_to_bin(uint8_t bcd)
+static u8 bcd_to_bin(u8 bcd)
 {
     return ((bcd / 16) * 10) + (bcd & 0x0F);
 }
 
 static void timer_update_rtc_time(struct timer_device* dev)
 {
-    uint8_t last_second, last_minute, last_hour;
-    uint8_t last_day, last_month, last_year, last_century;
+    u8 last_second, last_minute, last_hour;
+    u8 last_day, last_month, last_year, last_century;
 
     /* Read until values are consistent (avoid rollover during read) */
     do {
@@ -56,7 +56,7 @@ static void timer_update_rtc_time(struct timer_device* dev)
         last_century = timer_read_reg(dev, RTC_CENTURY);
 
         /* Re-read second to check for consistency */
-        uint8_t check_second = timer_read_reg(dev, RTC_SECOND);
+        u8 check_second = timer_read_reg(dev, RTC_SECOND);
         if (check_second == last_second)
             break;
 
@@ -64,7 +64,7 @@ static void timer_update_rtc_time(struct timer_device* dev)
     } while (1);
 
     /* Check if RTC is in BCD or binary mode */
-    uint8_t reg_b = timer_read_reg(dev, RTC_REG_B);
+    u8 reg_b = timer_read_reg(dev, RTC_REG_B);
     int is_pm = 0;
 
     if (reg_b & RTC_BCD) {
@@ -112,7 +112,7 @@ static void timer_update_rtc_time(struct timer_device* dev)
     }
 }
 
-void timer_get_time(rtc_time_t* time)
+void timer_get_time(rtc_time* time)
 {
     if (!time)
         return;
@@ -126,7 +126,7 @@ int timer_read_time_str(char* buf, size_t size)
         return E_INVAL;
 
     timer_update_rtc_time(&timer_device);
-    rtc_time_t* t = &timer_device.cached_time;
+    rtc_time* t = &timer_device.cached_time;
 
     /* Need at least 20 bytes for "YYYY-MM-DD HH:MM:SS\0" */
     if (size < 20)
@@ -179,11 +179,11 @@ int timer_is_ready(void)
  * Uses mode 0 (interrupt on terminal count) and polls the OUT pin
  * via the read-back status command.  Direct I/O (works at CPL3, IOPL=3).
  */
-static void pit_delay_ticks(uint16_t ticks)
+static void pit_delay_ticks(u16 ticks)
 {
     /* Enable PIT channel 2 gate via PPI port B (bit 0).
      * Save original state so we can restore it. */
-    uint8_t ppi_save = (uint8_t)arch_inb(PIT_PPI_PORT);
+    u8 ppi_save = (u8)arch_inb(PIT_PPI_PORT);
     arch_outb(PIT_PPI_PORT, ppi_save | 0x01);
 
     /* Program channel 2: mode 0 (one-shot), binary, lo/hi bytes */
@@ -201,44 +201,44 @@ static void pit_delay_ticks(uint16_t ticks)
     arch_outb(PIT_PPI_PORT, ppi_save);
 }
 
-void timer_delay_ms(uint32_t ms)
+void timer_delay_ms(u32 ms)
 {
     if (ms == 0)
         return;
 
-    /* ticks = frequency * ms / 1000,  keep within uint32_t range */
-    uint32_t ticks = (uint32_t)(((uint64_t)PIT_FREQUENCY * ms) / 1000);
+    /* ticks = frequency * ms / 1000,  keep within u32 range */
+    u32 ticks = (u32)(((u64)PIT_FREQUENCY * ms) / 1000);
 
     while (ticks > 0) {
-        uint16_t chunk;
+        u16 chunk;
         if (ticks > 65535) {
             chunk = 65535;
             ticks -= 65535;
         } else {
-            chunk = (uint16_t)ticks;
+            chunk = (u16)ticks;
             ticks = 0;
         }
         pit_delay_ticks(chunk);
     }
 }
 
-void timer_delay_us(uint32_t us)
+void timer_delay_us(u32 us)
 {
     if (us == 0)
         return;
 
     /* ticks = frequency * us / 1000000, minimum 1 tick (~0.84 us) */
-    uint32_t ticks = (uint32_t)(((uint64_t)PIT_FREQUENCY * us) / 1000000);
+    u32 ticks = (u32)(((u64)PIT_FREQUENCY * us) / 1000000);
     if (ticks == 0)
         ticks = 1;
 
     while (ticks > 0) {
-        uint16_t chunk;
+        u16 chunk;
         if (ticks > 65535) {
             chunk = 65535;
             ticks -= 65535;
         } else {
-            chunk = (uint16_t)ticks;
+            chunk = (u16)ticks;
             ticks = 0;
         }
         pit_delay_ticks(chunk);

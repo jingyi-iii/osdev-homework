@@ -66,7 +66,7 @@ typedef enum {
     DIR_DOWN  = 1,
     DIR_LEFT  = 2,
     DIR_RIGHT = 3,
-} direction_t;
+} direction;
 
 /* ===========================================================
  *  Data Structures
@@ -74,24 +74,24 @@ typedef enum {
 
 typedef struct {
     int x, y;
-} point_t;
+} point;
 
 typedef struct {
     int x, y;
     int active;
     int is_player;
-} bullet_t;
+} bullet;
 
 typedef struct {
     int x, y;
     int active;
     int shoot_timer;
-} enemy_t;
+} enemy;
 
 typedef struct {
     int dx, dy;
-    uint8_t color;
-} plane_tile_t;
+    u8 color;
+} plane_tile;
 
 /* ===========================================================
  *  Plane Sprites (tile offsets relative to plane origin)
@@ -101,7 +101,7 @@ typedef struct {
  *    [▶] [█] [◀]            [ ] [▼] [ ]
  * =========================================================== */
 
-static const plane_tile_t player_sprite[] = {
+static const plane_tile player_sprite[] = {
     { 1, 0, CLR_PLAYER_COCKPIT },
     { 0, 1, CLR_PLAYER_WING },
     { 1, 1, CLR_PLAYER_BODY },
@@ -110,7 +110,7 @@ static const plane_tile_t player_sprite[] = {
 #define PLAYER_SPRITE_LEN \
     (sizeof(player_sprite) / sizeof(player_sprite[0]))
 
-static const plane_tile_t enemy_sprite[] = {
+static const plane_tile enemy_sprite[] = {
     { 0, 0, CLR_ENEMY_WING },
     { 1, 0, CLR_ENEMY_BODY },
     { 2, 0, CLR_ENEMY_WING },
@@ -123,15 +123,15 @@ static const plane_tile_t enemy_sprite[] = {
  *  Game State
  * =========================================================== */
 
-static point_t      player;
-static direction_t  player_dir;
+static point      player;
+static direction  player_dir;
 static int          player_shoot_cooldown;
 static int          player_lives;
 static int          player_invincible;
 static int          invincible_timer;
 
-static bullet_t     bullets[MAX_BULLETS];
-static enemy_t      enemies[MAX_ENEMIES];
+static bullet     bullets[MAX_BULLETS];
+static enemy      enemies[MAX_ENEMIES];
 
 static int          game_over;
 static int          game_quit;
@@ -140,18 +140,18 @@ static int          score;
 static int          tick_count;
 static int          enemy_spawn_timer;
 static int          explosion_timer;
-static point_t      explosion_pos;
+static point      explosion_pos;
 
 /* Starfield */
 #define MAX_STARS   40
-static point_t      stars[MAX_STARS];
+static point      stars[MAX_STARS];
 
 /* ===========================================================
  *  Forward Declarations
  * =========================================================== */
 
 static void draw_plane(int gx, int gy,
-                       const plane_tile_t* sprite, size_t len);
+                       const plane_tile* sprite, size_t len);
 static void draw_bullets(void);
 static void draw_hud(void);
 static void draw_game_over_screen(void);
@@ -227,7 +227,7 @@ static void airplane_kb_handler(const char* data, size_t size)
  *  Drawing Helpers
  * =========================================================== */
 
-static void draw_tile(int gx, int gy, uint8_t color)
+static void draw_tile(int gx, int gy, u8 color)
 {
     gfx_fill_rect(
         (size_t)(gx * TILE_SIZE),
@@ -236,7 +236,7 @@ static void draw_tile(int gx, int gy, uint8_t color)
 }
 
 static void draw_plane(int gx, int gy,
-                       const plane_tile_t* sprite, size_t len)
+                       const plane_tile* sprite, size_t len)
 {
     for (size_t i = 0; i < len; i++) {
         draw_tile(gx + sprite[i].dx, gy + sprite[i].dy,
@@ -248,7 +248,7 @@ static void draw_bullets(void)
 {
     for (int i = 0; i < MAX_BULLETS; i++) {
         if (bullets[i].active) {
-            uint8_t clr = bullets[i].is_player
+            u8 clr = bullets[i].is_player
                           ? CLR_BULLET_P : CLR_BULLET_E;
             draw_tile(bullets[i].x, bullets[i].y, clr);
         }
@@ -322,7 +322,7 @@ static void draw_explosion(void)
                 int py = cy + dy;
                 if (px >= 0 && (size_t)px < GFX_WIDTH &&
                     py >= 0 && (size_t)py < GFX_HEIGHT) {
-                    uint8_t clr = (my_rand() % 2)
+                    u8 clr = (my_rand() % 2)
                                   ? CLR_EXPLOSION : GFX_RED;
                     gfx_fill_rect((size_t)px, (size_t)py,
                                   2, 2, clr);

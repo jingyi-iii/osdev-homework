@@ -1,7 +1,7 @@
 #ifndef TIMER_SERVER_H
 #define TIMER_SERVER_H
 
-#include <stdint.h>
+#include "lib/types.h"
 #include <stddef.h>
 #include "drivers/platform_bus.h"
 
@@ -25,18 +25,18 @@
 #define RTC_24HOUR   0x02   /* 0 = 12-hour, 1 = 24-hour */
 
 typedef struct {
-    uint8_t second;
-    uint8_t minute;
-    uint8_t hour;
-    uint8_t weekday;
-    uint8_t day;
-    uint8_t month;
-    uint8_t year;
-    uint8_t century;
-} rtc_time_t;
+    u8 second;
+    u8 minute;
+    u8 hour;
+    u8 weekday;
+    u8 day;
+    u8 month;
+    u8 year;
+    u8 century;
+} rtc_time;
 
 /* Get current RTC time */
-void timer_get_time(rtc_time_t* time);
+void timer_get_time(rtc_time* time);
 
 /* Read time as formatted string "YYYY-MM-DD HH:MM:SS" */
 /* Returns number of bytes written, or -1 on error */
@@ -49,8 +49,8 @@ int timer_is_ready(void);
  * timer_delay_ms: delay in milliseconds (max ~55ms per shot, loops for longer)
  * timer_delay_us: delay in microseconds (min ~1us resolution via PIT)
  * Plain functions — callable from CPL0 and CPL3 (IOPL=3 allows direct I/O). */
-void timer_delay_ms(uint32_t ms);
-void timer_delay_us(uint32_t us);
+void timer_delay_ms(u32 ms);
+void timer_delay_us(u32 us);
 
 /* Register the user-mode timer server (called from init_thread) */
 void timer_server_init(void);

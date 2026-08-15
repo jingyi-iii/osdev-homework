@@ -20,21 +20,21 @@
 #define NUM_EXCEPTIONS          (32)
 #define NUM_INTERRUPTS          (16)
 
-int32_t irq_reenter_cnt = -1;
-static idtmeta_t idtmeta = { 0 };
-static ATTR_ALIGINED(idesc_t) idesc_t idt[IDT_ENTRIES] = { 0 };
+i32 irq_reenter_cnt = -1;
+static idtmeta g_idtmeta = { 0 };
+static ATTR_ALIGINED(idesc) idesc idt[IDT_ENTRIES] = { 0 };
 void arch_isr_tbl(void);
 void arch_syscall_entry(void);
 static void hlt_handler(void) { for (;;) __asm__ volatile ("hlt"); }
 
-static idesc_t gen_idesc(uint32_t isr, uint16_t sel_code, uint8_t flags)
+static idesc gen_idesc(u32 isr, u16 sel_code, u8 flags)
 {
-    idesc_t desc = { 0 }; 
+    idesc desc = { 0 }; 
 
-    desc.isr_low  = (uint32_t)isr & 0xffff;
+    desc.isr_low  = (u32)isr & 0xffff;
     desc.sel_code = sel_code;
     desc.attrs    = flags;
-    desc.isr_high = (uint32_t)isr >> 16;
+    desc.isr_high = (u32)isr >> 16;
     desc.reserved = 0;
 
     return desc;
@@ -54,10 +54,10 @@ static void arch_init_8259a(void)
     arch_outb(INT_SLAVE_DATA,  0xff);
 }
 
-void arch_unmask_irq(uint16_t irq_nr)
+void arch_unmask_irq(u16 irq_nr)
 {
     unsigned char mask = 0;
-    uint8_t port_val = 0;
+    u8 port_val = 0;
 
     if (irq_nr < ARCH_IRQ_BEGIN || irq_nr > ARCH_IRQ_END)
         return;
@@ -73,10 +73,10 @@ void arch_unmask_irq(uint16_t irq_nr)
     }
 }
 
-void arch_mask_irq(uint16_t irq_nr)
+void arch_mask_irq(u16 irq_nr)
 {
     unsigned char mask = 0;
-    uint8_t port_val = 0;
+    u8 port_val = 0;
 
     if (irq_nr < ARCH_IRQ_BEGIN || irq_nr > ARCH_IRQ_END)
         return;
@@ -98,28 +98,28 @@ void arch_init_irq(void)
 
     arch_cli();
     for (i = 0; i < IDT_ENTRIES; i++) {
-        idt[i] = gen_idesc((uint32_t)hlt_handler,
+        idt[i] = gen_idesc((u32)hlt_handler,
                            arch_get_sel(SYS_CODE),
                            IDT_GATE_INT32);
     }
     for (i = 0; i < NUM_EXCEPTIONS + NUM_INTERRUPTS; i++) {
-        idt[i] = gen_idesc((uint32_t)arch_isr_tbl + 256 * i,
+        idt[i] = gen_idesc((u32)arch_isr_tbl + 256 * i,
                            arch_get_sel(SYS_CODE),
                            IDT_GATE_INT32);
     }
 
     // syscall
-    idt[100] = gen_idesc((uint32_t)arch_syscall_entry,
+    idt[100] = gen_idesc((u32)arch_syscall_entry,
                            arch_get_sel(SYS_CODE),
                            IDT_GATE_SYSCALL32);
 
-    idtmeta.limit = sizeof(idesc_t) * IDT_ENTRIES - 1;
-    idtmeta.base = (uint32_t)idt;
-    arch_reload_idt(&idtmeta);
+    g_idtmeta.limit = sizeof(idesc) * IDT_ENTRIES - 1;
+    g_idtmeta.base = (u32)idt;
+    arch_reload_idt(&g_idtmeta);
     arch_init_8259a();
 }
 
-void arch_syscall(uint32_t minor, void* data)
+void arch_syscall(u32 minor, void* data)
 {
     __asm__ __volatile__(
             "movl $100,     %%eax   \n\t"
@@ -141,16 +141,16 @@ void arch_syscall(uint32_t minor, void* data)
 
 /* Stack frame built by DECLARE_EXCEPTION_NOERR / DECLARE_EXCEPTION_ERR */
 typedef struct {
-    uint32_t gs, fs, es, ds;
-    uint32_t edi, esi, ebp, esp_v;
-    uint32_t ebx, edx, ecx, eax;
-    uint32_t error_code;
-    uint32_t eip;
-    uint32_t cs;
-    uint32_t eflags;
-    uint32_t user_esp;
-    uint32_t user_ss;
-} exception_frame_t;
+    u32 gs, fs, es, ds;
+    u32 edi, esi, ebp, esp_v;
+    u32 ebx, edx, ecx, eax;
+    u32 error_code;
+    u32 eip;
+    u32 cs;
+    u32 eflags;
+    u32 user_esp;
+    u32 user_ss;
+} exception_frame;
 
 static const char *exception_names[32] = {
     [0x00] = "#DE  Divide Error",
@@ -180,9 +180,9 @@ static const char *exception_names[32] = {
 /* ---- emergency output: VGA text-mode (0xB8000) ---- */
 static void vga_emergency_putc(char c)
 {
-    static uint16_t *vga = (uint16_t *)0xB8000;
+    static u16 *vga = (u16 *)0xB8000;
     static int pos;
-    static const uint8_t COLOR = 0x4F;  /* white on red */
+    static const u8 COLOR = 0x4F;  /* white on red */
 
     switch (c) {
     case '\n':
@@ -192,7 +192,7 @@ static void vga_emergency_putc(char c)
         pos = pos / 80 * 80;
         break;
     default:
-        vga[pos] = (uint16_t)(c | (COLOR << 8));
+        vga[pos] = (u16)(c | (COLOR << 8));
         pos++;
         break;
     }
@@ -200,7 +200,7 @@ static void vga_emergency_putc(char c)
         for (int i = 0; i < 80 * 24; i++)
             vga[i] = vga[i + 80];
         for (int i = 80 * 24; i < 80 * 25; i++)
-            vga[i] = (uint16_t)(' ' | (COLOR << 8));
+            vga[i] = (u16)(' ' | (COLOR << 8));
         pos = 80 * 24;
     }
 }
@@ -210,7 +210,7 @@ static void serial_emergency_putc(char c)
 {
     while ((arch_inb(0x3FD) & 0x20) == 0)
         __asm__ volatile ("pause");
-    arch_outb(0x3F8, (uint8_t)c);
+    arch_outb(0x3F8, (u8)c);
     if (c == '\n')
         serial_emergency_putc('\r');
 }
@@ -225,18 +225,18 @@ static void emergency_puts(const char *s)
     }
 }
 
-static void emergency_print_hex(uint32_t val)
+static void emergency_print_hex(u32 val)
 {
     char buf[] = "00000000";
     for (int i = 7; i >= 0; i--) {
-        uint8_t nibble = val & 0xF;
+        u8 nibble = val & 0xF;
         buf[i] = nibble < 10 ? '0' + nibble : 'A' + nibble - 10;
         val >>= 4;
     }
     emergency_puts(buf);
 }
 
-static void emergency_print_dec(uint32_t val)
+static void emergency_print_dec(u32 val)
 {
     char buf[12];
     int i = 10;
@@ -259,16 +259,16 @@ static void emergency_print_dec(uint32_t val)
  *   make dump                    — resolve EIPs from the last crash
  *   make dump LOG=serial.log     — resolve EIPs from a specific log
  */
-static void emergency_stack_trace(uint32_t ebp_val, uint32_t crash_eip)
+static void emergency_stack_trace(u32 ebp_val, u32 crash_eip)
 {
-    extern uint32_t __kernel_start[];
-    extern uint32_t __kernel_end[];
-    const uint32_t kstart = (uint32_t)__kernel_start;
-    const uint32_t kend   = (uint32_t)__kernel_end;
+    extern u32 __kernel_start[];
+    extern u32 __kernel_end[];
+    const u32 kstart = (u32)__kernel_start;
+    const u32 kend   = (u32)__kernel_end;
 
-    uint32_t eips[16];
+    u32 eips[16];
     int eip_count = 0;
-    uint32_t *ebp = (uint32_t *)ebp_val;
+    u32 *ebp = (u32 *)ebp_val;
     int depth;
 
     /* ---- pass 1: collect return EIPs ---- */
@@ -276,17 +276,17 @@ static void emergency_stack_trace(uint32_t ebp_val, uint32_t crash_eip)
         if (!ebp)
             break;
 
-        uint32_t next_ebp = ebp[0];
-        uint32_t ret_eip  = ebp[1];
+        u32 next_ebp = ebp[0];
+        u32 ret_eip  = ebp[1];
 
         if (ret_eip < kstart || ret_eip >= kend)
             break;
 
         eips[eip_count++] = ret_eip;
 
-        if (next_ebp == 0 || next_ebp < (uint32_t)ebp || next_ebp >= kend)
+        if (next_ebp == 0 || next_ebp < (u32)ebp || next_ebp >= kend)
             break;
-        ebp = (uint32_t *)next_ebp;
+        ebp = (u32 *)next_ebp;
     }
 
     /* ---- pass 2: machine-parseable block ---- */
@@ -314,16 +314,16 @@ static void emergency_stack_trace(uint32_t ebp_val, uint32_t crash_eip)
         return;
     }
     /* re-walk to also print EBP */
-    ebp = (uint32_t *)ebp_val;
+    ebp = (u32 *)ebp_val;
     for (int i = 0; i < eip_count; i++) {
         emergency_puts("  #");
         emergency_print_dec(i);
         emergency_puts("  EBP=");
-        emergency_print_hex((uint32_t)ebp);
+        emergency_print_hex((u32)ebp);
         emergency_puts("  ret-to EIP=");
         emergency_print_hex(eips[i]);
         emergency_puts("\n");
-        ebp = (uint32_t *)ebp[0];
+        ebp = (u32 *)ebp[0];
     }
     emergency_puts("  (use 'make dump' offline to resolve EIP → function)\n");
 }
@@ -332,7 +332,7 @@ static void emergency_stack_trace(uint32_t ebp_val, uint32_t crash_eip)
  * exception_handler — called from DECLARE_EXCEPTION_* macros in irq.S.
  * This function must never return; it halts the system after dumping state.
  */
-void exception_handler(int exception_number, exception_frame_t *frame)
+void exception_handler(int exception_number, exception_frame *frame)
 {
     emergency_puts("\n\n========================================\n");
     emergency_puts("         KERNEL EXCEPTION\n");
@@ -354,7 +354,7 @@ void exception_handler(int exception_number, exception_frame_t *frame)
 
     /* #PF extras */
     if (exception_number == 0x0E) {
-        uint32_t cr2;
+        u32 cr2;
         __asm__ __volatile__("mov %%cr2, %0" : "=r"(cr2));
         emergency_puts("CR2 (fault address): ");
         emergency_print_hex(cr2);

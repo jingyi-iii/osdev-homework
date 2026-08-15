@@ -1,6 +1,5 @@
 #include "kernel/init.h"
 #include "kernel/process.h"
-#include "kernel/capability.h"
 
 extern void process_test_main_thread(void);
 

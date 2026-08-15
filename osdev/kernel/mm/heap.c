@@ -1,6 +1,5 @@
 #include "mm/heap.h"
 #include "sync/spinlock.h"
-#include "lib/module.h"
 #include "lib/string.h"
 #include "lib/list.h"
 
@@ -13,10 +12,10 @@ typedef struct heapchunk {
 } heapchunk;
 
 typedef struct heappool {
-    int8_t      pool[HEAP_TOTAL_SIZE];
-    uint32_t    avail_size;
+    i8      pool[HEAP_TOTAL_SIZE];
+    u32    avail_size;
     spinlock*   lock_dev;
-    int8_t      init;
+    i8      init;
     list_node   head_node;
 } heappool;
 
@@ -30,7 +29,7 @@ static void kheap_init(void)
     if (!pool.lock_dev)
         return;
 
-    spinlock_lock(pool.lock_dev);
+    u32 eflags = spinlock_lock_irqsave(pool.lock_dev);
     pool.avail_size = HEAP_TOTAL_SIZE - sizeof(heapchunk);
     pool.init = 1;
     pool.head_node.prev = &pool.head_node;
@@ -39,7 +38,7 @@ static void kheap_init(void)
     chunk->size = HEAP_TOTAL_SIZE - sizeof(heapchunk);
     chunk->used = 0;
     list_add(&chunk->this_node, &pool.head_node);
-    spinlock_unlock(pool.lock_dev);
+    spinlock_unlock_irqrestore(pool.lock_dev, eflags);
 }
 
 void* kmalloc(unsigned int alloc_size)
@@ -52,7 +51,7 @@ void* kmalloc(unsigned int alloc_size)
     if (!pool.init)
         kheap_init();
 
-    spinlock_lock(pool.lock_dev);
+    u32 eflags = spinlock_lock_irqsave(pool.lock_dev);
     if (req_size < alloc_size)         // overflow
         goto ALLOC_FAIL;
     if (req_size > pool.avail_size)
@@ -71,25 +70,25 @@ void* kmalloc(unsigned int alloc_size)
     if (!chunk)
         goto ALLOC_FAIL;
 
-    new_chunk = (heapchunk*)((uint8_t*)chunk + req_size);
-    if ((uint8_t*)new_chunk + sizeof(heapchunk) <= (uint8_t*)pool.pool + HEAP_TOTAL_SIZE) {
+    new_chunk = (heapchunk*)((u8*)chunk + req_size);
+    if ((u8*)new_chunk + sizeof(heapchunk) <= (u8*)pool.pool + HEAP_TOTAL_SIZE) {
         new_chunk->size = chunk->size - req_size;
         new_chunk->used = 0;
         list_add(&new_chunk->this_node, &chunk->this_node);
     }
 
-    ret_addr = (uint8_t*)chunk + sizeof(heapchunk);
+    ret_addr = (u8*)chunk + sizeof(heapchunk);
     memset(ret_addr, 0, alloc_size);
     chunk->used = 1;
     chunk->size = alloc_size;
 
     pool.avail_size -= req_size;
-    spinlock_unlock(pool.lock_dev);
+    spinlock_unlock_irqrestore(pool.lock_dev, eflags);
 
     return (void*)ret_addr;
 
 ALLOC_FAIL:
-    spinlock_unlock(pool.lock_dev);
+    spinlock_unlock_irqrestore(pool.lock_dev, eflags);
     return 0;
 }
 
@@ -101,11 +100,11 @@ void kfree(void* pointer)
     if (!pointer)
         return;
 
-    spinlock_lock(pool.lock_dev);
-    free_chunk = (heapchunk *)((uint8_t*)pointer - sizeof(heapchunk));
+    u32 eflags = spinlock_lock_irqsave(pool.lock_dev);
+    free_chunk = (heapchunk *)((u8*)pointer - sizeof(heapchunk));
 
     if (!free_chunk->used) {
-        spinlock_unlock(pool.lock_dev);
+        spinlock_unlock_irqrestore(pool.lock_dev, eflags);
         return;
     }
 
@@ -130,5 +129,5 @@ void kfree(void* pointer)
 
     pool.avail_size += sizeof(heapchunk) + free_chunk->size;
     free_chunk->used = 0;
-    spinlock_unlock(pool.lock_dev);
+    spinlock_unlock_irqrestore(pool.lock_dev, eflags);
 }

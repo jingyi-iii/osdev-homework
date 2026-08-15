@@ -1,7 +1,7 @@
 #ifndef PROCESS_H
 #define PROCESS_H
 
-#include <stdint.h>
+#include "lib/types.h"
 #include "arch_task.h"
 #include "lib/list.h"
 #include "sync/spinlock.h"
@@ -20,9 +20,9 @@ typedef enum thread_run_state {
 } thread_state;
 
 typedef struct proc_thread_ctrl_config {
-    uint8_t cmd;
-    int32_t pid;    // out param for create, in param for delete, block and unblock
-    int32_t tid;    // out param for create, in param for delete, block and unblock
+    u8 cmd;
+    i32 pid;    // out param for create, in param for delete, block and unblock
+    i32 tid;    // out param for create, in param for delete, block and unblock
     task_priv priv;
     task_entry_t entry;
     void* param;
@@ -42,7 +42,7 @@ typedef enum proc_state {
 
 /* Process Control Block */
 typedef struct pcb {
-    int32_t             pid;
+    i32             pid;
     proc_state          state;
     proc_priv           priv;
     list_node           this_node;
@@ -59,7 +59,7 @@ typedef struct pcb {
 typedef struct tcb {
     arch_task_context   context;
     task_entry_t        entry;
-    int32_t             tid;
+    i32             tid;
     thread_state        state;
     int                 wake_pending;   /* set by unblock, consumed on block/resume */
     list_node           this_node;      /* node in global scheduling list */
@@ -75,22 +75,22 @@ typedef struct tcb {
     wait_queue*         waiting_on;
 } tcb;
 
-int32_t thread_create       (task_priv priv, task_entry_t entry, void* param);
-void    thread_exit         (int32_t tid);
+i32 thread_create       (task_priv priv, task_entry_t entry, void* param);
+void    thread_exit         (i32 tid);
 void    thread_yield        (void);
-void    thread_block        (int32_t tid);
-void    thread_unblock      (int32_t tid);
+void    thread_block        (i32 tid);
+void    thread_unblock      (i32 tid);
 int     thread_get_tid      (void);
 void*   thread_get_param    (void);
-tcb*    thread_get_by_tid   (int32_t tid);
+tcb*    thread_get_by_tid   (i32 tid);
 
-int32_t proc_create         (proc_priv priv, task_entry_t entry, void* param);
-void    proc_exit           (int32_t pid);
-int     proc_block          (int32_t pid);
-int     proc_unblock        (int32_t pid);
+i32 proc_create         (proc_priv priv, task_entry_t entry, void* param);
+void    proc_exit           (i32 pid);
+int     proc_block          (i32 pid);
+int     proc_unblock        (i32 pid);
 int     proc_get_pid        (void);
 pcb*    get_current_process (void);
-pcb*    get_process_by_pid  (int32_t pid);
+pcb*    get_process_by_pid  (i32 pid);
 
 /* Exported for mailbox broadcast — must be held when iterating thread_head */
 extern list_node thread_head;

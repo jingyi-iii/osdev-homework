@@ -10,7 +10,7 @@
 void test_basic_kmalloc(void) {
     printf("Test 1: Basic kmalloc allocation\n");
 
-    int8_t* ptr = kmalloc(100);
+    i8* ptr = kmalloc(100);
     assert(ptr != NULL);
 
     // Verify memory is zeroed
@@ -26,7 +26,7 @@ void test_basic_kmalloc(void) {
 void test_multiple_kmalloc(void) {
     printf("Test 2: Multiple kmalloc allocations\n");
 
-    int8_t* ptrs[10];
+    i8* ptrs[10];
     for (int i = 0; i < 10; i++) {
         ptrs[i] = kmalloc(100 + i * 10);
         assert(ptrs[i] != NULL);
@@ -42,13 +42,13 @@ void test_multiple_kmalloc(void) {
 void test_alloc_free_cycle(void) {
     printf("Test 3: Allocation and free cycle\n");
 
-    int8_t* ptr1 = kmalloc(500);
+    i8* ptr1 = kmalloc(500);
     assert(ptr1 != NULL);
 
     kfree(ptr1);
 
     // Allocate again - should reuse freed space
-    int8_t* ptr2 = kmalloc(500);
+    i8* ptr2 = kmalloc(500);
     assert(ptr2 != NULL);
 
     kfree(ptr2);
@@ -69,7 +69,7 @@ void test_zero_allocation(void) {
     printf("Test 5: Zero size allocation\n");
 
     // req_size = sizeof(heapchunk) + 0 = nonzero, so a valid minimal chunk is returned
-    int8_t* ptr = kmalloc(0);
+    i8* ptr = kmalloc(0);
     assert(ptr != NULL);
 
     kfree(ptr);
@@ -81,7 +81,7 @@ void test_large_allocation(void) {
     printf("Test 6: Large allocation\n");
 
     // Allocate a large chunk
-    int8_t* ptr = kmalloc(1024 * 1024);  // 1MB
+    i8* ptr = kmalloc(1024 * 1024);  // 1MB
     assert(ptr != NULL);
 
     // Verify zeroed
@@ -97,17 +97,17 @@ void test_large_allocation(void) {
 void test_memory_write_read(void) {
     printf("Test 7: Memory write and read\n");
 
-    int8_t* ptr = kmalloc(256);
+    i8* ptr = kmalloc(256);
     assert(ptr != NULL);
 
     // Write pattern
     for (int i = 0; i < 256; i++) {
-        ptr[i] = (int8_t)i;
+        ptr[i] = (i8)i;
     }
 
     // Verify pattern
     for (int i = 0; i < 256; i++) {
-        assert(ptr[i] == (int8_t)i);
+        assert(ptr[i] == (i8)i);
     }
 
     kfree(ptr);
@@ -118,7 +118,7 @@ void test_memory_write_read(void) {
 void test_fragmentation(void) {
     printf("Test 8: Fragmentation test\n");
 
-    int8_t* ptrs[20];
+    i8* ptrs[20];
 
     // Allocate many small chunks
     for (int i = 0; i < 20; i++) {
@@ -152,7 +152,7 @@ void test_various_sizes(void) {
     printf("Test 9: Various allocation sizes\n");
 
     size_t sizes[] = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 4096, 8192};
-    int8_t* ptrs[sizeof(sizes)/sizeof(sizes[0])];
+    i8* ptrs[sizeof(sizes)/sizeof(sizes[0])];
 
     for (int i = 0; i < sizeof(sizes)/sizeof(sizes[0]); i++) {
         ptrs[i] = kmalloc(sizes[i]);
@@ -171,7 +171,7 @@ void test_various_sizes(void) {
 void test_stress_allocation(void) {
     printf("Test 10: Stress test with many allocations\n");
 
-    int8_t* ptrs[100];
+    i8* ptrs[100];
     int allocated = 0;
 
     // Allocate until we can't anymore or reach limit
@@ -198,7 +198,7 @@ void test_stress_allocation(void) {
 void test_memory_reuse(void) {
     printf("Test 11: Memory reuse after free\n");
 
-    int8_t* ptr1 = kmalloc(1000);
+    i8* ptr1 = kmalloc(1000);
     assert(ptr1 != NULL);
 
     // Write to memory
@@ -207,7 +207,7 @@ void test_memory_reuse(void) {
     kfree(ptr1);
 
     // Allocate same size
-    int8_t* ptr2 = kmalloc(1000);
+    i8* ptr2 = kmalloc(1000);
     assert(ptr2 != NULL);
 
     // Memory should be zeroed again
@@ -223,9 +223,9 @@ void test_memory_reuse(void) {
 void test_allocation_order(void) {
     printf("Test 12: Allocation order preservation\n");
 
-    int8_t* ptr1 = kmalloc(100);
-    int8_t* ptr2 = kmalloc(200);
-    int8_t* ptr3 = kmalloc(300);
+    i8* ptr1 = kmalloc(100);
+    i8* ptr2 = kmalloc(200);
+    i8* ptr3 = kmalloc(300);
 
     assert(ptr1 != NULL);
     assert(ptr2 != NULL);
@@ -252,7 +252,7 @@ void test_boundary_sizes(void) {
         127, 128, 129
     };
 
-    int8_t* ptrs[sizeof(boundary_sizes)/sizeof(boundary_sizes[0])];
+    i8* ptrs[sizeof(boundary_sizes)/sizeof(boundary_sizes[0])];
 
     for (int i = 0; i < sizeof(boundary_sizes)/sizeof(boundary_sizes[0]); i++) {
         ptrs[i] = kmalloc(boundary_sizes[i]);
@@ -269,20 +269,20 @@ void test_boundary_sizes(void) {
 void test_interleaved_alloc_free(void) {
     printf("Test 14: Interleaved allocation and freeing\n");
 
-    int8_t* ptr_a = kmalloc(500);
+    i8* ptr_a = kmalloc(500);
     assert(ptr_a != NULL);
 
-    int8_t* ptr_b = kmalloc(500);
+    i8* ptr_b = kmalloc(500);
     assert(ptr_b != NULL);
 
     kfree(ptr_a);
 
-    int8_t* ptr_c = kmalloc(500);
+    i8* ptr_c = kmalloc(500);
     assert(ptr_c != NULL);
 
     kfree(ptr_b);
 
-    int8_t* ptr_d = kmalloc(500);
+    i8* ptr_d = kmalloc(500);
     assert(ptr_d != NULL);
 
     kfree(ptr_c);
@@ -295,7 +295,7 @@ void test_interleaved_alloc_free(void) {
 void test_consecutive_same_size(void) {
     printf("Test 15: Consecutive same-size allocations\n");
 
-    int8_t* ptrs[50];
+    i8* ptrs[50];
 
     // Allocate 50 chunks of same size
     for (int i = 0; i < 50; i++) {
@@ -326,9 +326,9 @@ void test_consecutive_same_size(void) {
 void test_coalesce_merge_next(void) {
     printf("Test 16: Coalescing — merge with next\n");
 
-    int8_t* a = kmalloc(200);
-    int8_t* b = kmalloc(200);
-    int8_t* c = kmalloc(200);
+    i8* a = kmalloc(200);
+    i8* b = kmalloc(200);
+    i8* c = kmalloc(200);
     assert(a && b && c);
 
     // Free B: should merge with C if C is free (but C is used, so no merge)
@@ -337,7 +337,7 @@ void test_coalesce_merge_next(void) {
     kfree(b);  // b merges with next (the former c)
 
     // Now allocate a chunk slightly larger than one block: should use merged B+C space
-    int8_t* d = kmalloc(350);
+    i8* d = kmalloc(350);
     assert(d != NULL);
 
     kfree(a);
@@ -349,16 +349,16 @@ void test_coalesce_merge_next(void) {
 void test_coalesce_merge_prev(void) {
     printf("Test 17: Coalescing — merge with prev\n");
 
-    int8_t* a = kmalloc(200);
-    int8_t* b = kmalloc(200);
-    int8_t* c = kmalloc(200);
+    i8* a = kmalloc(200);
+    i8* b = kmalloc(200);
+    i8* c = kmalloc(200);
     assert(a && b && c);
 
     // Free A, then free B: B merges with A (prev)
     kfree(a);
     kfree(b);  // b merges with prev (former a)
 
-    int8_t* d = kmalloc(350);
+    i8* d = kmalloc(350);
     assert(d != NULL);
 
     kfree(c);
@@ -370,9 +370,9 @@ void test_coalesce_merge_prev(void) {
 void test_coalesce_merge_both(void) {
     printf("Test 18: Coalescing — merge with both sides\n");
 
-    int8_t* a = kmalloc(200);
-    int8_t* b = kmalloc(200);
-    int8_t* c = kmalloc(200);
+    i8* a = kmalloc(200);
+    i8* b = kmalloc(200);
+    i8* c = kmalloc(200);
     assert(a && b && c);
 
     // Free A and C, then free B: B merges with both prev (A) and next (C)
@@ -381,7 +381,7 @@ void test_coalesce_merge_both(void) {
     kfree(b);  // merges with both sides → one large free block
 
     // Should be able to allocate a chunk nearly as large as all three combined
-    int8_t* d = kmalloc(550);
+    i8* d = kmalloc(550);
     assert(d != NULL);
 
     kfree(d);
@@ -393,7 +393,7 @@ void test_coalesce_cascade(void) {
     printf("Test 19: Coalescing — cascade merge\n");
 
     #define N_CASCADE 20
-    int8_t* ptrs[N_CASCADE];
+    i8* ptrs[N_CASCADE];
 
     for (int i = 0; i < N_CASCADE; i++) {
         ptrs[i] = kmalloc(100);
@@ -406,7 +406,7 @@ void test_coalesce_cascade(void) {
     }
 
     // Should be able to allocate a large contiguous chunk
-    int8_t* big = kmalloc(N_CASCADE * 90);
+    i8* big = kmalloc(N_CASCADE * 90);
     assert(big != NULL);
 
     kfree(big);
@@ -418,14 +418,14 @@ void test_coalesce_cascade(void) {
 void test_double_free(void) {
     printf("Test 20: Double-free detection\n");
 
-    int8_t* ptr = kmalloc(100);
+    i8* ptr = kmalloc(100);
     assert(ptr != NULL);
 
     kfree(ptr);
     kfree(ptr);  // second free should be silently ignored
 
     // The heap should still be functional
-    int8_t* ptr2 = kmalloc(100);
+    i8* ptr2 = kmalloc(100);
     assert(ptr2 != NULL);
     kfree(ptr2);
 
@@ -441,7 +441,7 @@ void test_stress_fill_drain_refill(void) {
     #define CHUNK_SIZE 4096
     #define MAX_CHUNKS 2560  // 10MB / 4KB ≈ 2560
 
-    int8_t* ptrs[MAX_CHUNKS];
+    i8* ptrs[MAX_CHUNKS];
     int count = 0;
 
     // Phase 1: Fill
@@ -488,7 +488,7 @@ void test_stress_random(void) {
 
     #define N_PTRS      200
     #define N_ROUNDS    5000
-    int8_t* ptrs[N_PTRS] = {NULL};
+    i8* ptrs[N_PTRS] = {NULL};
     unsigned int seed = 0xDEADBEEF;
 
     // Simple LCG
@@ -503,8 +503,8 @@ void test_stress_random(void) {
             ptrs[idx] = kmalloc(sz);
             if (ptrs[idx]) {
                 // Write a canary at start and end
-                ptrs[idx][0] = (int8_t)(idx & 0xFF);
-                ptrs[idx][sz - 1] = (int8_t)((idx + 1) & 0xFF);
+                ptrs[idx][0] = (i8)(idx & 0xFF);
+                ptrs[idx][sz - 1] = (i8)((idx + 1) & 0xFF);
             }
         } else {
             kfree(ptrs[idx]);
@@ -521,7 +521,7 @@ void test_stress_random(void) {
     }
 
     // Final sanity: allocate one big block
-    int8_t* final = kmalloc(1024 * 1024);
+    i8* final = kmalloc(1024 * 1024);
     assert(final != NULL);
     kfree(final);
 
@@ -536,7 +536,7 @@ void test_stress_interleaved(void) {
     printf("Test 23: Stress — interleaved sizes with verification\n");
 
     #define N_IL 100
-    int8_t* ptrs[N_IL];
+    i8* ptrs[N_IL];
     unsigned int sizes[N_IL];
     unsigned int seed = 0xCAFEBABE;
     #define RAND() (seed = seed * 1103515245 + 12345)
@@ -546,13 +546,13 @@ void test_stress_interleaved(void) {
         sizes[i] = (RAND() % 512) + 1;
         ptrs[i] = kmalloc(sizes[i]);
         assert(ptrs[i] != NULL);
-        memset(ptrs[i], (int8_t)(i & 0x7F), sizes[i]);
+        memset(ptrs[i], (i8)(i & 0x7F), sizes[i]);
     }
 
     // Verify all patterns intact
     for (int i = 0; i < N_IL; i++) {
         for (unsigned int j = 0; j < sizes[i]; j++) {
-            assert(ptrs[i][j] == (int8_t)(i & 0x7F));
+            assert(ptrs[i][j] == (i8)(i & 0x7F));
         }
     }
 
@@ -565,7 +565,7 @@ void test_stress_interleaved(void) {
     // Re-verify even-indexed blocks untouched
     for (int i = 0; i < N_IL; i += 2) {
         for (unsigned int j = 0; j < sizes[i]; j++) {
-            assert(ptrs[i][j] == (int8_t)(i & 0x7F));
+            assert(ptrs[i][j] == (i8)(i & 0x7F));
         }
     }
 
@@ -593,18 +593,18 @@ void test_stress_tiny(void) {
     printf("Test 24: Stress — tiny allocations\n");
 
     #define N_TINY 500
-    int8_t* ptrs[N_TINY];
+    i8* ptrs[N_TINY];
 
     // Allocate many 1-byte chunks
     for (int i = 0; i < N_TINY; i++) {
         ptrs[i] = kmalloc(1);
         assert(ptrs[i] != NULL);
-        ptrs[i][0] = (int8_t)i;
+        ptrs[i][0] = (i8)i;
     }
 
     // Verify
     for (int i = 0; i < N_TINY; i++) {
-        assert(ptrs[i][0] == (int8_t)i);
+        assert(ptrs[i][0] == (i8)i);
     }
 
     // Free every 3rd
@@ -616,7 +616,7 @@ void test_stress_tiny(void) {
     // Re-allocate into freed slots
     for (int i = 0; i < N_TINY; i += 3) {
         ptrs[i] = kmalloc(1);
-        if (ptrs[i]) ptrs[i][0] = (int8_t)(i + 100);
+        if (ptrs[i]) ptrs[i][0] = (i8)(i + 100);
     }
 
     // Free all
@@ -634,7 +634,7 @@ void test_stress_max_allocation(void) {
 
     // Try to allocate nearly the entire heap
     unsigned int big_size = HEAP_TOTAL_SIZE - 4096;  // leave room for headers
-    int8_t* ptr = kmalloc(big_size);
+    i8* ptr = kmalloc(big_size);
     if (ptr) {
         // Write to first and last byte
         ptr[0] = 0x42;
@@ -645,7 +645,7 @@ void test_stress_max_allocation(void) {
     }
 
     // After freeing, should be able to allocate again
-    int8_t* ptr2 = kmalloc(big_size / 2);
+    i8* ptr2 = kmalloc(big_size / 2);
     assert(ptr2 != NULL);
     kfree(ptr2);
 

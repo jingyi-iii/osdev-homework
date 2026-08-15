@@ -1,46 +1,46 @@
 #ifndef PAGING_H
 #define PAGING_H
 
-#include <stdint.h>
+#include "lib/types.h"
 
 #define PAGE_SIZE           4096
 #define PAGE_MASK           0xFFFFF000
 
 /* Page Directory Entry (PDE) */
 typedef union pde {
-    uint32_t raw;
+    u32 raw;
     struct {
-        uint32_t present    : 1;   /* 0: Page is present in memory */
-        uint32_t rw         : 1;   /* 1: 0=Read-only, 1=Read/Write */
-        uint32_t user       : 1;   /* 2: 0=Supervisor, 1=User */
-        uint32_t pwt        : 1;   /* 3: Page-level Write-Through */
-        uint32_t pcd        : 1;   /* 4: Page-level Cache Disable */
-        uint32_t accessed   : 1;   /* 5: Accessed */
-        uint32_t dirty      : 1;   /* 6: Dirty (4MB pages only, zero otherwise) */
-        uint32_t page_size  : 1;   /* 7: 0=4KB page, 1=4MB page */
-        uint32_t global     : 1;   /* 8: Global (ignored for 4KB PTs) */
-        uint32_t avail      : 3;   /* 9-11: Available for OS use */
-        uint32_t paddr      : 20;  /* 12-31: Physical address of page table (4KB aligned) */
+        u32 present    : 1;   /* 0: Page is present in memory */
+        u32 rw         : 1;   /* 1: 0=Read-only, 1=Read/Write */
+        u32 user       : 1;   /* 2: 0=Supervisor, 1=User */
+        u32 pwt        : 1;   /* 3: Page-level Write-Through */
+        u32 pcd        : 1;   /* 4: Page-level Cache Disable */
+        u32 accessed   : 1;   /* 5: Accessed */
+        u32 dirty      : 1;   /* 6: Dirty (4MB pages only, zero otherwise) */
+        u32 page_size  : 1;   /* 7: 0=4KB page, 1=4MB page */
+        u32 global     : 1;   /* 8: Global (ignored for 4KB PTs) */
+        u32 avail      : 3;   /* 9-11: Available for OS use */
+        u32 paddr      : 20;  /* 12-31: Physical address of page table (4KB aligned) */
     } __attribute__((packed));
-} pde_t;
+} pde;
 
 /* Page Table Entry (PTE) */
 typedef union pte {
-    uint32_t raw;
+    u32 raw;
     struct {
-        uint32_t present    : 1;   /* 0: Page is present */
-        uint32_t rw         : 1;   /* 1: Read/Write */
-        uint32_t user       : 1;   /* 2: User/Supervisor */
-        uint32_t pwt        : 1;   /* 3: Page-level Write-Through */
-        uint32_t pcd        : 1;   /* 4: Page-level Cache Disable */
-        uint32_t accessed   : 1;   /* 5: Accessed */
-        uint32_t dirty      : 1;   /* 6: Dirty */
-        uint32_t pat        : 1;   /* 7: PAT (0 for 4KB pages) */
-        uint32_t global     : 1;   /* 8: Global */
-        uint32_t avail      : 3;   /* 9-11: Available for OS use */
-        uint32_t paddr      : 20;  /* 12-31: Physical address of 4KB page */
+        u32 present    : 1;   /* 0: Page is present */
+        u32 rw         : 1;   /* 1: Read/Write */
+        u32 user       : 1;   /* 2: User/Supervisor */
+        u32 pwt        : 1;   /* 3: Page-level Write-Through */
+        u32 pcd        : 1;   /* 4: Page-level Cache Disable */
+        u32 accessed   : 1;   /* 5: Accessed */
+        u32 dirty      : 1;   /* 6: Dirty */
+        u32 pat        : 1;   /* 7: PAT (0 for 4KB pages) */
+        u32 global     : 1;   /* 8: Global */
+        u32 avail      : 3;   /* 9-11: Available for OS use */
+        u32 paddr      : 20;  /* 12-31: Physical address of 4KB page */
     } __attribute__((packed));
-} pte_t;
+} pte;
 
 /* Page flags */
 #define PTE_PRESENT     (1 << 0)
@@ -59,19 +59,19 @@ typedef union pte {
 #define PTE_USER_RO     (PTE_PRESENT | PTE_USER)            /* user r/o */
 
 /* Address decomposition */
-#define PD_INDEX(vaddr)     (((uint32_t)(vaddr) >> 22) & 0x3FF)
-#define PT_INDEX(vaddr)     (((uint32_t)(vaddr) >> 12) & 0x3FF)
-#define PAGE_OFFSET(vaddr)  ((uint32_t)(vaddr) & 0xFFF)
-#define PAGE_ALIGN(x)       (((uint32_t)(x) + PAGE_SIZE - 1) & PAGE_MASK)
+#define PD_INDEX(vaddr)     (((u32)(vaddr) >> 22) & 0x3FF)
+#define PT_INDEX(vaddr)     (((u32)(vaddr) >> 12) & 0x3FF)
+#define PAGE_OFFSET(vaddr)  ((u32)(vaddr) & 0xFFF)
+#define PAGE_ALIGN(x)       (((u32)(x) + PAGE_SIZE - 1) & PAGE_MASK)
 
 #define IS_4MB_ALIGN(x) \
-    (((uint32_t)(x) & (0x400000 - 1)) == 0)
+    (((u32)(x) & (0x400000 - 1)) == 0)
 
 #define IS_4KB_ALIGN(x) \
-    (((uint32_t)(x) & (4096 - 1)) == 0)
+    (((u32)(x) & (4096 - 1)) == 0)
 
 #define IS_PAGE_ALIGNED(x) \
-    (((uint32_t)(x) & (PAGE_SIZE - 1)) == 0)
+    (((u32)(x) & (PAGE_SIZE - 1)) == 0)
 
 /*
  * Kernel virtual address space layout (32-bit, 4GB total):
@@ -85,12 +85,12 @@ typedef union pte {
  * arch_load_cr3 - Load a page directory into CR3.
  * This automatically flushes the TLB for non-global pages.
  */
-void arch_load_cr3(uint32_t pdir_phys);
+void arch_load_cr3(u32 pdir_phys);
 
 /**
  * arch_get_cr3 - Return the current CR3 value.
  */
-uint32_t arch_get_cr3(void);
+u32 arch_get_cr3(void);
 
 /**
  * arch_clone_kernel_pde - Create a new address-space page directory.
@@ -103,7 +103,7 @@ uint32_t arch_get_cr3(void);
  *
  * Returns pde_pa on success, or 0 on failure.
  */
-uint32_t arch_clone_kernel_pde(uint32_t pde_pa, int user_accessible);
+u32 arch_clone_kernel_pde(u32 pde_pa, int user_accessible);
 
 /**
  * arch_destroy_address_space - Destroy a user address space.
@@ -112,7 +112,7 @@ uint32_t arch_clone_kernel_pde(uint32_t pde_pa, int user_accessible);
  * frees the page directory itself.  Kernel-shared page tables are
  * left untouched.
  */
-void arch_destroy_address_space(uint32_t pdir_phys);
+void arch_destroy_address_space(u32 pdir_phys);
 
 /**
  * arch_paging_pool_alloc - Allocate one 4 KB page from the reserved
@@ -131,7 +131,7 @@ void* arch_paging_pool_alloc(void);
  * arch_paging_pool_free - Return a 4 KB page to the paging pool.
  * Addresses outside the pool range are ignored.
  */
-void arch_paging_pool_free(uint32_t pa);
+void arch_paging_pool_free(u32 pa);
 
 /**
  * arch_map_page - Map a single virtual page to a physical page.
@@ -143,33 +143,33 @@ void arch_paging_pool_free(uint32_t pa);
  *
  * Returns 0 on success, -1 if a page table allocation fails.
  */
-int arch_map_page(uint32_t pdir_phys, uint32_t vaddr, uint32_t paddr,
-                 uint32_t flags);
+int arch_map_page(u32 pdir_phys, u32 vaddr, u32 paddr,
+                 u32 flags);
 
 /**
  * arch_unmap_page - Unmap a single virtual page (also frees the physical page).
  */
-void arch_unmap_page(uint32_t pdir_phys, uint32_t vaddr);
+void arch_unmap_page(u32 pdir_phys, u32 vaddr);
 
 /**
  * arch_map_range - Map a contiguous range.
  * Returns 0 on success, -1 on failure.
  */
-int arch_map_range(uint32_t pdir_phys, uint32_t vaddr, uint32_t paddr,
-                  uint32_t size, uint32_t flags);
+int arch_map_range(u32 pdir_phys, u32 vaddr, u32 paddr,
+                  u32 size, u32 flags);
 
 /**
  * arch_virt_to_phys - Translate a virtual address to physical.
  * @pdir_phys: Page directory to use (0 = use current CR3).
  */
-uint32_t arch_virt_to_phys(uint32_t pdir_phys, uint32_t vaddr);
+u32 arch_virt_to_phys(u32 pdir_phys, u32 vaddr);
 
 /**
  * arch_alloc_user_page - Allocate a physical page and map it into the
  * given address space at the specified user virtual address.
  * Returns the virtual address on success, 0 on failure.
  */
-void* arch_alloc_user_page(uint32_t pdir_phys, uint32_t vaddr, uint32_t flags);
+void* arch_alloc_user_page(u32 pdir_phys, u32 vaddr, u32 flags);
 
 /**
  * arch_enable_paging - Set CR0.PG, enabling paging.
@@ -189,14 +189,14 @@ void arch_enable_paging(void);
  * @reserved_end:  Physical address of the first byte AFTER all
  *                 bootstrap structures (PD, PT0, kernel BSS end).
  */
-void arch_paging_init(uint32_t total_memory, uint32_t reserved_end);
+void arch_paging_init(u32 total_memory, u32 reserved_end);
 
-void arch_map_4mb(void* cr3, void* va, void* pa, uint32_t flags);
+void arch_map_4mb(void* cr3, void* va, void* pa, u32 flags);
 void arch_unmap_4mb(void* cr3, void* va);
 
-int arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags);
+int arch_map_4kb(void* cr3, void* va, void* pa, u32 flags);
 void arch_unmap_4kb(void* cr3, void* va);
 
-void arch_tlb_invlpg(uint32_t vaddr);
+void arch_tlb_invlpg(u32 vaddr);
 
 #endif /* PAGING_H */

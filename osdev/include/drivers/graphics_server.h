@@ -2,7 +2,7 @@
 #define GRAPHICS_SERVER_H
 
 #include <stddef.h>
-#include <stdint.h>
+#include "lib/types.h"
 #include "drivers/platform_bus.h"
 
 /************************************************************************/
@@ -54,22 +54,22 @@ enum gfx_color {
 void gfx_switch_to_mode(void);
 
 /* Clear the entire screen with a color */
-void gfx_clear(uint8_t color);
+void gfx_clear(u8 color);
 
 /* Draw a single pixel */
-void gfx_put_pixel(size_t x, size_t y, uint8_t color);
+void gfx_put_pixel(size_t x, size_t y, u8 color);
 
 /* Draw a filled rectangle */
-void gfx_fill_rect(size_t x, size_t y, size_t w, size_t h, uint8_t color);
+void gfx_fill_rect(size_t x, size_t y, size_t w, size_t h, u8 color);
 
 /* Draw a character at (col, row) in character-cell coordinates */
-void gfx_put_char(char c, size_t col, size_t row, uint8_t fg, uint8_t bg);
+void gfx_put_char(char c, size_t col, size_t row, u8 fg, u8 bg);
 
 /* Write a null-terminated string starting at (col, row) */
-void gfx_write(const char* str, size_t col, size_t row, uint8_t fg, uint8_t bg);
+void gfx_write(const char* str, size_t col, size_t row, u8 fg, u8 bg);
 
 /* Scroll the screen up by one row */
-void gfx_scroll(uint8_t bg);
+void gfx_scroll(u8 bg);
 
 /* Terminal-style putchar (advances cursor, handles \n, \b) */
 void gfx_putchar(char c);

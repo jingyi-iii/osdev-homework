@@ -1,24 +1,24 @@
 #ifndef ARCH_INTERRUPT_H
 #define ARCH_INTERRUPT_H
 
-#include <stdint.h>
+#include "lib/types.h"
 #include "lib/compiler.h"
 #include "kernel/irq.h"
 
 #define IDT_ENTRIES             (256)
 
 typedef struct {
-    uint16_t isr_low;
-    uint16_t sel_code;
-    uint8_t  reserved;
-    uint8_t  attrs;
-    uint16_t isr_high;
-} ATTR_PACKED idesc_t;
+    u16 isr_low;
+    u16 sel_code;
+    u8  reserved;
+    u8  attrs;
+    u16 isr_high;
+} ATTR_PACKED idesc;
 
 typedef struct {
-    uint16_t limit;
-    uint32_t base;
-} ATTR_PACKED idtmeta_t;
+    u16 limit;
+    u32 base;
+} ATTR_PACKED idtmeta;
 
 enum arch_irq_no {
     ARCH_IRQ_BEGIN  = 0x20,
@@ -41,9 +41,9 @@ enum arch_irq_no {
     ARCH_IRQ_END    = 0x35,
 };
 
-void arch_unmask_irq(uint16_t irq_nr);
-void arch_mask_irq(uint16_t irq_nr);
-void arch_syscall(uint32_t minor, void* data);
+void arch_unmask_irq(u16 irq_nr);
+void arch_mask_irq(u16 irq_nr);
+void arch_syscall(u32 minor, void* data);
 
 /*
  * Return 1 if the caller is currently executing at CPL3 (user mode),
@@ -52,7 +52,7 @@ void arch_syscall(uint32_t minor, void* data);
  */
 static inline int arch_running_ring3(void)
 {
-    uint16_t cs;
+    u16 cs;
     __asm__ __volatile__("mov %%cs, %0" : "=r"(cs));
     return (cs & 3) == 3;
 }
