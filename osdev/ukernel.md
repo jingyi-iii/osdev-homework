@@ -163,22 +163,22 @@ static void split_4mb_pde(uint32_t vaddr, uint32_t *pde_base) {
 #include "lib/list.h"
 
 typedef enum {
-    CAP_IRQ_OWN,         // 拥有某个 IRQ 线
-    CAP_MEM_MAP,         // 映射某段物理内存
+    CAP_OWN_IRQ,         // 拥有某个 IRQ 线
+    CAP_MAP_MEM,         // 映射某段物理内存
     CAP_IO_PORT,         // 访问某个 I/O 端口范围
     CAP_IPC_SEND,        // 向某个 mailbox 发送消息
     CAP_IPC_RECV,        // 从某个 mailbox 接收消息
-    CAP_PROC_CREATE,     // 创建新进程
-    CAP_THREAD_CREATE,   // 创建新线程
+    CAP_CREATE_KRNL_PROC,     // 创建新进程
+    CAP_CREATE_KRNL_THREAD,   // 创建新线程
 } cap_type_t;
 
 typedef struct capability {
     list_node_t  node;          // 链入进程的能力列表
     cap_type_t   type;
     union {
-        // CAP_IRQ_OWN
+        // CAP_OWN_IRQ
         uint8_t   irq;
-        // CAP_MEM_MAP
+        // CAP_MAP_MEM
         struct {
             uint32_t phys_base;
             uint32_t size;
@@ -224,8 +224,8 @@ typedef struct pcb {
 int sys_irq_register(uint8_t irq, irq_handler_t handler) {
     struct pcb *proc = current_thread()->parent;
 
-    // 检查当前进程是否有 CAP_IRQ_OWN 能力
-    if (!cap_check(proc, CAP_IRQ_OWN, &irq))
+    // 检查当前进程是否有 CAP_OWN_IRQ 能力
+    if (!cap_check(proc, CAP_OWN_IRQ, &irq))
         return -EPERM;
 
     return irqline_register(irq, handler);
@@ -235,11 +235,11 @@ int sys_irq_register(uint8_t irq, irq_handler_t handler) {
 void* sys_mem_map(uint32_t phys_addr, size_t size, uint32_t flags) {
     struct pcb *proc = current_thread()->parent;
 
-    // 检查进程是否有对应物理内存范围的 CAP_MEM_MAP 能力
+    // 检查进程是否有对应物理内存范围的 CAP_MAP_MEM 能力
     struct { uint32_t base; uint32_t size; uint32_t flags; } arg = {
         .base = phys_addr, .size = size, .flags = flags
     };
-    if (!cap_check(proc, CAP_MEM_MAP, &arg))
+    if (!cap_check(proc, CAP_MAP_MEM, &arg))
         return (void*)-EPERM;
 
     return vmm_map_physical(proc, phys_addr, size, flags);
@@ -255,11 +255,11 @@ void init_thread(void) {
     // 创建键盘服务进程
     pcb_t *kb_proc = p_create("kb_server", PRIORITY_HIGH);
     cap_grant(kb_proc, CAP_IO_PORT, &(cap_io_t){.port_base = 0x60, .port_count = 8});
-    cap_grant(kb_proc, CAP_IRQ_OWN,  &(uint8_t){1});
+    cap_grant(kb_proc, CAP_OWN_IRQ,  &(uint8_t){1});
 
     // 创建 VGA 服务进程
     pcb_t *vga_proc = p_create("vga_server", PRIORITY_HIGH);
-    cap_grant(vga_proc, CAP_MEM_MAP, &(cap_mem_t){
+    cap_grant(vga_proc, CAP_MAP_MEM, &(cap_mem_t){
         .phys_base = 0xA0000, .size = 0x10000, .flags = MAP_READ | MAP_WRITE
     });
     cap_grant(vga_proc, CAP_IO_PORT, &(cap_io_t){
@@ -269,7 +269,7 @@ void init_thread(void) {
     // 创建 RTC 服务进程
     pcb_t *rtc_proc = p_create("rtc_server", PRIORITY_NORMAL);
     cap_grant(rtc_proc, CAP_IO_PORT, &(cap_io_t){.port_base = 0x70, .port_count = 2});
-    cap_grant(rtc_proc, CAP_IRQ_OWN,  &(uint8_t){8});
+    cap_grant(rtc_proc, CAP_OWN_IRQ,  &(uint8_t){8});
 
     // 创建游戏进程
     pcb_t *game_proc = p_create("airplane", PRIORITY_LOW);
@@ -451,9 +451,9 @@ int sys_mem_unmap(void *vaddr, size_t size);
 void* sys_mem_map(uint32_t phys_addr, size_t size, uint32_t flags) {
     struct pcb *proc = current_thread()->parent;
 
-    // 1. 能力检查：进程必须持有对应物理地址范围的 CAP_MEM_MAP
+    // 1. 能力检查：进程必须持有对应物理地址范围的 CAP_MAP_MEM
     cap_mem_t cap_mem = {.phys_base = phys_addr, .size = size, .flags = flags};
-    if (!cap_check(proc, CAP_MEM_MAP, &cap_mem))
+    if (!cap_check(proc, CAP_MAP_MEM, &cap_mem))
         return (void*)(intptr_t)(-EPERM);
 
     // 2. 页对齐
@@ -504,7 +504,7 @@ int sys_mem_share(uint32_t target_pid, void *local_vaddr, size_t size) {
     }
 
     // 3. 授予进程 B 访问此内存的能力
-    cap_grant(proc_b, CAP_MEM_MAP, &(cap_mem_t){
+    cap_grant(proc_b, CAP_MAP_MEM, &(cap_mem_t){
         .phys_base = phys_addr, .size = size,
         .flags = MAP_READ | MAP_WRITE
     });
@@ -702,14 +702,14 @@ static int user_driver_start(struct bus *bus, struct driver *drv, struct device 
         struct platform_resource* res = &pdev->resources[i];
         switch (res->type) {
         case PLAT_RES_IRQ:
-            cap_grant(proc, CAP_IRQ_OWN, &res->irq.major);
+            cap_grant(proc, CAP_OWN_IRQ, &res->irq.major);
             break;
         case PLAT_RES_IO:
-            cap_grant(proc, CAP_IO_ACCESS, &(cap_io_port){
+            cap_grant(proc, CAP_ACCESS_IO, &(cap_io_port){
                 .base = res->io.base, .count = res->io.size });
             break;
         case PLAT_RES_MEM:
-            cap_grant(proc, CAP_MEM_MAP, &(cap_mem){
+            cap_grant(proc, CAP_MAP_MEM, &(cap_mem){
                 .base = res->mem.addr, .size = res->mem.size,
                 .flags = MAP_READ | MAP_WRITE });
             break;
@@ -789,7 +789,7 @@ servers/                   # 新建：用户态服务进程
 
 | 属性 | 说明 |
 |------|------|
-| 需要的能力 | `CAP_IO_PORT(0x60-0x64)`, `CAP_IRQ_OWN(1)` |
+| 需要的能力 | `CAP_IO_PORT(0x60-0x64)`, `CAP_OWN_IRQ(1)` |
 | 提供的接口 | 键盘事件订阅/取消订阅 |
 | 使用的 mailbox | `kb_irq_mbox`（收 IRQ），`kb_event_mbox`（广播按键） |
 
@@ -801,7 +801,7 @@ servers/                   # 新建：用户态服务进程
 
 | 属性 | 说明 |
 |------|------|
-| 需要的能力 | `CAP_MEM_MAP(0xA0000-0xAFFFF)`, `CAP_IO_PORT(0x3C0-0x3DA)` |
+| 需要的能力 | `CAP_MAP_MEM(0xA0000-0xAFFFF)`, `CAP_IO_PORT(0x3C0-0x3DA)` |
 | 提供的接口 | 字符输出、模式切换、framebuffer 获取、命令注册 |
 | 使用的 mailbox | `vga_cmd_mbox`（收命令） |
 
@@ -852,7 +852,7 @@ void vga_server_main(void) {
 
 | 属性 | 说明 |
 |------|------|
-| 需要的能力 | `CAP_IO_PORT(0x70-0x71)`, `CAP_IRQ_OWN(8)`（可选，周期性更新） |
+| 需要的能力 | `CAP_IO_PORT(0x70-0x71)`, `CAP_OWN_IRQ(8)`（可选，周期性更新） |
 | 提供的接口 | 时间查询、延迟请求 |
 | 使用的 mailbox | `rtc_req_mbox`（收请求） |
 

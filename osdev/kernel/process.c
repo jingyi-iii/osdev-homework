@@ -7,6 +7,7 @@
 #include "drivers/log_server.h"
 #include "kernel/irq.h"
 #include "ipc/mailbox.h"
+#include "kernel/capability.h"
 
 extern mailbox* alloc_mailbox(int owner_pid, int owner_tid);
 extern void release_mailbox(mailbox* mb);
@@ -717,6 +718,22 @@ void thread_unblock(i32 tid)
 
 i32 thread_create(task_priv priv, task_entry_t entry, void* param)
 {
+    if (arch_running_ring3()) {
+        /*
+         * A user (CPL3) process may only spawn kernel-privileged threads
+         * if it has been granted the CAP_CREATE_KRNL_THREAD capability.
+         * Creating plain user threads is always allowed.
+         */
+        if (priv == TASK_PRIV_KERNEL) {
+            pcb* proc = get_current_process();
+            if (!proc || cap_check(proc, CAP_CREATE_KRNL_THREAD, &(int){1}) != 0) {
+                LOG("no create-kernel-thread capability for pid %d",
+                    proc ? proc->pid : -1);
+                return E_PERM;
+            }
+        }
+    }
+
     proc_thread_ctrl_config config = {0};
     config.cmd = THREAD_CTRL_CREATE;
     config.priv = priv;
@@ -769,12 +786,27 @@ tcb* thread_get_by_tid(i32 tid)
 
 i32 proc_create(proc_priv priv, task_entry_t entry, void* param)
 {
+    if (arch_running_ring3()) {
+        /*
+         * A user (CPL3) process may only spawn kernel-privileged processes
+         * if it has been granted the CAP_CREATE_KRNL_PROC capability.
+         * Creating plain user processes is always allowed.
+         */
+        if (priv == PROC_PRIV_KERNEL) {
+            pcb* proc = get_current_process();
+            if (!proc || cap_check(proc, CAP_CREATE_KRNL_PROC, &(int){1}) != 0) {
+                LOG("no create-kernel-proc capability for pid %d",
+                    proc ? proc->pid : -1);
+                return E_PERM;
+            }
+        }
+    }
+
     proc_thread_ctrl_config config = {0};
     config.cmd = PROC_CTRL_CREATE;
     config.priv = priv;
     config.entry = entry;
     config.param = param;
-
     arch_syscall(0, &config);
 
     return config.pid;

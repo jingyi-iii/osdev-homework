@@ -5,12 +5,12 @@
 #include "lib/list.h"
 
 typedef enum {
-    CAP_IRQ_OWN,
-    CAP_MEM_MAP,
-    CAP_IO_ACCESS,
+    CAP_OWN_IRQ,
+    CAP_MAP_MEM,
+    CAP_ACCESS_IO,
     CAP_IPC,
-    CAP_PROC_CREATE,
-    CAP_THREAD_CREATE,
+    CAP_CREATE_KRNL_PROC,
+    CAP_CREATE_KRNL_THREAD,
 } cap_type;
 
 typedef struct cap_mem {

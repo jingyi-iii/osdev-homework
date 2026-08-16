@@ -272,10 +272,10 @@ static int irq_request_internal(irq **out, const char* name, u32 major,
      * processes.
      * - proc == NULL (early boot, scheduler not up)  -> trusted, allow
      * - proc->priv == PROC_PRIV_KERNEL (kernel driver) -> trusted, allow
-     * - user process -> must hold CAP_IRQ_OWN for this IRQ line */
+     * - user process -> must hold CAP_OWN_IRQ for this IRQ line */
     pcb* proc = get_current_process();
     if (proc && proc->priv != PROC_PRIV_KERNEL) {
-        if (cap_check(proc, CAP_IRQ_OWN, &major) != 0) {
+        if (cap_check(proc, CAP_OWN_IRQ, &major) != 0) {
             LOG("no irq permission for pid %d", proc->pid);
             return E_PERM;
         }

@@ -457,7 +457,7 @@ void* vmm_map_memory(pcb* proc, u32 phys_addr, size_t size, u32 flags)
     if (!proc)
         return VMM_ERR_PTR(EINVAL);
 
-    if (cap_check(proc, CAP_MEM_MAP, &mem) != 0)
+    if (cap_check(proc, CAP_MAP_MEM, &mem) != 0)
         return VMM_ERR_PTR(EPERM);
 
     /* reject empty mappings and 32-bit overflow of the aligned size */
@@ -514,7 +514,7 @@ int vmm_unmap_memory(pcb* proc, void* virt_addr, size_t size)
     mem.base = pa;
     mem.size = pa_size;
     mem.flags = 0;
-    if (cap_check(proc, CAP_MEM_MAP, &mem) != 0)
+    if (cap_check(proc, CAP_MAP_MEM, &mem) != 0)
         return EPERM;
 
     /*

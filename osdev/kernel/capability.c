@@ -193,12 +193,12 @@ int cap_check(struct pcb* proc, cap_type type, const void* args)
             continue;
 
         switch (type) {
-        CASE_CAP_CHECK(CAP_IRQ_OWN,       irq,                 cap_irq_check)
-        CASE_CAP_CHECK(CAP_MEM_MAP,       mem,                 cap_mem_check)
-        CASE_CAP_CHECK(CAP_IO_ACCESS,     io_port,             cap_io_port_check)
-        CASE_CAP_CHECK(CAP_IPC,           issue_ipc,           cap_permission_check)
-        CASE_CAP_CHECK(CAP_PROC_CREATE,   issue_proc_create,   cap_permission_check)
-        CASE_CAP_CHECK(CAP_THREAD_CREATE, issue_thread_create, cap_permission_check)
+        CASE_CAP_CHECK(CAP_OWN_IRQ,            irq,                 cap_irq_check)
+        CASE_CAP_CHECK(CAP_MAP_MEM,            mem,                 cap_mem_check)
+        CASE_CAP_CHECK(CAP_ACCESS_IO,          io_port,             cap_io_port_check)
+        CASE_CAP_CHECK(CAP_IPC,                issue_ipc,           cap_permission_check)
+        CASE_CAP_CHECK(CAP_CREATE_KRNL_PROC,   issue_proc_create,   cap_permission_check)
+        CASE_CAP_CHECK(CAP_CREATE_KRNL_THREAD, issue_thread_create, cap_permission_check)
         }
 
         if (ret == 0)
@@ -221,12 +221,12 @@ int cap_grant(struct pcb* proc, cap_type type, const void* args)
 
     /* 1. Validate the requested capability before doing anything. */
     switch (type) {
-    CASE_CAP_GRANT_CHECK(CAP_IRQ_OWN,       cap_irq_grant_check)
-    CASE_CAP_GRANT_CHECK(CAP_MEM_MAP,       cap_mem_grant_check)
-    CASE_CAP_GRANT_CHECK(CAP_IO_ACCESS,     cap_io_port_grant_check)
-    CASE_CAP_GRANT_CHECK(CAP_IPC,           cap_permission_grant_check)
-    CASE_CAP_GRANT_CHECK(CAP_PROC_CREATE,   cap_permission_grant_check)
-    CASE_CAP_GRANT_CHECK(CAP_THREAD_CREATE, cap_permission_grant_check)
+    CASE_CAP_GRANT_CHECK(CAP_OWN_IRQ,            cap_irq_grant_check)
+    CASE_CAP_GRANT_CHECK(CAP_MAP_MEM,            cap_mem_grant_check)
+    CASE_CAP_GRANT_CHECK(CAP_ACCESS_IO,          cap_io_port_grant_check)
+    CASE_CAP_GRANT_CHECK(CAP_IPC,                cap_permission_grant_check)
+    CASE_CAP_GRANT_CHECK(CAP_CREATE_KRNL_PROC,   cap_permission_grant_check)
+    CASE_CAP_GRANT_CHECK(CAP_CREATE_KRNL_THREAD, cap_permission_grant_check)
     default:
         ret = E_INVAL;
         goto unlock;
@@ -234,12 +234,12 @@ int cap_grant(struct pcb* proc, cap_type type, const void* args)
 
     /* 2. Refuse duplicates. */
     switch (type) {
-    CASE_CAP_IS_DUP(CAP_IRQ_OWN,       irq,                 cap_irq_cmp)
-    CASE_CAP_IS_DUP(CAP_MEM_MAP,       mem,                 cap_mem_cmp)
-    CASE_CAP_IS_DUP(CAP_IO_ACCESS,     io_port,             cap_io_port_cmp)
-    CASE_CAP_IS_DUP(CAP_IPC,           issue_ipc,           cap_permission_cmp)
-    CASE_CAP_IS_DUP(CAP_PROC_CREATE,   issue_proc_create,   cap_permission_cmp)
-    CASE_CAP_IS_DUP(CAP_THREAD_CREATE, issue_thread_create, cap_permission_cmp)
+    CASE_CAP_IS_DUP(CAP_OWN_IRQ,            irq,                 cap_irq_cmp)
+    CASE_CAP_IS_DUP(CAP_MAP_MEM,            mem,                 cap_mem_cmp)
+    CASE_CAP_IS_DUP(CAP_ACCESS_IO,          io_port,             cap_io_port_cmp)
+    CASE_CAP_IS_DUP(CAP_IPC,                issue_ipc,           cap_permission_cmp)
+    CASE_CAP_IS_DUP(CAP_CREATE_KRNL_PROC,   issue_proc_create,   cap_permission_cmp)
+    CASE_CAP_IS_DUP(CAP_CREATE_KRNL_THREAD, issue_thread_create, cap_permission_cmp)
     default:
         ret = E_INVAL;
         goto unlock;
@@ -253,12 +253,12 @@ int cap_grant(struct pcb* proc, cap_type type, const void* args)
 
     /* 3. Insert the new capability. */
     switch (type) {
-    CASE_CAP_GRANT(CAP_IRQ_OWN,       irq)
-    CASE_CAP_GRANT(CAP_MEM_MAP,       mem)
-    CASE_CAP_GRANT(CAP_IO_ACCESS,     io_port)
-    CASE_CAP_GRANT(CAP_IPC,           issue_ipc)
-    CASE_CAP_GRANT(CAP_PROC_CREATE,   issue_proc_create)
-    CASE_CAP_GRANT(CAP_THREAD_CREATE, issue_thread_create)
+    CASE_CAP_GRANT(CAP_OWN_IRQ,            irq)
+    CASE_CAP_GRANT(CAP_MAP_MEM,            mem)
+    CASE_CAP_GRANT(CAP_ACCESS_IO,          io_port)
+    CASE_CAP_GRANT(CAP_IPC,                issue_ipc)
+    CASE_CAP_GRANT(CAP_CREATE_KRNL_PROC,   issue_proc_create)
+    CASE_CAP_GRANT(CAP_CREATE_KRNL_THREAD, issue_thread_create)
     default:
         kfree(cap);
         ret = E_INVAL;
@@ -283,12 +283,12 @@ int cap_revoke(struct pcb* proc, cap_type type, const void* args)
             continue;
 
         switch (type) {
-        CASE_CAP_REVOKE(CAP_IRQ_OWN,       irq,                 cap_irq_cmp)
-        CASE_CAP_REVOKE(CAP_MEM_MAP,       mem,                 cap_mem_cmp)
-        CASE_CAP_REVOKE(CAP_IO_ACCESS,     io_port,             cap_io_port_cmp)
-        CASE_CAP_REVOKE(CAP_IPC,           issue_ipc,           cap_permission_cmp)
-        CASE_CAP_REVOKE(CAP_PROC_CREATE,   issue_proc_create,   cap_permission_cmp)
-        CASE_CAP_REVOKE(CAP_THREAD_CREATE, issue_thread_create, cap_permission_cmp)
+        CASE_CAP_REVOKE(CAP_OWN_IRQ,            irq,                 cap_irq_cmp)
+        CASE_CAP_REVOKE(CAP_MAP_MEM,            mem,                 cap_mem_cmp)
+        CASE_CAP_REVOKE(CAP_ACCESS_IO,          io_port,             cap_io_port_cmp)
+        CASE_CAP_REVOKE(CAP_IPC,                issue_ipc,           cap_permission_cmp)
+        CASE_CAP_REVOKE(CAP_CREATE_KRNL_PROC,   issue_proc_create,   cap_permission_cmp)
+        CASE_CAP_REVOKE(CAP_CREATE_KRNL_THREAD, issue_thread_create, cap_permission_cmp)
         }
     }
 

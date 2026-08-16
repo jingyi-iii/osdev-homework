@@ -128,15 +128,15 @@ int platform_device_grant_capabilities(struct platform_device* dev)
          * user-mode driver process. */
         switch (res->type) {
         case PLAT_RES_IRQ:
-            cap_grant(proc, CAP_IRQ_OWN, &res->irq.major);
+            cap_grant(proc, CAP_OWN_IRQ, &res->irq.major);
             break;
         case PLAT_RES_IO:
             cap_io_port iop = { res->io.base, res->io.size };
-            cap_grant(proc, CAP_IO_ACCESS, &iop);
+            cap_grant(proc, CAP_ACCESS_IO, &iop);
             break;
         case PLAT_RES_MEM:
             cap_mem mem = { res->mem.addr, res->mem.size, PTE_USER_PAGE };
-            cap_grant(proc, CAP_MEM_MAP, &mem);
+            cap_grant(proc, CAP_MAP_MEM, &mem);
             break;
         default:
             break;

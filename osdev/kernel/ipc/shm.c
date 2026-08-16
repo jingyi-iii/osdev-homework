@@ -35,13 +35,13 @@ int shm_share(i32 pid, void* va, size_t size, void** out_va)
     cmem.base = aligned_pa;
     cmem.size = aligned_pa_size;
     cmem.flags = PTE_USER_PAGE;
-    ret = cap_grant(target, CAP_MEM_MAP, &cmem);
+    ret = cap_grant(target, CAP_MAP_MEM, &cmem);
     if (ret)
         return ret;
 
     target_va = vmm_map_memory(target, pa, size, PTE_USER_PAGE);
     if (VMM_IS_ERR(target_va)) {
-        cap_revoke(target, CAP_MEM_MAP, &cmem);
+        cap_revoke(target, CAP_MAP_MEM, &cmem);
         return E_LIMIT;
     }
 
@@ -69,5 +69,5 @@ int shm_unshare(i32 pid, void* va)
     cmem.base = pa;
     cmem.size = pa_size;
     cmem.flags = PTE_USER_PAGE;
-    return cap_revoke(target, CAP_MEM_MAP, &cmem);
+    return cap_revoke(target, CAP_MAP_MEM, &cmem);
 }
