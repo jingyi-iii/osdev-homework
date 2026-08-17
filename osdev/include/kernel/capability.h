@@ -43,4 +43,9 @@ int cap_grant(struct pcb* proc, cap_type type, const void* args);
 int cap_revoke(struct pcb* proc, cap_type type, const void* args);
 void cap_revoke_all(struct pcb* proc);
 
+/* Copy a parent process's capabilities into a freshly created child
+ * (capability flow-down).  Used by p_create() so user processes spawned by
+ * a granted process keep the grants they need. */
+void cap_inherit_all(struct pcb* child, struct pcb* parent);
+
 #endif

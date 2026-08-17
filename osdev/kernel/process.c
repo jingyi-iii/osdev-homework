@@ -6,6 +6,7 @@
 #include "lib/string.h"
 #include "drivers/log_server.h"
 #include "kernel/irq.h"
+#include "kernel/syscall.h"
 #include "ipc/mailbox.h"
 #include "kernel/capability.h"
 
@@ -384,6 +385,13 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
     list_init(&proc->tcbs);
     list_init(&proc->capabilities);
 
+    /* Inherit a copy of the parent process's capabilities so processes
+     * spawned by a granted process (e.g. demo children) keep the I/O and
+     * other grants they need.  No-op for the first kernel process. */
+    pcb* parent_proc = thread_run ? thread_run->parent : 0;
+    if (parent_proc && parent_proc != proc)
+        cap_inherit_all(proc, parent_proc);
+
     eflags = spinlock_lock_irqsave(schedule_lock);
     list_add(&proc->this_node, &proc_head);
     spinlock_unlock_irqrestore(schedule_lock, eflags);
@@ -574,14 +582,25 @@ static void schedule_isr(void* p)
     if (timeslice < 5)
         return;
 
-    u32 eflags = spinlock_lock_irqsave(schedule_lock);
+    timeslice = 0;
+
+    /*
+     * Ring-3 threads run with IOPL=0 (see arch/i386/task.c), so a user
+     * thread inside thread_get_by_tid()/get_process_by_pid() holds
+     * schedule_lock WITHOUT interrupts masked.  A blocking acquisition
+     * here could then deadlock: the ISR would spin forever on a lock whose
+     * holder is exactly the thread this ISR preempted.  Trylock instead:
+     * if the lock is busy, skip this scheduling tick — the holder releases
+     * it promptly and the next tick preempts normally.  The ISR runs with
+     * IF=0 (interrupt gate), so no EFLAGS save/restore is needed.
+     */
+    if (spinlock_trylock(schedule_lock) != 0)
+        return;
 
     if (!thread_run) {
-        spinlock_unlock_irqrestore(schedule_lock, eflags);
+        spinlock_unlock(schedule_lock);
         return;
     }
-
-    timeslice = 0;
 
     tcb* next = find_next_runnable(thread_run);
     if (next) {
@@ -594,7 +613,7 @@ static void schedule_isr(void* p)
         arch_task_restore_context(&next->context);
     }
 
-    spinlock_unlock_irqrestore(schedule_lock, eflags);
+    spinlock_unlock(schedule_lock);
 }
 
 static void syscall_isr(void* data)
@@ -645,7 +664,7 @@ static void syscall_isr(void* data)
 }
 
 static irq* schedule_irq = 0;
-static irq* syscall_irq = 0;
+static i32 proc_scall_handle = -1;
 
 static void proc_env_init(void)
 {
@@ -660,9 +679,7 @@ static void proc_env_init(void)
     if (schedule_irq)
         irq_unmask(schedule_irq);
 
-    irq_request(&syscall_irq, "proc_syscall", 100, 0, syscall_isr, 0);
-    if (syscall_irq)
-        irq_unmask(syscall_irq);
+    proc_scall_handle = syscall_register(syscall_isr);
 
 #ifdef PROCESS_SUPPORT_MAILBOX
     mailbox_syscall_init();
@@ -679,10 +696,7 @@ static void proc_env_exit(void)
         irq_release(schedule_irq);
     }
 
-    if (syscall_irq) {
-        irq_mask(syscall_irq);
-        irq_release(syscall_irq);
-    }
+    syscall_unregister(proc_scall_handle);
 
 #ifdef PROCESS_SUPPORT_MAILBOX
     mailbox_syscall_exit();
@@ -695,7 +709,7 @@ void thread_yield(void)
     proc_thread_ctrl_config config = {0};
     config.cmd = THREAD_CTRL_YIELD;
 
-    arch_syscall(0, &config);
+    arch_syscall(proc_scall_handle, &config);
 }
 
 void thread_block(i32 tid)
@@ -704,7 +718,7 @@ void thread_block(i32 tid)
     config.cmd = THREAD_CTRL_BLOCK;
     config.tid = tid;
 
-    arch_syscall(0, &config);  
+    arch_syscall(proc_scall_handle, &config);
 }
 
 void thread_unblock(i32 tid)
@@ -713,7 +727,7 @@ void thread_unblock(i32 tid)
     config.cmd = THREAD_CTRL_UNBLOCK;
     config.tid = tid;
 
-    arch_syscall(0, &config);
+    arch_syscall(proc_scall_handle, &config);
 }
 
 i32 thread_create(task_priv priv, task_entry_t entry, void* param)
@@ -740,7 +754,7 @@ i32 thread_create(task_priv priv, task_entry_t entry, void* param)
     config.entry = entry;
     config.param = param;
 
-    arch_syscall(0, &config);
+    arch_syscall(proc_scall_handle, &config);
 
     return config.tid;
 }
@@ -751,7 +765,7 @@ void thread_exit(i32 tid)
     config.cmd = THREAD_CTRL_DELETE;
     config.tid = tid;
 
-    arch_syscall(0, &config);
+    arch_syscall(proc_scall_handle, &config);
 }
 
 int thread_get_tid(void)
@@ -807,7 +821,7 @@ i32 proc_create(proc_priv priv, task_entry_t entry, void* param)
     config.priv = priv;
     config.entry = entry;
     config.param = param;
-    arch_syscall(0, &config);
+    arch_syscall(proc_scall_handle, &config);
 
     return config.pid;
 }
@@ -818,7 +832,7 @@ void proc_exit(i32 pid)
     config.cmd = PROC_CTRL_EXIT;
     config.pid = pid;
 
-    arch_syscall(0, &config);
+    arch_syscall(proc_scall_handle, &config);
 }
 
 int proc_block(i32 pid)
@@ -827,7 +841,7 @@ int proc_block(i32 pid)
     config.cmd = PROC_CTRL_BLOCK;
     config.pid = pid;
 
-    arch_syscall(0, &config);
+    arch_syscall(proc_scall_handle, &config);
 
     return 0;
 }
@@ -838,7 +852,7 @@ int proc_unblock(i32 pid)
     config.cmd = PROC_CTRL_UNBLOCK;
     config.pid = pid;
 
-    arch_syscall(0, &config);
+    arch_syscall(proc_scall_handle, &config);
 
     return 0;
 }

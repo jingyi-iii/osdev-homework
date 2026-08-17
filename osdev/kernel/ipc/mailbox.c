@@ -4,6 +4,9 @@
 #include "kernel/errno.h"
 #include "arch_irq.h"
 #include "kernel/irq.h"
+#include "kernel/syscall.h"
+#include "kernel/process.h"
+#include "kernel/capability.h"
 
 mail* alloc_mail(void)
 {
@@ -290,15 +293,26 @@ static int unregister_handler(mailbox* mb, mail_handler handler)
 /*
  * Mailbox syscall layer
  */
-#define MAILBOX_SYSCALL_MINOR   (3)
-
-static irq* mailbox_syscall_irq = 0;
-
 static void mailbox_syscall_isr(void* data)
 {
     mailbox_ctrl_config* config = (mailbox_ctrl_config*)data;
     if (!config)
         return;
+
+    /*
+     * CAP_IPC gate: a user (CPL3) process may only use the mailbox IPC
+     * service if it holds a CAP_IPC grant.  Kernel processes / drivers are
+     * trusted and skip the check.  The handler runs in the caller's
+     * context, so get_current_process() is the process behind the syscall.
+     */
+    pcb* proc = get_current_process();
+    if (proc && proc->priv != PROC_PRIV_KERNEL) {
+        int ipc_ok = 1;
+        if (cap_check(proc, CAP_IPC, &ipc_ok) != 0) {
+            config->ret = -E_PERM;
+            return;
+        }
+    }
 
     switch (config->cmd) {
     case MAILBOX_CTRL_SEND:
@@ -343,21 +357,16 @@ static void mailbox_syscall_isr(void* data)
     }
 }
 
+static i32 mailbox_scall_handle = -1;
+
 void mailbox_syscall_init(void)
 {
-    irq_request(&mailbox_syscall_irq, "mailbox_syscall", 100,
-                MAILBOX_SYSCALL_MINOR, mailbox_syscall_isr, 0);
-    if (mailbox_syscall_irq)
-        irq_unmask(mailbox_syscall_irq);
+    mailbox_scall_handle = syscall_register(mailbox_syscall_isr);
 }
 
 void mailbox_syscall_exit(void)
 {
-    if (mailbox_syscall_irq) {
-        irq_mask(mailbox_syscall_irq);
-        irq_release(mailbox_syscall_irq);
-        mailbox_syscall_irq = 0;
-    }
+    syscall_unregister(mailbox_scall_handle);
 }
 
 mail* mailbox_alloc_mail(void)
@@ -365,7 +374,7 @@ mail* mailbox_alloc_mail(void)
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_ALLOC_MAIL;
 
-    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+    arch_syscall(mailbox_scall_handle, &config);
 
     return config.m;
 }
@@ -376,7 +385,7 @@ void mailbox_release_mail(mail* m)
     config.cmd = MAILBOX_CTRL_RELEASE_MAIL;
     config.m = m;
 
-    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+    arch_syscall(mailbox_scall_handle, &config);
 }
 
 mailbox* mailbox_alloc(int owner_pid, int owner_tid)
@@ -386,7 +395,7 @@ mailbox* mailbox_alloc(int owner_pid, int owner_tid)
     config.pid = owner_pid;
     config.tid = owner_tid;
 
-    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+    arch_syscall(mailbox_scall_handle, &config);
 
     return config.mb;
 }
@@ -397,7 +406,7 @@ void mailbox_release(mailbox* mb)
     config.cmd = MAILBOX_CTRL_RELEASE;
     config.mb = mb;
 
-    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+    arch_syscall(mailbox_scall_handle, &config);
 }
 
 
@@ -407,7 +416,7 @@ int mailbox_send(mail* m)
     config.cmd = MAILBOX_CTRL_SEND;
     config.m = m;
 
-    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+    arch_syscall(mailbox_scall_handle, &config);
 
     return config.ret;
 }
@@ -419,7 +428,7 @@ mail* mailbox_listen(mailbox* mb)
         config.cmd = MAILBOX_CTRL_LISTEN;
         config.mb = mb;
 
-        arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+        arch_syscall(mailbox_scall_handle, &config);
 
         if (config.m)
             return config.m;
@@ -438,7 +447,7 @@ int mailbox_register_handler(mailbox* mb, mail_handler handler)
     config.mb = mb;
     config.handler = handler;
 
-    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+    arch_syscall(mailbox_scall_handle, &config);
 
     return config.ret;
 }
@@ -450,7 +459,7 @@ int mailbox_unregister_handler(mailbox* mb, mail_handler handler)
     config.mb = mb;
     config.handler = handler;
 
-    arch_syscall(MAILBOX_SYSCALL_MINOR, &config);
+    arch_syscall(mailbox_scall_handle, &config);
 
     return config.ret;
 }

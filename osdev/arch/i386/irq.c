@@ -119,16 +119,21 @@ void arch_init_irq(void)
     arch_init_8259a();
 }
 
-void arch_syscall(u32 minor, void* data)
+/*
+ * Trap into the syscall gate: ebx = handle, ecx = arg.
+ * arch_syscall_entry (irq.S) dispatches to syscall_dispatch(handle, arg)
+ * in kernel/syscall.c.  The eax register is intentionally left untouched —
+ * the gate no longer carries a "major".
+ */
+void arch_syscall(u32 handle, void* data)
 {
     __asm__ __volatile__(
-            "movl $100,     %%eax   \n\t"
             "movl %0,       %%ebx   \n\t"
             "movl %1,       %%ecx   \n\t"
             "int  $100              \n\t"
             :
-            :"g"(minor), "g"(data)
-            :"eax", "ebx", "ecx"
+            :"g"(handle), "g"(data)
+            :"ebx", "ecx"
     );
 }
 

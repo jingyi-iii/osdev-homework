@@ -1,5 +1,6 @@
 #include "drivers/platform_bus.h"
 #include "drivers/platform_devices.h"
+#include "kernel/io.h"
 #include "lib/string.h"
 #include "sync/spinlock.h"
 #include <stddef.h>
@@ -7,43 +8,41 @@
 static DECLARE_HEAD_NODE(servers);
 static spinlock* servers_lock = 0;
 
+/*
+ * Port I/O is delegated to the io layer (kernel/io.c): at CPL0 it executes
+ * the in/out instruction directly, at CPL3 it routes through the syscall
+ * gate where the CAP_ACCESS_IO capability is enforced.
+ */
 static int in8(u16 port)
 {
-    u8 data = 0;
-    __asm__ volatile("inb %1, %0" : "=a"(data) : "dN"(port));
-
-    return data;
+    return (int)ioread8(port);
 }
 
 static int in16(u16 port)
 {
-    u16 data = 0;
-    __asm__ volatile("inw %1, %0" : "=a"(data) : "dN"(port));
-    return data;
+    return (int)ioread16(port);
 }
 
 static int in32(u16 port)
 {
-    u32 data = 0;
-    __asm__ volatile("inl %1, %0" : "=a"(data) : "dN"(port));
-    return data;
+    return (int)ioread32(port);
 }
 
 static int out8(u16 port, u8 data)
 {
-    __asm__ volatile("outb %0, %1" : : "a"(data), "dN"(port));
+    iowrite8(port, data);
     return 0;
 }
 
 static int out16(u16 port, u16 data)
 {
-    __asm__ volatile("outw %0, %1" : : "a"(data), "dN"(port));
+    iowrite16(port, data);
     return 0;
 }
 
 static int out32(u16 port, u32 data)
 {
-    __asm__ volatile("outl %0, %1" : : "a"(data), "dN"(port));
+    iowrite32(port, data);
     return 0;
 }
 

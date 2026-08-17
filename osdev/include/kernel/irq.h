@@ -40,11 +40,11 @@ int irq_mask(struct irq* p);
 int irq_unmask(struct irq* p);
 
 /*
- * IRQ syscall gate (major 100) for RING3 access.
+ * IRQ syscall gate for RING3 access.
  * The four functions above transparently route through this gate when the
- * caller runs in user mode (CPL3).
+ * caller runs in user mode (CPL3).  The handle is allocated by
+ * syscall_register() (kernel/syscall.c) — callers never pick a number.
  */
-#define IRQ_SYSCALL_MINOR       (5)
 
 /* IRQ syscall commands */
 typedef enum {

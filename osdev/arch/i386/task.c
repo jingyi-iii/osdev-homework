@@ -82,11 +82,12 @@ int arch_task_context_init(vmm_control_block* vcb, arch_task_context* context, t
     context->regs->eip = (u32)entry;
     context->regs->esp = (u32)context->stack + 0x1000 - sizeof(regs);
 
-    /* IOPL=3 (EFLAGS bits 12-13): let ring-3 threads execute in/out
-     * directly.  For now every user thread gets full I/O access; later
-     * this can be replaced by a per-port TSS I/O permission bitmap
-     * driven by capabilities (keep IOPL=0 and clear bitmap bits). */
-    context->regs->eflags = 0x0202 | (ring ? 0x3000 : 0);
+    /* IOPL=0 (EFLAGS bits 12-13 clear): ring-3 threads may NO longer execute
+     * privileged in/out (or cli/sti) directly.  All port I/O from user mode
+     * is routed through the io syscall gate (kernel/io.c), which enforces
+     * the CAP_ACCESS_IO capability.  Kernel threads (ring=0) may still run
+     * in/out natively, so they do not need IOPL. */
+    context->regs->eflags = 0x0202;
     context->ring = ring;
 
     return 0;

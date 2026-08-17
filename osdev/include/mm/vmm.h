@@ -51,14 +51,15 @@ int vmm_lookup_region(pcb* proc, u32 va, u32* out_pa, u32* out_pa_size);
 u32 vmm_va_to_pa(pcb* proc, u32 va);
 
 /*
- * VMM syscall gate (major 100, minor VMM_SYSCALL_MINOR) for RING3 access.
+ * VMM syscall gate (int $100) for RING3 access.
  * vmm_alloc_pages / vmm_free_pages / vmm_map_memory / vmm_unmap_memory
  * transparently route through this gate when the caller runs in user mode
  * (CPL3), because the underlying page-table manipulation executes the
  * privileged invlpg instruction.  The handler runs in kernel context, so
  * the capability checks inside the kernel implementations still apply.
+ * The syscall handle is allocated by syscall_register() (kernel/syscall.c)
+ * — callers never pick a number.
  */
-#define VMM_SYSCALL_MINOR   (4)
 
 /* VMM syscall commands */
 typedef enum {

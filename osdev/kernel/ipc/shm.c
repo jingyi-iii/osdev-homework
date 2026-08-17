@@ -19,6 +19,15 @@ int shm_share(i32 pid, void* va, size_t size, void** out_va)
     if (size == 0)
         return E_INVAL;
 
+    /* CAP_IPC gate: sharing memory with another process is an IPC
+     * operation; the caller must hold a CAP_IPC grant.  Kernel processes
+     * are trusted and skip the check. */
+    if (curr->priv != PROC_PRIV_KERNEL) {
+        int ipc_ok = 1;
+        if (cap_check(curr, CAP_IPC, &ipc_ok) != 0)
+            return E_PERM;
+    }
+
     pa = vmm_va_to_pa(curr, (u32)va);
     if (!pa)
         return E_INVAL;
@@ -60,6 +69,14 @@ int shm_unshare(i32 pid, void* va)
 
     if (!curr || !target)
         return E_NOTFOUND;
+
+    /* CAP_IPC gate: tearing down shared memory is an IPC operation; the
+     * caller must hold a CAP_IPC grant.  Kernel processes are trusted. */
+    if (curr->priv != PROC_PRIV_KERNEL) {
+        int ipc_ok = 1;
+        if (cap_check(curr, CAP_IPC, &ipc_ok) != 0)
+            return E_PERM;
+    }
 
     if (vmm_lookup_region(target, (u32)va, &pa, &pa_size))
         return E_NOTFOUND;

@@ -26,8 +26,9 @@ int spinlock_unlock(spinlock* lock);
 
 /* IRQ-safe variants: disable interrupts while holding the lock, so on this
  * single-CPU kernel an ISR can never preempt the holder (which would let a
- * preempted holder deadlock an ISR-side spin).  RING3 may run cli/popfl
- * thanks to IOPL=3, so these are safe at CPL3 too. */
+ * preempted holder deadlock an ISR-side spin).  RING3 runs with IOPL=0
+ * (see arch/i386/task.c), so at CPL3 cli is not available and the pair
+ * degrades to a plain spinlock with an EFLAGS save/restore. */
 u32 spinlock_lock_irqsave(spinlock* lock);
 void spinlock_unlock_irqrestore(spinlock* lock, u32 eflags);
 

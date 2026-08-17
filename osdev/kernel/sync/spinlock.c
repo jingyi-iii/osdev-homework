@@ -58,21 +58,38 @@ int spinlock_unlock(spinlock *lock)
     return 0;
 }
 
+/* 1 if the caller executes at CPL3 (user mode).  Same idea as
+ * arch_running_ring3() but kept local to avoid pulling in arch_irq.h. */
+static inline int spin_running_ring3(void)
+{
+    u16 cs;
+    __asm__ __volatile__("mov %%cs, %0" : "=r"(cs));
+    return (cs & 3) == 3;
+}
+
 /*
  * spinlock_lock_irqsave - disable interrupts (save EFLAGS), then acquire
  * the lock.  Returns the saved EFLAGS; pass it to
  * spinlock_unlock_irqrestore() when releasing.
  *
  * Guarantees the holder can never be preempted by an interrupt handler, so
- * an ISR-side acquisition (spinlock_lock) always terminates.  RING3 may run
- * cli/popfl thanks to IOPL=3.  spinlock_lock(NULL) is a no-op, so a NULL
- * lock still gets a correct save/restore of the interrupt flag.
+ * an ISR-side acquisition (spinlock_lock) always terminates.
+ *
+ * RING3 (CPL3) runs with IOPL=0 now (see arch/i386/task.c), so cli is NOT
+ * available there.  At CPL3 the irq-save variant degrades to a plain
+ * spinlock: the interrupt flag is still saved/restored (popfl at CPL3
+ * simply ignores the IF/IOPL bits), but interrupts are not masked while
+ * the lock is held.
+ *
+ * spinlock_lock(NULL) is a no-op, so a NULL lock still gets a correct
+ * save/restore of the interrupt flag.
  */
 u32 spinlock_lock_irqsave(spinlock* lock)
 {
     u32 eflags;
     __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags) : : "memory");
-    __asm__ __volatile__("cli" ::: "memory");
+    if (!spin_running_ring3())
+        __asm__ __volatile__("cli" ::: "memory");
     spinlock_lock(lock);
     return eflags;
 }

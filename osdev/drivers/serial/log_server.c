@@ -1,7 +1,7 @@
 #include "drivers/log_server.h"
 #include "sync/spinlock.h"
 #include "kernel/process.h"
-#include "regs.h"
+#include "kernel/io.h"
 
 #define SERIAL_COM1_BASE   0x3F8
 #define SERIAL_LSR_OFF     5      /* Line Status Register offset  */
@@ -19,31 +19,32 @@ static struct log_device log_device = {
     .ready   = 0,
 };
 
-/* ---- serial port init (raw I/O, no device probing needed) ------------ */
+/* ---- serial port init (port I/O via the io layer, no probing) ------- */
 static void serial_port_init(u16 port)
 {
-    arch_outb(port + 1, 0x00);    /* Disable all interrupts          */
-    arch_outb(port + 3, 0x80);    /* Enable DLAB (baud rate divisor) */
-    arch_outb(port + 0, 0x03);    /* Divisor lo = 3  → 38400 baud    */
-    arch_outb(port + 1, 0x00);    /* Divisor hi                      */
-    arch_outb(port + 3, 0x03);    /* 8 bits, no parity, one stop bit */
-    arch_outb(port + 2, 0xC7);    /* Enable FIFO, 14-byte threshold  */
-    arch_outb(port + 4, 0x0B);    /* IRQs enabled, RTS/DSR set       */
-    arch_outb(port + 4, 0x0F);    /* Normal operation (not loopback) */
+    iowrite8(port + 1, 0x00);    /* Disable all interrupts          */
+    iowrite8(port + 3, 0x80);    /* Enable DLAB (baud rate divisor) */
+    iowrite8(port + 0, 0x03);    /* Divisor lo = 3  → 38400 baud    */
+    iowrite8(port + 1, 0x00);    /* Divisor hi                      */
+    iowrite8(port + 3, 0x03);    /* 8 bits, no parity, one stop bit */
+    iowrite8(port + 2, 0xC7);    /* Enable FIFO, 14-byte threshold  */
+    iowrite8(port + 4, 0x0B);    /* IRQs enabled, RTS/DSR set       */
+    iowrite8(port + 4, 0x0F);    /* Normal operation (not loopback) */
 }
 
 /* ---- direct serial write ----------------------------------------------
  * Works in every context: early kernel boot (before the log server has
- * started), CPL0 and CPL3 (user threads run with IOPL=3, so ring-3 in/out
- * is allowed).  spinlock_lock(NULL) is a safe no-op, so this is fine even
- * before the lock is allocated (very early boot is single-threaded). */
+ * started), CPL0 and CPL3 (port I/O goes through the io layer, kernel/io.c,
+ * which routes ring-3 access through the syscall gate).  spinlock_lock(NULL)
+ * is a safe no-op, so this is fine even before the lock is allocated (very
+ * early boot is single-threaded). */
 static void log_write_direct(const char* buf, size_t size)
 {
     spinlock_lock(log_device.lock);
     for (size_t i = 0; i < size; i++) {
-        while ((arch_inb(log_device.io_port + SERIAL_LSR_OFF) & LSR_THR_EMPTY) == 0)
+        while ((ioread8(log_device.io_port + SERIAL_LSR_OFF) & LSR_THR_EMPTY) == 0)
             ;
-        arch_outb(log_device.io_port, (u8)buf[i]);
+        iowrite8(log_device.io_port, (u8)buf[i]);
     }
     spinlock_unlock(log_device.lock);
 }

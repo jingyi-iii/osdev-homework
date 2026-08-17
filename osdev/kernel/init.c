@@ -1,5 +1,6 @@
 #include "kernel/init.h"
 #include "kernel/process.h"
+#include "kernel/capability.h"
 
 extern void process_test_main_thread(void);
 
@@ -11,6 +12,44 @@ extern void terminal_init(void);
 extern void log_server_init(void);
 extern void timer_server_init(void);
 
+/*
+ * Grant the top-level demo/test process everything its ring-3 code needs:
+ *   - port ranges (all I/O goes through the capability-checked io syscall
+ *     gate, see kernel/io.c):
+ *       VGA  {0x3C0, 32}:  terminal_write()/gfx_*() rendering
+ *       COM1 {0x3F8, 8}:   LOG() output
+ *       PIT/PPI/CMOS:      timer_delay_ms()/timer_get_time() (used by nearly
+ *                          every test suite; without them pit_delay_ticks()
+ *                          would spin forever on denied port reads)
+ *   - CAP_IPC: the test suites use mailbox_* (mailbox_api_test) and
+ *     shm_share/shm_unshare (shm_test).
+ * Processes the demo spawns inherit a copy (cap_inherit_all in p_create),
+ * so all test/game children keep working.  Driver servers get their own
+ * grants from the platform device table.
+ */
+static void grant_demo_caps(pcb* proc)
+{
+    if (!proc)
+        return;
+
+    cap_io_port vga  = { 0x3C0, 32 };   /* VGA ports 0x3C0-0x3DF */
+    cap_io_port com1 = { 0x3F8, 8  };   /* COM1 (LOG() output)    */
+    cap_io_port pit  = { 0x40, 4  };    /* PIT 0x40-0x43 (timer_delay_*) */
+    cap_io_port ppi  = { 0x61, 1  };    /* PPI port B (PIT gate)  */
+    cap_io_port cmos = { 0x70, 2  };    /* CMOS 0x70-0x71 (timer_get_time) */
+
+    cap_grant(proc, CAP_ACCESS_IO, &vga);
+    cap_grant(proc, CAP_ACCESS_IO, &com1);
+    cap_grant(proc, CAP_ACCESS_IO, &pit);
+    cap_grant(proc, CAP_ACCESS_IO, &ppi);
+    cap_grant(proc, CAP_ACCESS_IO, &cmos);
+
+    /* IPC: the test suites use mailbox_* (mailbox_api_test) and
+     * shm_share/shm_unshare (shm_test); children inherit this grant. */
+    int ipc_ok = 1;
+    cap_grant(proc, CAP_IPC, &ipc_ok);
+}
+
 void init_thread(void)
 {
      kb_server_init();
@@ -19,11 +58,13 @@ void init_thread(void)
      terminal_init();
      timer_server_init();
      log_server_init();
-     proc_create(PROC_PRIV_USER, process_test_main_thread, 0);
+     int pid = proc_create(PROC_PRIV_USER, process_test_main_thread, 0);
+     grant_demo_caps(get_process_by_pid(pid));
 
      // /* case2: game mode */
      // gfx_server_init();
-     // proc_create(PROC_PRIV_USER, game_proc_main_thread, 0);
+     // pid = proc_create(PROC_PRIV_USER, game_proc_main_thread, 0);
+     // grant_demo_caps(get_process_by_pid(pid));
 
      proc_exit(proc_get_pid());
 }

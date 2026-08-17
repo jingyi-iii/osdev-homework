@@ -16,6 +16,7 @@ enum platform_resource_type {
     PLAT_RES_IO,
     PLAT_RES_IRQ,
     PLAT_RES_MEM,
+    PLAT_RES_IPC,
 };
 
 struct platform_resource {
@@ -35,6 +36,11 @@ struct platform_resource {
             u32 addr;
             u32 size;
         } mem;
+
+        /* Boolean IPC permission (CAP_IPC).  Grant = 1. */
+        struct {
+            int grant;
+        } ipc;
     };
 };
 

@@ -1,5 +1,6 @@
 #include "arch_irq.h"
 #include "kernel/irq.h"
+#include "kernel/syscall.h"
 #include "lib/string.h"
 #include "lib/module.h"
 #include "drivers/log_server.h"
@@ -8,6 +9,9 @@
 #include "kernel/process.h"
 #include "ipc/mailbox.h"
 #include <stdint.h>
+
+/* Syscall handle allocated by syscall_register() in irq_syscall_init(). */
+static i32 irq_scall_handle = -1;
 
 static irqline* irqlines[IDT_ENTRIES] = {0};
 
@@ -180,7 +184,11 @@ static void dispatch_user_mode_irq(irq* p)
 
 void irqline_handler(u32 major, u32 minor, void* context)
 {
+    /* Syscalls no longer flow through this path: int $100 goes straight to
+     * syscall_dispatch() (see irq.S / kernel/syscall.c).  This handler now
+     * only serves real hardware IRQ lines. */
     (void)minor;
+    (void)context;
 
     if (!irqlines[major])
         return;
@@ -190,20 +198,10 @@ void irqline_handler(u32 major, u32 minor, void* context)
         if (!p->enabled)
             continue;
 
-        if (p->major == 100) {
-            /* Syscall gate (major 100): dispatch by minor, pass real data */
-            if (p->minor == minor) {
-                if (p->is_user_irq)
-                    dispatch_user_mode_irq(p);
-                else
-                    p->handler(context);
-            }
-        } else {
-            if (p->is_user_irq)
-                dispatch_user_mode_irq(p);
-            else
-                p->handler(p->context);
-        }
+        if (p->is_user_irq)
+            dispatch_user_mode_irq(p);
+        else
+            p->handler(p->context);
     }
 }
 
@@ -358,7 +356,7 @@ int irq_request(irq **out, const char* name, u32 major, u32 minor,
         data.param       = cb_param;
         data.is_user_irq = 1;
         data.tid         = thread_get_tid();
-        arch_syscall(IRQ_SYSCALL_MINOR, &data);
+        arch_syscall(irq_scall_handle, &data);
         if (out)
             *out = data.handle;
         return data.ret;
@@ -378,7 +376,7 @@ void irq_release(irq *p)
         irq_syscall_data data = {0};
         data.cmd    = IRQ_SYSCALL_RELEASE;
         data.handle = p;
-        arch_syscall(IRQ_SYSCALL_MINOR, &data);
+        arch_syscall(irq_scall_handle, &data);
         return;
     }
 
@@ -411,7 +409,7 @@ int irq_mask(struct irq* p)
         irq_syscall_data data = {0};
         data.cmd    = IRQ_SYSCALL_MASK;
         data.handle = p;
-        arch_syscall(IRQ_SYSCALL_MINOR, &data);
+        arch_syscall(irq_scall_handle, &data);
         return data.ret;
     }
 
@@ -438,7 +436,7 @@ int irq_unmask(struct irq* p)
         irq_syscall_data data = {0};
         data.cmd    = IRQ_SYSCALL_UNMASK;
         data.handle = p;
-        arch_syscall(IRQ_SYSCALL_MINOR, &data);
+        arch_syscall(irq_scall_handle, &data);
         return data.ret;
     }
 
@@ -460,13 +458,11 @@ int irq_unmask(struct irq* p)
  * IRQ syscall layer (RING3)
  *
  * irq_request / irq_release / irq_mask / irq_unmask are routed through this
- * gate (major 100, minor IRQ_SYSCALL_MINOR) whenever the caller runs in user
- * mode (CPL3).  The handler runs in kernel context, so the capability checks
- * inside the kernel implementations still apply to the calling process.
+ * gate (int $100) whenever the caller runs in user mode (CPL3).  The
+ * handler runs in kernel context, so the capability checks inside the
+ * kernel implementations still apply to the calling process.
  * ============================================================================
  */
-static irq* irq_scall = 0;
-
 static void irq_syscall_handler(void* context)
 {
     irq_syscall_data* data = (irq_syscall_data*)context;
@@ -500,19 +496,12 @@ static void irq_syscall_handler(void* context)
 
 void irq_syscall_init(void)
 {
-    int ret = irq_request(&irq_scall, "irq_syscall", 100,
-                          IRQ_SYSCALL_MINOR, irq_syscall_handler, NULL);
-    if (ret == 0 && irq_scall)
-        irq_unmask(irq_scall);
+    irq_scall_handle = syscall_register(irq_syscall_handler);
 }
 
 void irq_syscall_exit(void)
 {
-    if (irq_scall) {
-        irq_mask(irq_scall);
-        irq_release(irq_scall);
-        irq_scall = 0;
-    }
+    syscall_unregister(irq_scall_handle);
 }
 
 module_init(irq_syscall_init);

@@ -6,9 +6,9 @@
  *    Runs as a DRIVER_CLASS_USER server (ring-3 process, like kb_server.c).   *
  *    All terminal_* APIs are plain functions callable directly from RING3 —   *
  *    no syscall gate.  The VGA buffer (0xB8000) is identity-mapped with       *
- *    PTE_USER_PAGE, and RING3 threads run with IOPL=3 (see task.c), so the    *
- *    raw in/out on the CRT controller (0x3D4/0x3D5) and the VGA registers     *
- *    work directly from ring 3.                                               *
+ *    PTE_USER_PAGE; in/out on the CRT controller (0x3D4/0x3D5) and the VGA    *
+ *    registers goes through the io layer (kernel/io.c), which routes ring-3   *
+ *    I/O through the syscall gate where CAP_ACCESS_IO is enforced.            *
  *                                                                             *
  *    Keyboard input comes from the user-mode kb_server via                *
  *    kb_register_callback.                                               *
@@ -21,6 +21,8 @@
 #include "mm/heap.h"
 #include "lib/string.h"
 #include "kernel/process.h"
+#include "kernel/io.h"
+#include "arch_irq.h"
 #include "regs.h"
 
 /************************************************************************/
@@ -50,17 +52,18 @@ static struct terminal_device term_device = {
 /* ---- RING3-safe VGA I/O -----------------------------------------------
  * The platform bus ops are never attached to a DRIVER_CLASS_USER device
  * (probe() is not called for user drivers), so the terminal server uses
- * its own wrappers around the raw in/out instructions.  RING3 may execute
- * them directly because user threads run with IOPL=3 (see task.c). */
+ * its own wrappers around the io layer.  iowrite8()/ioread8() execute the
+ * instruction directly at CPL0 and go through the capability-checked
+ * syscall gate at CPL3 (see kernel/io.c). */
 static int term_out8(u16 port, u8 data)
 {
-    arch_outb(port, data);
+    iowrite8(port, data);
     return 0;
 }
 
 static int term_in8(u16 port)
 {
-    return (int)arch_inb(port);
+    return (int)ioread8(port);
 }
 
 static struct platform_bus_ops term_bus_ops = {
@@ -69,17 +72,18 @@ static struct platform_bus_ops term_bus_ops = {
 };
 
 /* ---- IRQ-safe terminal lock -------------------------------------------
- * Terminal state is touched from RING3 apps, from kernel threads and from
- * the keyboard ISR callback (IF=0).  On this single-CPU kernel, cli around
- * the spinlock prevents a RING3/kernel holder from being preempted by the
- * keyboard ISR (which would otherwise spin forever on the same lock).
- * pushf/popf restores the previous IF; RING3 may run cli/sti thanks to
- * IOPL=3. */
+ * Terminal state is touched from RING3 apps and from kernel threads.  On
+ * this single-CPU kernel, cli around the spinlock prevents a holder from
+ * being preempted by an interrupt handler that takes the same lock.
+ * RING3 now runs with IOPL=0 (see task.c), so cli is only available at
+ * CPL0; at CPL3 mutual exclusion relies on the spinlock alone.  pushf/popf
+ * restores the previous IF (popfl at CPL3 ignores the IF/IOPL bits). */
 static u32 term_lock(void)
 {
     u32 eflags;
     __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags) : : "memory");
-    arch_cli();
+    if (!arch_running_ring3())
+        arch_cli();
     spinlock_lock(term_device.lock);
     return eflags;
 }
@@ -315,7 +319,8 @@ static u32 cmd_lock_irq(void)
 {
     u32 eflags;
     __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags) : : "memory");
-    arch_cli();
+    if (!arch_running_ring3())
+        arch_cli();
     spinlock_lock(cmd_lock);
     return eflags;
 }

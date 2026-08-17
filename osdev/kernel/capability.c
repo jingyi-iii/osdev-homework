@@ -311,3 +311,21 @@ void cap_revoke_all(struct pcb* proc)
 
     spinlock_unlock(proc->cap_lock);
 }
+
+void cap_inherit_all(struct pcb* child, struct pcb* parent)
+{
+    if (!child || !parent || !child->cap_lock || !parent->cap_lock)
+        return;
+
+    spinlock_lock(parent->cap_lock);
+    list_for_each(node, &parent->capabilities) {
+        capability* src = list_entry(node, capability, this_node);
+        capability* dst = (capability*)kmalloc(sizeof(capability));
+        if (!dst)
+            break;
+        *dst = *src;
+        list_init(&dst->this_node);
+        list_add(&dst->this_node, &child->capabilities);
+    }
+    spinlock_unlock(parent->cap_lock);
+}

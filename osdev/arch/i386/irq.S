@@ -195,11 +195,11 @@ arch_syscall_entry:
         cmp     $0,             %esi
         jne     1f
 
+        /* syscall dispatch: ebx = minor, ecx = arg */
         pushl   %ecx
         pushl   %ebx
-        pushl   %eax
-        call    irqline_handler
-        addl    $12,            %esp
+        call    syscall_dispatch
+        addl    $8,             %esp
 
 1:
         decl    irq_reenter_cnt

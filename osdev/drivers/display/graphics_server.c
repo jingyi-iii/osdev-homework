@@ -6,8 +6,9 @@
  *    Runs as a DRIVER_CLASS_USER server (ring-3 process, like the other      *
  *    *_server drivers).  All gfx_* APIs are plain functions callable from    *
  *    CPL0 and CPL3: the framebuffer (0xA0000) is identity-mapped with        *
- *    PTE_USER_PAGE and RING3 threads run with IOPL=3, so ring-3 code can     *
- *    write pixels directly and program the VGA registers directly.           *
+ *    PTE_USER_PAGE; VGA register access goes through the io layer            *
+ *    (kernel/io.c), which routes ring-3 in/out through the syscall gate      *
+ *    where the CAP_ACCESS_IO capability is enforced.                         *
  *                                                                             *
  *    The server itself does not switch video modes at startup — the games    *
  *    call gfx_switch_to_mode() on demand so the text-mode terminal server    *
@@ -19,7 +20,7 @@
 #include "sync/spinlock.h"
 #include "drivers/log_server.h"
 #include "kernel/process.h"
-#include "regs.h"
+#include "kernel/io.h"
 
 /************************************************************************/
 /*                        Internal Definitions                          */
@@ -74,17 +75,18 @@ static struct graphics_device gfx_dev = {
 /* ---- RING3-safe VGA I/O -----------------------------------------------
  * The platform bus ops are never attached to a DRIVER_CLASS_USER device
  * (probe() is not called for user drivers), so the graphics server uses
- * its own wrappers around the raw in/out instructions.  RING3 may execute
- * them directly because user threads run with IOPL=3 (see task.c). */
+ * its own wrappers around the io layer.  iowrite8()/ioread8() execute the
+ * instruction directly at CPL0 and go through the capability-checked
+ * syscall gate at CPL3 (see kernel/io.c). */
 static int gfx_out8(u16 port, u8 data)
 {
-    arch_outb(port, data);
+    iowrite8(port, data);
     return 0;
 }
 
 static int gfx_in8(u16 port)
 {
-    return (int)arch_inb(port);
+    return (int)ioread8(port);
 }
 
 static struct platform_bus_ops gfx_bus_ops = {
@@ -426,10 +428,10 @@ static void vga_set_mode_0x13(struct platform_bus_ops* ops)
 static void gfx_server_loop(void)
 {
     /* All gfx_* APIs are plain functions that draw directly to the VGA
-     * framebuffer / registers (RING3 can access 0xA0000 and run in/out
-     * thanks to IOPL=3), so this server thread simply idles, keeping the
-     * server process alive.  Games switch to graphics mode on demand via
-     * gfx_switch_to_mode(). */
+     * framebuffer (RING3 can access 0xA0000) and program the VGA
+     * registers through the io layer (kernel/io.c), so this server thread
+     * simply idles, keeping the server process alive.  Games switch to
+     * graphics mode on demand via gfx_switch_to_mode(). */
     for (;;)
         thread_yield();
 }

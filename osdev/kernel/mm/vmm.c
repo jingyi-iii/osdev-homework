@@ -4,8 +4,12 @@
 #include "kernel/process.h"
 #include "kernel/capability.h"
 #include "kernel/irq.h"
+#include "kernel/syscall.h"
 #include "arch_irq.h"
 #include "lib/module.h"
+
+/* Syscall handle allocated by syscall_register() in vmm_syscall_init(). */
+static i32 vmm_scall_handle = -1;
 
 /*
  * PA allocator:
@@ -138,7 +142,7 @@ void* vmm_alloc_pages(vmm_control_block* vcb, u32 page_cnt, u32 flags)
         data.vcb = vcb;
         data.page_cnt = page_cnt;
         data.flags = flags;
-        arch_syscall(VMM_SYSCALL_MINOR, &data);
+        arch_syscall(vmm_scall_handle, &data);
         return data.ret_va;
     }
 
@@ -248,7 +252,7 @@ void vmm_free_pages(vmm_control_block* vcb, void* va)
         data.cmd = VMM_CTRL_FREE_PAGES;
         data.vcb = vcb;
         data.va = va;
-        arch_syscall(VMM_SYSCALL_MINOR, &data);
+        arch_syscall(vmm_scall_handle, &data);
         return;
     }
 
@@ -443,7 +447,7 @@ void* vmm_map_memory(pcb* proc, u32 phys_addr, size_t size, u32 flags)
         data.phys_addr = phys_addr;
         data.size = size;
         data.flags = flags;
-        arch_syscall(VMM_SYSCALL_MINOR, &data);
+        arch_syscall(vmm_scall_handle, &data);
         return data.ret_va;
     }
 
@@ -493,7 +497,7 @@ int vmm_unmap_memory(pcb* proc, void* virt_addr, size_t size)
         data.proc = proc;
         data.va = virt_addr;
         data.size = size;
-        arch_syscall(VMM_SYSCALL_MINOR, &data);
+        arch_syscall(vmm_scall_handle, &data);
         return data.ret;
     }
 
@@ -555,15 +559,13 @@ u32 vmm_va_to_pa(pcb* proc, u32 va)
  * VMM syscall layer (RING3)
  *
  * vmm_alloc_pages / vmm_free_pages / vmm_map_memory / vmm_unmap_memory are
- * routed through this gate (major 100, minor VMM_SYSCALL_MINOR) whenever the
- * caller runs in user mode (CPL3).  The handler runs in kernel context, so
- * the privileged invlpg inside arch_map_4kb / arch_unmap_4kb is executed at
- * ring 0, and the capability checks inside the kernel implementations still
- * apply to the calling process.
+ * routed through this gate whenever the caller runs in user mode (CPL3).
+ * The handler runs in kernel context, so the privileged invlpg inside
+ * arch_map_4kb / arch_unmap_4kb is executed at ring 0, and the capability
+ * checks inside the kernel implementations still apply to the calling
+ * process.
  * ============================================================================
  */
-static irq* vmm_scall = 0;
-
 static void vmm_syscall_isr(void* context)
 {
     vmm_syscall_data* data = (vmm_syscall_data*)context;
@@ -617,19 +619,12 @@ static void vmm_syscall_isr(void* context)
 
 void vmm_syscall_init(void)
 {
-    int ret = irq_request(&vmm_scall, "vmm_syscall", 100,
-                          VMM_SYSCALL_MINOR, vmm_syscall_isr, 0);
-    if (ret == 0 && vmm_scall)
-        irq_unmask(vmm_scall);
+    vmm_scall_handle = syscall_register(vmm_syscall_isr);
 }
 
 void vmm_syscall_exit(void)
 {
-    if (vmm_scall) {
-        irq_mask(vmm_scall);
-        irq_release(vmm_scall);
-        vmm_scall = 0;
-    }
+    syscall_unregister(vmm_scall_handle);
 }
 
 module_init(vmm_syscall_init);

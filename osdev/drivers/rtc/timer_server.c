@@ -2,7 +2,7 @@
 #include "drivers/log_server.h"
 #include "sync/spinlock.h"
 #include "kernel/process.h"
-#include "regs.h"
+#include "kernel/io.h"
 
 struct timer_device {
     spinlock* lock;
@@ -24,12 +24,12 @@ static u8 timer_read_reg(struct timer_device* dev, u8 reg)
 {
     u8 value = 0;
 
-    /* Direct I/O: RING3 may run in/out thanks to IOPL=3, and the lock is a
-     * plain kernel spinlock, so no syscall / platform ops are needed.
-     * spinlock_lock(NULL) is a safe no-op before the lock is allocated. */
+    /* Port I/O goes through the io layer (kernel/io.c): direct at CPL0,
+     * capability-checked syscall at CPL3.  spinlock_lock(NULL) is a safe
+     * no-op before the lock is allocated. */
     spinlock_lock(dev->lock);
-    arch_outb(dev->cmos_addr, reg & 0x7F);  /* NMI bit cleared */
-    value = arch_inb(dev->cmos_data);
+    iowrite8(dev->cmos_addr, reg & 0x7F);  /* NMI bit cleared */
+    value = ioread8(dev->cmos_data);
     spinlock_unlock(dev->lock);
 
     return value;
@@ -177,28 +177,29 @@ int timer_is_ready(void)
 /*
  * Program PIT channel 2 for a one-shot delay of `ticks` PIT cycles.
  * Uses mode 0 (interrupt on terminal count) and polls the OUT pin
- * via the read-back status command.  Direct I/O (works at CPL3, IOPL=3).
+ * via the read-back status command.  Port I/O goes through the io layer
+ * (kernel/io.c), so it works at both CPL0 and CPL3.
  */
 static void pit_delay_ticks(u16 ticks)
 {
     /* Enable PIT channel 2 gate via PPI port B (bit 0).
      * Save original state so we can restore it. */
-    u8 ppi_save = (u8)arch_inb(PIT_PPI_PORT);
-    arch_outb(PIT_PPI_PORT, ppi_save | 0x01);
+    u8 ppi_save = (u8)ioread8(PIT_PPI_PORT);
+    iowrite8(PIT_PPI_PORT, ppi_save | 0x01);
 
     /* Program channel 2: mode 0 (one-shot), binary, lo/hi bytes */
-    arch_outb(PIT_COMMAND, 0xB0);
-    arch_outb(PIT_CHANNEL2, ticks & 0xFF);
-    arch_outb(PIT_CHANNEL2, (ticks >> 8) & 0xFF);
+    iowrite8(PIT_COMMAND, 0xB0);
+    iowrite8(PIT_CHANNEL2, ticks & 0xFF);
+    iowrite8(PIT_CHANNEL2, (ticks >> 8) & 0xFF);
 
     /* Poll OUT pin via read-back status until terminal count is reached.
      * In mode 0, OUT goes high when the counter reaches 0 and stays high. */
     do {
-        arch_outb(PIT_COMMAND, PIT_RB_CH2_STATUS);
-    } while (!(arch_inb(PIT_CHANNEL2) & 0x80));
+        iowrite8(PIT_COMMAND, PIT_RB_CH2_STATUS);
+    } while (!(ioread8(PIT_CHANNEL2) & 0x80));
 
     /* Restore PPI port B to original state */
-    arch_outb(PIT_PPI_PORT, ppi_save);
+    iowrite8(PIT_PPI_PORT, ppi_save);
 }
 
 void timer_delay_ms(u32 ms)
@@ -250,8 +251,8 @@ void timer_delay_us(u32 us)
 static void timer_server_loop(void)
 {
     /* All timer_* APIs are plain functions callable from CPL0 and CPL3
-     * (direct I/O), so this server thread simply idles, keeping the
-     * server process alive. */
+     * (port I/O via the io layer, kernel/io.c), so this server thread
+     * simply idles, keeping the server process alive. */
     for (;;)
         thread_yield();
 }

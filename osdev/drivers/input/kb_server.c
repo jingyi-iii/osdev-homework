@@ -19,7 +19,7 @@
 #include "sync/spinlock.h"
 #include "kernel/irq.h"
 #include "arch_irq.h"
-#include "regs.h"
+#include "kernel/io.h"
 #include "lib/string.h"
 #include "mm/heap.h"
 #include "drivers/log_server.h"
@@ -287,8 +287,8 @@ static u8 parse(u8 code)
  * The keyboard IRQ (0x21) is delivered to THIS thread's mailbox as a user
  * IRQ (irq_request() from CPL3 routes through the syscall gate and caches
  * the registering thread's tcb — see kernel/irq.c).  The server reads the
- * scancode from port 0x60 directly (RING3 may run in/out thanks to IOPL=3),
- * parses it and distributes one key to every registered listener.
+ * scancode from port 0x60 via ioread8() (syscall gate at ring-3), parses
+ * it and distributes one key to every registered listener.
  */
 static void kb_server_loop(void)
 {
@@ -308,7 +308,7 @@ static void kb_server_loop(void)
         }
         mailbox_release_mail(m);
 
-        u8 scancode = arch_inb(0x60);
+        u8 scancode = ioread8(0x60);
         u8 key = parse(scancode);
         if (key)
             kbuf_add(&kb_device.buf, (char)key);
