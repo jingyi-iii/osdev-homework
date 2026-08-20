@@ -2,6 +2,8 @@
 #define SYSCALL_H
 
 #include "lib/types.h"
+#include "lib/list.h"
+#include "mm/heap.h"
 #include <stddef.h>
 
 /* Capacity of the kernel-side dispatch table.  Slots are allocated
@@ -10,8 +12,17 @@
 #define SYSCALL_MAX_HANDLES     (16)
 
 /* Handler registered for a handle.  `arg` is the value the caller passed in
- * ECX (for the current struct-based ABI this is a user pointer). */
-typedef void (*syscall_handler_fn)(void* arg);
+ * ECX (for the current struct-based ABI this is a user pointer).  The
+ * handler returns an int errno/status that is propagated back to the
+ * caller through EAX (see arch_syscall). */
+typedef int (*syscall_handler_fn)(void* arg);
+
+typedef struct syscall {
+    i32 handle;
+    syscall_handler_fn fn;
+    size_t max_param_size;
+    list_node this_node;
+} syscall;
 
 /*
  * Register a handler and get an opaque handle back (>= 0), or a negative
@@ -20,12 +31,12 @@ typedef void (*syscall_handler_fn)(void* arg);
  * never reachable from user mode, so user processes cannot register
  * syscall handlers.
  */
-i32 syscall_register(syscall_handler_fn fn);
+i32 syscall_register(syscall_handler_fn fn, size_t max_param_size);
 int syscall_unregister(i32 handle);
 
 /* Dispatcher invoked by arch_syscall_entry (int $100).  Looks up the
  * handler registered for `handle` and calls it with `arg`. */
-void syscall_dispatch(u32 handle, void* arg);
+int syscall_dispatch(u32 handle, void* arg, size_t size);
 
 /*
  * Safe user-memory copy helpers: validate that the range lies in user

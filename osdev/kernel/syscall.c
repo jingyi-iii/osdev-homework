@@ -3,6 +3,8 @@
 #include "lib/string.h"
 #include "lib/module.h"
 #include "mm/paging.h"
+#include "sync/spinlock.h"
+#include "arch_irq.h"
 
 /*
  * Dedicated syscall dispatch.  int $100 (arch_syscall_entry in irq.S) no
@@ -12,34 +14,86 @@
  * so a user process can never attach a handler to the gate.  Handles are
  * allocated by syscall_register() — subsystems never choose a number.
  */
-static syscall_handler_fn syscall_table[SYSCALL_MAX_HANDLES] = {0};
+// static syscall_handler_fn syscall_table[SYSCALL_MAX_HANDLES] = {0};
 
-i32 syscall_register(syscall_handler_fn fn)
+static LIST_HEAD(syscall_header);
+
+i32 syscall_register(syscall_handler_fn fn, size_t max_param_size)
 {
+    static i32 handle = 0;
+
     if (!fn)
         return E_INVAL;
 
-    for (u32 i = 0; i < SYSCALL_MAX_HANDLES; i++) {
-        if (!syscall_table[i]) {
-            syscall_table[i] = fn;
-            return (i32)i;
-        }
-    }
-    return E_NOSPC;   /* table full */
+    syscall* sc = kmalloc(sizeof(syscall));
+    if (!sc)
+        return E_NOMEM;
+        
+    sc->fn = fn;
+    sc->max_param_size = max_param_size;
+    sc->handle = handle++;
+    list_init(&sc->this_node);
+    list_add(&sc->this_node, &syscall_header);
+
+    return sc->handle;
 }
 
 int syscall_unregister(i32 handle)
 {
-    if (handle < 0 || (u32)handle >= SYSCALL_MAX_HANDLES)
+    if (handle < 0)
         return E_INVAL;
-    syscall_table[handle] = 0;
+
+    list_for_each_safe(node, next, &syscall_header) {
+        syscall* sc = list_entry(node, syscall, this_node);
+        if (!sc || sc->handle != handle)
+            continue;
+        
+        list_del(&sc->this_node);
+        kfree(sc);
+    }
+
     return 0;
 }
 
-void syscall_dispatch(u32 handle, void* arg)
+int syscall_dispatch(u32 handle, void* arg, size_t size)
 {
-    if (handle < SYSCALL_MAX_HANDLES && syscall_table[handle])
-        syscall_table[handle](arg);
+    int ret = 0;
+
+    list_for_each(node, &syscall_header) {
+        syscall* sc = list_entry(node, syscall, this_node);
+        if (!sc || sc->handle != handle || sc->max_param_size < size)
+            continue;
+
+        /*
+         * Ring-3 callers: copy the config into a validated kernel buffer,
+         * run the handler on it, then copy it BACK so the OUT parameters
+         * (ret / pid / tid / value / m / mb / va ...) reach the caller.
+         * Ring-0 callers (kernel servers, drivers, the boot path) pass
+         * their pointer straight through — they are trusted kernel code
+         * and their configs live on the kernel stack, which the user-space
+         * copy helpers would reject.
+         */
+        if (arch_running_ring3()) {
+            void* kbuf = kmalloc(size);
+            if (!kbuf)
+                continue;
+
+            if (copy_from_user(kbuf, arg, size) != 0) {
+                kfree(kbuf);
+                continue;
+            }
+
+            ret = sc->fn(kbuf);
+            copy_to_user(arg, kbuf, size);   /* write back OUT params */
+            kfree(kbuf);
+            break;
+        } else {
+            ret = sc->fn(arg);
+            break;
+        }
+    }
+
+    return ret;
 }
 
 /*
@@ -72,11 +126,18 @@ static int user_range_ok(const void* user_addr, size_t n, int for_write)
         if (!(pde & PTE_PRESENT) || (for_write && !(pde & PTE_RW)))
             return 0;
 
-        u32 pt_base = pde & PAGE_MASK;
-        u32 pte = *(volatile u32*)(pt_base + PT_INDEX(addr) * 4);
-        if (!(pte & PTE_PRESENT) || !(pte & PTE_USER) ||
-            (for_write && !(pte & PTE_RW)))
-            return 0;
+        if (pde & 0x80) {
+            /* 4MB page (PS bit): the whole region shares the PDE's
+             * permissions, there is no page table to walk. */
+            if (!(pde & PTE_USER) || (for_write && !(pde & PTE_RW)))
+                return 0;
+        } else {
+            u32 pt_base = pde & PAGE_MASK;
+            u32 pte = *(volatile u32*)(pt_base + PT_INDEX(addr) * 4);
+            if (!(pte & PTE_PRESENT) || !(pte & PTE_USER) ||
+                (for_write && !(pte & PTE_RW)))
+                return 0;
+        }
 
         size_t remain = PAGE_SIZE - PAGE_OFFSET(addr);
         if (remain > n)
@@ -109,10 +170,7 @@ int copy_to_user(void* user_dst, const void* src, size_t n)
 
 void syscall_init(void)
 {
-    /* The gate (IDT vector 100 -> arch_syscall_entry) is installed by
-     * arch_init_irq(); nothing to claim here.  The dispatch table is
-     * static and subsystems register their handlers via syscall_register()
-     * in their own init. */
+
 }
 
 void syscall_exit(void)

@@ -356,7 +356,7 @@ int irq_request(irq **out, const char* name, u32 major, u32 minor,
         data.param       = cb_param;
         data.is_user_irq = 1;
         data.tid         = thread_get_tid();
-        arch_syscall(irq_scall_handle, &data);
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
         if (out)
             *out = data.handle;
         return data.ret;
@@ -376,7 +376,7 @@ void irq_release(irq *p)
         irq_syscall_data data = {0};
         data.cmd    = IRQ_SYSCALL_RELEASE;
         data.handle = p;
-        arch_syscall(irq_scall_handle, &data);
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
         return;
     }
 
@@ -409,7 +409,7 @@ int irq_mask(struct irq* p)
         irq_syscall_data data = {0};
         data.cmd    = IRQ_SYSCALL_MASK;
         data.handle = p;
-        arch_syscall(irq_scall_handle, &data);
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
         return data.ret;
     }
 
@@ -436,7 +436,7 @@ int irq_unmask(struct irq* p)
         irq_syscall_data data = {0};
         data.cmd    = IRQ_SYSCALL_UNMASK;
         data.handle = p;
-        arch_syscall(irq_scall_handle, &data);
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
         return data.ret;
     }
 
@@ -463,11 +463,11 @@ int irq_unmask(struct irq* p)
  * kernel implementations still apply to the calling process.
  * ============================================================================
  */
-static void irq_syscall_handler(void* context)
+static int irq_syscall_handler(void* context)
 {
     irq_syscall_data* data = (irq_syscall_data*)context;
     if (!data)
-        return;
+        return -E_INVAL;
 
     switch (data->cmd) {
     case IRQ_SYSCALL_REQUEST:
@@ -492,11 +492,13 @@ static void irq_syscall_handler(void* context)
         data->ret = -E_INVAL;
         break;
     }
+
+    return data->ret;
 }
 
 void irq_syscall_init(void)
 {
-    irq_scall_handle = syscall_register(irq_syscall_handler);
+    irq_scall_handle = syscall_register(irq_syscall_handler, sizeof(irq_syscall_data));
 }
 
 void irq_syscall_exit(void)

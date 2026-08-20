@@ -120,21 +120,34 @@ void arch_init_irq(void)
 }
 
 /*
- * Trap into the syscall gate: ebx = handle, ecx = arg.
- * arch_syscall_entry (irq.S) dispatches to syscall_dispatch(handle, arg)
- * in kernel/syscall.c.  The eax register is intentionally left untouched —
- * the gate no longer carries a "major".
+ * Trap into the syscall gate: ebx = handle, ecx = arg, edx = size.
+ * arch_syscall_entry (irq.S) dispatches to syscall_dispatch(handle, arg,
+ * size); its RESTORE_REGS_KEEP_EAX restore leaves the return value in EAX,
+ * so after int $100 returns, EAX (captured here via "=a") holds the syscall
+ * return value.
  */
-void arch_syscall(u32 handle, void* data)
+int arch_syscall(u32 handle, void* data, size_t data_size)
 {
+    int ret;
+
+    /*
+     * Bind the arguments to the exact registers the gate expects
+     * (ebx = handle, ecx = arg, edx = size) with the register-specific
+     * constraints "b"/"c"/"d", and take the return value from EAX with
+     * "=a".  Generic "g" constraints on stack arguments get miscompiled
+     * here: GCC computes the memory operand against the wrong frame slot,
+     * so the kernel ends up receiving garbage handle/arg/size (observed:
+     * EBX = leftover EAX, ECX = handle, EDX = arg).  Register constraints
+     * eliminate that ambiguity entirely.
+     */
     __asm__ __volatile__(
-            "movl %0,       %%ebx   \n\t"
-            "movl %1,       %%ecx   \n\t"
             "int  $100              \n\t"
-            :
-            :"g"(handle), "g"(data)
-            :"ebx", "ecx"
+            : "=a"(ret)
+            : "b"(handle), "c"(data), "d"(data_size)
+            : "memory"
     );
+
+    return ret;
 }
 
 /*

@@ -142,7 +142,7 @@ void* vmm_alloc_pages(vmm_control_block* vcb, u32 page_cnt, u32 flags)
         data.vcb = vcb;
         data.page_cnt = page_cnt;
         data.flags = flags;
-        arch_syscall(vmm_scall_handle, &data);
+        arch_syscall(vmm_scall_handle, &data, sizeof(data));
         return data.ret_va;
     }
 
@@ -252,7 +252,7 @@ void vmm_free_pages(vmm_control_block* vcb, void* va)
         data.cmd = VMM_CTRL_FREE_PAGES;
         data.vcb = vcb;
         data.va = va;
-        arch_syscall(vmm_scall_handle, &data);
+        arch_syscall(vmm_scall_handle, &data, sizeof(data));
         return;
     }
 
@@ -447,7 +447,7 @@ void* vmm_map_memory(pcb* proc, u32 phys_addr, size_t size, u32 flags)
         data.phys_addr = phys_addr;
         data.size = size;
         data.flags = flags;
-        arch_syscall(vmm_scall_handle, &data);
+        arch_syscall(vmm_scall_handle, &data, sizeof(data));
         return data.ret_va;
     }
 
@@ -497,7 +497,7 @@ int vmm_unmap_memory(pcb* proc, void* virt_addr, size_t size)
         data.proc = proc;
         data.va = virt_addr;
         data.size = size;
-        arch_syscall(vmm_scall_handle, &data);
+        arch_syscall(vmm_scall_handle, &data, sizeof(data));
         return data.ret;
     }
 
@@ -566,11 +566,11 @@ u32 vmm_va_to_pa(pcb* proc, u32 va)
  * process.
  * ============================================================================
  */
-static void vmm_syscall_isr(void* context)
+static int vmm_syscall_isr(void* context)
 {
     vmm_syscall_data* data = (vmm_syscall_data*)context;
     if (!data)
-        return;
+        return -E_INVAL;
 
     switch (data->cmd) {
     case VMM_CTRL_ALLOC_PAGES: {
@@ -615,11 +615,13 @@ static void vmm_syscall_isr(void* context)
         data->ret = EINVAL;
         break;
     }
+
+    return data->ret;
 }
 
 void vmm_syscall_init(void)
 {
-    vmm_scall_handle = syscall_register(vmm_syscall_isr);
+    vmm_scall_handle = syscall_register(vmm_syscall_isr, sizeof(vmm_syscall_data));
 }
 
 void vmm_syscall_exit(void)

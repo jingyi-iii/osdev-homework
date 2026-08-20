@@ -40,6 +40,33 @@ irq_stack_top:
         popal
 .endm
 
+/*
+ * Syscall-only restore: pops every register EXCEPT EAX.  pushal saves
+ * EAX first, so it sits at the deepest stack slot and would be restored
+ * by popal — which would clobber syscall_dispatch's return value that
+ * lives in EAX.  Skipping the saved EAX slot lets iret hand the return
+ * value straight back to the caller, with no magic offset writes.
+ * Layout matches the C `regs` struct (arch_task.h): gs/fs/es/ds then
+ * edi/esi/ebp/kesp/ebx/edx/ecx/eax then the CPU frame.
+ */
+.macro RESTORE_REGS_KEEP_EAX
+        movl    curr_task_ctx,   %esi
+        movl    (%esi),         %esp
+
+        popl    %gs
+        popl    %fs
+        popl    %es
+        popl    %ds
+        popl    %edi
+        popl    %esi
+        popl    %ebp
+        addl    $4,             %esp       /* skip saved kesp */
+        popl    %ebx
+        popl    %edx
+        popl    %ecx
+        addl    $4,             %esp       /* skip saved eax — EAX keeps the return value */
+.endm
+
 
 .macro DECLARE_EXCEPTION_NOERR irq_no
 .align  256,     0x90
@@ -195,14 +222,21 @@ arch_syscall_entry:
         cmp     $0,             %esi
         jne     1f
 
-        /* syscall dispatch: ebx = minor, ecx = arg */
+        /* syscall dispatch: ebx = minor, ecx = arg, edx = size */
+        pushl   %edx
         pushl   %ecx
         pushl   %ebx
         call    syscall_dispatch
-        addl    $8,             %esp
+        addl    $12,            %esp
 
+        /*
+         * EAX now holds syscall_dispatch's return value.
+         * RESTORE_REGS_KEEP_EAX restores every register except EAX, so
+         * iret returns the syscall result in EAX to the caller.  The
+         * reentrant path (jne above) keeps the original EAX untouched.
+         */
 1:
         decl    irq_reenter_cnt
 
-        RESTORE_REGS_AND_SWITCH_USER_STACK
+        RESTORE_REGS_KEEP_EAX
         iret

@@ -293,11 +293,11 @@ static int unregister_handler(mailbox* mb, mail_handler handler)
 /*
  * Mailbox syscall layer
  */
-static void mailbox_syscall_isr(void* data)
+static int mailbox_syscall_isr(void* data)
 {
     mailbox_ctrl_config* config = (mailbox_ctrl_config*)data;
     if (!config)
-        return;
+        return -E_INVAL;
 
     /*
      * CAP_IPC gate: a user (CPL3) process may only use the mailbox IPC
@@ -310,7 +310,7 @@ static void mailbox_syscall_isr(void* data)
         int ipc_ok = 1;
         if (cap_check(proc, CAP_IPC, &ipc_ok) != 0) {
             config->ret = -E_PERM;
-            return;
+            return config->ret;
         }
     }
 
@@ -355,13 +355,15 @@ static void mailbox_syscall_isr(void* data)
         config->ret = -EINVAL;
         break;
     }
+
+    return config->ret;
 }
 
 static i32 mailbox_scall_handle = -1;
 
 void mailbox_syscall_init(void)
 {
-    mailbox_scall_handle = syscall_register(mailbox_syscall_isr);
+    mailbox_scall_handle = syscall_register(mailbox_syscall_isr, sizeof(mailbox_ctrl_config));
 }
 
 void mailbox_syscall_exit(void)
@@ -374,7 +376,7 @@ mail* mailbox_alloc_mail(void)
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_ALLOC_MAIL;
 
-    arch_syscall(mailbox_scall_handle, &config);
+    arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 
     return config.m;
 }
@@ -385,7 +387,7 @@ void mailbox_release_mail(mail* m)
     config.cmd = MAILBOX_CTRL_RELEASE_MAIL;
     config.m = m;
 
-    arch_syscall(mailbox_scall_handle, &config);
+    arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 }
 
 mailbox* mailbox_alloc(int owner_pid, int owner_tid)
@@ -395,7 +397,7 @@ mailbox* mailbox_alloc(int owner_pid, int owner_tid)
     config.pid = owner_pid;
     config.tid = owner_tid;
 
-    arch_syscall(mailbox_scall_handle, &config);
+    arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 
     return config.mb;
 }
@@ -406,7 +408,7 @@ void mailbox_release(mailbox* mb)
     config.cmd = MAILBOX_CTRL_RELEASE;
     config.mb = mb;
 
-    arch_syscall(mailbox_scall_handle, &config);
+    arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 }
 
 
@@ -416,7 +418,7 @@ int mailbox_send(mail* m)
     config.cmd = MAILBOX_CTRL_SEND;
     config.m = m;
 
-    arch_syscall(mailbox_scall_handle, &config);
+    arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 
     return config.ret;
 }
@@ -428,7 +430,7 @@ mail* mailbox_listen(mailbox* mb)
         config.cmd = MAILBOX_CTRL_LISTEN;
         config.mb = mb;
 
-        arch_syscall(mailbox_scall_handle, &config);
+        arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 
         if (config.m)
             return config.m;
@@ -447,7 +449,7 @@ int mailbox_register_handler(mailbox* mb, mail_handler handler)
     config.mb = mb;
     config.handler = handler;
 
-    arch_syscall(mailbox_scall_handle, &config);
+    arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 
     return config.ret;
 }
@@ -459,7 +461,7 @@ int mailbox_unregister_handler(mailbox* mb, mail_handler handler)
     config.mb = mb;
     config.handler = handler;
 
-    arch_syscall(mailbox_scall_handle, &config);
+    arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 
     return config.ret;
 }

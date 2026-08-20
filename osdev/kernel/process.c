@@ -616,7 +616,7 @@ static void schedule_isr(void* p)
     spinlock_unlock(schedule_lock);
 }
 
-static void syscall_isr(void* data)
+static int syscall_isr(void* data)
 {
     proc_thread_ctrl_config *config = (proc_thread_ctrl_config*)data;
     tcb* cur;
@@ -661,6 +661,8 @@ static void syscall_isr(void* data)
     default:
         break;
     }
+
+    return 0;
 }
 
 static irq* schedule_irq = 0;
@@ -679,7 +681,7 @@ static void proc_env_init(void)
     if (schedule_irq)
         irq_unmask(schedule_irq);
 
-    proc_scall_handle = syscall_register(syscall_isr);
+    proc_scall_handle = syscall_register(syscall_isr, sizeof(proc_thread_ctrl_config));
 
 #ifdef PROCESS_SUPPORT_MAILBOX
     mailbox_syscall_init();
@@ -709,7 +711,7 @@ void thread_yield(void)
     proc_thread_ctrl_config config = {0};
     config.cmd = THREAD_CTRL_YIELD;
 
-    arch_syscall(proc_scall_handle, &config);
+    arch_syscall(proc_scall_handle, &config, sizeof(config));
 }
 
 void thread_block(i32 tid)
@@ -718,7 +720,7 @@ void thread_block(i32 tid)
     config.cmd = THREAD_CTRL_BLOCK;
     config.tid = tid;
 
-    arch_syscall(proc_scall_handle, &config);
+    arch_syscall(proc_scall_handle, &config, sizeof(config));
 }
 
 void thread_unblock(i32 tid)
@@ -727,7 +729,7 @@ void thread_unblock(i32 tid)
     config.cmd = THREAD_CTRL_UNBLOCK;
     config.tid = tid;
 
-    arch_syscall(proc_scall_handle, &config);
+    arch_syscall(proc_scall_handle, &config, sizeof(config));
 }
 
 i32 thread_create(task_priv priv, task_entry_t entry, void* param)
@@ -754,7 +756,7 @@ i32 thread_create(task_priv priv, task_entry_t entry, void* param)
     config.entry = entry;
     config.param = param;
 
-    arch_syscall(proc_scall_handle, &config);
+    arch_syscall(proc_scall_handle, &config, sizeof(config));
 
     return config.tid;
 }
@@ -765,7 +767,7 @@ void thread_exit(i32 tid)
     config.cmd = THREAD_CTRL_DELETE;
     config.tid = tid;
 
-    arch_syscall(proc_scall_handle, &config);
+    arch_syscall(proc_scall_handle, &config, sizeof(config));
 }
 
 int thread_get_tid(void)
@@ -821,7 +823,7 @@ i32 proc_create(proc_priv priv, task_entry_t entry, void* param)
     config.priv = priv;
     config.entry = entry;
     config.param = param;
-    arch_syscall(proc_scall_handle, &config);
+    arch_syscall(proc_scall_handle, &config, sizeof(config));
 
     return config.pid;
 }
@@ -832,7 +834,7 @@ void proc_exit(i32 pid)
     config.cmd = PROC_CTRL_EXIT;
     config.pid = pid;
 
-    arch_syscall(proc_scall_handle, &config);
+    arch_syscall(proc_scall_handle, &config, sizeof(config));
 }
 
 int proc_block(i32 pid)
@@ -841,7 +843,7 @@ int proc_block(i32 pid)
     config.cmd = PROC_CTRL_BLOCK;
     config.pid = pid;
 
-    arch_syscall(proc_scall_handle, &config);
+    arch_syscall(proc_scall_handle, &config, sizeof(config));
 
     return 0;
 }
@@ -852,7 +854,7 @@ int proc_unblock(i32 pid)
     config.cmd = PROC_CTRL_UNBLOCK;
     config.pid = pid;
 
-    arch_syscall(proc_scall_handle, &config);
+    arch_syscall(proc_scall_handle, &config, sizeof(config));
 
     return 0;
 }

@@ -43,7 +43,7 @@ enum arch_irq_no {
 
 void arch_unmask_irq(u16 irq_nr);
 void arch_mask_irq(u16 irq_nr);
-void arch_syscall(u32 handle, void* data);
+int arch_syscall(u32 handle, void* data, size_t data_size);
 
 /*
  * Return 1 if the caller is currently executing at CPL3 (user mode),

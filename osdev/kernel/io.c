@@ -28,7 +28,7 @@ u8 ioread8(u16 port)
         io_syscall_data cfg = {0};
         cfg.cmd  = IO_CTRL_IN8;
         cfg.port = port;
-        arch_syscall(io_scall_handle, &cfg);
+        arch_syscall(io_scall_handle, &cfg, sizeof(cfg));
         return (u8)cfg.value;
     }
 
@@ -46,7 +46,7 @@ u16 ioread16(u16 port)
         io_syscall_data cfg = {0};
         cfg.cmd  = IO_CTRL_IN16;
         cfg.port = port;
-        arch_syscall(io_scall_handle, &cfg);
+        arch_syscall(io_scall_handle, &cfg, sizeof(cfg));
         return (u16)cfg.value;
     }
 
@@ -64,7 +64,7 @@ u32 ioread32(u16 port)
         io_syscall_data cfg = {0};
         cfg.cmd  = IO_CTRL_IN32;
         cfg.port = port;
-        arch_syscall(io_scall_handle, &cfg);
+        arch_syscall(io_scall_handle, &cfg, sizeof(cfg));
         return cfg.value;
     }
 
@@ -81,7 +81,7 @@ void iowrite8(u16 port, u8 value)
         cfg.cmd   = IO_CTRL_OUT8;
         cfg.port  = port;
         cfg.value = value;
-        arch_syscall(io_scall_handle, &cfg);
+        arch_syscall(io_scall_handle, &cfg, sizeof(cfg));
         return;
     }
 
@@ -97,7 +97,7 @@ void iowrite16(u16 port, u16 value)
         cfg.cmd   = IO_CTRL_OUT16;
         cfg.port  = port;
         cfg.value = value;
-        arch_syscall(io_scall_handle, &cfg);
+        arch_syscall(io_scall_handle, &cfg, sizeof(cfg));
         return;
     }
 
@@ -113,7 +113,7 @@ void iowrite32(u16 port, u32 value)
         cfg.cmd   = IO_CTRL_OUT32;
         cfg.port  = port;
         cfg.value = value;
-        arch_syscall(io_scall_handle, &cfg);
+        arch_syscall(io_scall_handle, &cfg, sizeof(cfg));
         return;
     }
 
@@ -133,11 +133,11 @@ void iowrite32(u16 port, u32 value)
  * direct path and never re-enter the gate.
  * ============================================================================
  */
-static void io_syscall_isr(void* data)
+static int io_syscall_isr(void* data)
 {
     io_syscall_data* cfg = (io_syscall_data*)data;
     if (!cfg)
-        return;
+        return -E_INVAL;
 
     /*
      * Capability enforcement: a user (CPL3) process may only touch ports
@@ -154,7 +154,7 @@ static void io_syscall_isr(void* data)
         cap_io_port req = { cfg->port, 1 };
         if (cap_check(proc, CAP_ACCESS_IO, &req) != 0) {
             cfg->ret = -E_PERM;
-            return;
+            return cfg->ret;
         }
     }
 
@@ -187,11 +187,13 @@ static void io_syscall_isr(void* data)
         cfg->ret = -EINVAL;
         break;
     }
+
+    return cfg->ret;
 }
 
 void io_syscall_init(void)
 {
-    io_scall_handle = syscall_register(io_syscall_isr);
+    io_scall_handle = syscall_register(io_syscall_isr, sizeof(io_syscall_data));
 }
 
 void io_syscall_exit(void)
