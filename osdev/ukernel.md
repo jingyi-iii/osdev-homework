@@ -7,15 +7,33 @@
 ## 目录
 
 1. [总览](#总览)
-2. [第 0 步：修 Bug + 打地基](#第-0-步修-bug--打地基)
-3. [第 1 步：能力系统（Capability）](#第-1-步能力系统capability)
-4. [第 2 步：IPC 增强](#第-2-步ipc-增强)
-5. [第 3 步：内存映射原语](#第-3-步内存映射原语)
-6. [第 4 步：IRQ 转发到用户态](#第-4-步irq-转发到用户态)
-7. [第 5 步：搬移驱动到用户态](#第-5-步搬移驱动到用户态)
-8. [第 6 步：Demo 程序独立运行](#第-6-步demo-程序独立运行)
-9. [工作量估算](#工作量估算)
-10. [重要提醒](#重要提醒)
+2. [当前状态速览](#当前状态速览)
+3. [第 0 步：修 Bug + 打地基](#第-0-步修-bug--打地基)
+4. [第 1 步：能力系统（Capability）](#第-1-步能力系统capability)
+5. [第 2 步：IPC 增强](#第-2-步ipc-增强)
+6. [第 3 步：内存映射原语](#第-3-步内存映射原语)
+7. [第 4 步：IRQ 转发到用户态](#第-4-步irq-转发到用户态)
+8. [第 5 步：搬移驱动到用户态](#第-5-步搬移驱动到用户态)
+9. [第 6 步：Demo 程序独立运行](#第-6-步demo-程序独立运行)
+10. [工作量估算](#工作量估算)
+11. [重要提醒](#重要提醒)
+
+---
+
+## 当前状态速览
+
+> 截至 `kernel/syscall.c` 强化补丁落地后的最新扫描结果。
+
+| 步骤 | 状态 | 备注 |
+|------|------|------|
+| 第 0 步：修 Bug + 打地基 | 🚧 大部分完成 | `split_4mb_pde`、`list_for_each_safe`、异常 dump、拼写/日志 typo 已修复；`kmalloc` 对齐未处理；**低 16MB 内核区仍 user-accessible（需地址空间重映射才能根治）** |
+| 第 1 步：能力系统 | ✅ 已实现 | `capability.h/c`、PCB 能力列表、I/O / IRQ / mailbox / VMM / 进程创建的能力检查均已落地 |
+| 第 2 步：IPC 增强 | 🚧 部分实现 | wait queue / TCB 阻塞字段已有，但 `mail` 结构未按增强版改造，`mailbox_call` 未实现，`mailbox_listen` 仍是忙等 |
+| 第 3 步：内存映射原语 | 🚧 功能等价 | 已有 `vmm_map_memory`/`vmm_unmap_memory` 和 `shm_share`，但没有按路线图命名为 `sys_mem_map/unmap/share` |
+| 第 4 步：IRQ 转发 | 🚧 部分实现 | 用户态 IRQ 已通过 `MAIL_TYPE_IRQ` 转发到注册线程的 mailbox，但 `irqline` 尚未显式持有 `owner_mailbox` |
+| 第 5 步：搬移驱动 | 🚧 部分实现 | `DRIVER_CLASS_USER` 和 platform_bus 用户驱动流程已跑通；`struct driver` 尚无 `entry/pid/tid`，也无顶层 `servers/` 目录 |
+| 第 6 步：Demo 独立运行 | ⏳ 未开始 | demo 仍直接调用 driver 库函数；命名服务未实现 |
+| syscall.c 强化 | ✅ 已完成 | 零化 kbuf、min 拷贝、统一 E_FAULT、TOCTOU 锁、handle 溢出、arch_syscall 重入守卫 |
 
 ---
 
@@ -80,6 +98,8 @@
 ## 第 0 步：修 Bug + 打地基
 
 > **在做架构改动前，先把现有问题修好，否则 bug 会随着复杂度增加而放大。**
+>
+> 🚧 **当前状态**：`split_4mb_pde`、`list_for_each_safe`、异常处理器寄存器 dump、日志/拼写 typo 已修复；`kmalloc` 对齐保证尚未实现。另：因内核前 16MB 仍映射为 user-accessible，`copy_*_user` 目前无法区分用户指针与指向低端内核区的指针，需在后续地址空间重映射时一并解决。
 
 ### 0.1 修复 `split_4mb_pde` 的静态全局变量 bug
 
@@ -134,18 +154,20 @@ static void split_4mb_pde(uint32_t vaddr, uint32_t *pde_base) {
 
 ### 0.4 现有代码中值得清理的小问题
 
-| 问题 | 位置 | 优先级 |
-|------|------|--------|
-| `init.h` 包含了不必要的重型头文件 | `include/kernel/init.h` | 低 |
-| `arch_map_4kb_range` 日志信息写成了 `arch_map_4mb_range` | `arch/i386/paging.c` | 低 |
-| `mailhander` 拼写错误（应为 `mailhandler`） | `include/kernel/mailbox.h` | 低 |
-| `kmalloc` 无对齐保证 | `kernel/mm/heap.c` | 低 |
+| 问题 | 位置 | 优先级 | 状态 |
+|------|------|--------|------|
+| `init.h` 包含了不必要的重型头文件 | `include/kernel/init.h` | 低 | 🚧 `process.h`/`errno.h` 仍存在，但无明显无关膨胀 |
+| `arch_map_4kb_range` 日志信息写成了 `arch_map_4mb_range` | `arch/i386/paging.c` | 低 | ✅ 已修复 |
+| `mailhander` 拼写错误（应为 `mailhandler`） | `include/kernel/mailbox.h` | 低 | ✅ 已修复 |
+| `kmalloc` 无对齐保证 | `kernel/mm/heap.c` | 低 | ⏳ 未处理 |
 
 ---
 
 ## 第 1 步：能力系统（Capability）
 
 > **这是最关键的基础设施。如果你先把驱动搬出内核但没有任何访问控制，任何用户进程都能直接操作硬件寄存器——比宏内核还不安全。**
+>
+> ✅ **当前状态**：能力系统已完整实现。`include/kernel/capability.h` / `kernel/capability.c`、PCB 能力链表、`cap_check`/`grant`/`revoke` 均可用；I/O、IRQ、mailbox、VMM、进程/线程创建 syscall 都已接入能力检查。
 
 ### 1.1 设计理念
 
@@ -283,6 +305,8 @@ void init_thread(void) {
 ## 第 2 步：IPC 增强
 
 > **当前 mailbox 偏向"通知"模式，微内核需要的是完整的进程间数据传输和同步 RPC。**
+>
+> 🚧 **当前状态**：`include/sync/wait_queue.h` 与 `kernel/sync/wait_queue.c` 已实现，TCB 也包含 `waiting_on`/`wait_node` 字段。但 `mail` 结构仍是旧版（固定 `data[256]`、无 `msg_type`/`error_code`/`payload`/`reply_mailbox`），`mailbox_call` 未实现，`mailbox_listen` 仍通过 `thread_yield` 忙等。
 
 ### 2.1 增强 mail 为消息载体
 
@@ -428,6 +452,8 @@ mail_t* mailbox_listen(uint64_t mbox_id, uint32_t timeout_ms) {
 ## 第 3 步：内存映射原语
 
 > **驱动在用户态后，需要能映射 MMIO 区域和 DMA 缓冲区。现有的 VMM 系统（红黑树管理虚拟区域）是很好的基础。**
+>
+> 🚧 **当前状态**：功能等价接口已存在——`vmm_map_memory`/`vmm_unmap_memory`（`kernel/mm/vmm.c`）以及共享内存 `shm_share`/`shm_unshare`（`kernel/ipc/shm.c`），都通过 syscall 暴露给 ring-3。但尚未按本路线图重命名为 `sys_mem_map` / `sys_mem_unmap` / `sys_mem_share`。
 
 ### 3.1 新增 syscall
 
@@ -518,6 +544,8 @@ int sys_mem_share(uint32_t target_pid, void *local_vaddr, size_t size) {
 ## 第 4 步：IRQ 转发到用户态
 
 > **当前 IRQ handler 在内核态直接执行驱动逻辑。微内核需要把硬件中断转化为 IPC 消息发给用户态驱动进程。**
+>
+> 🚧 **当前状态**：用户态 IRQ 已经通过 `MAIL_TYPE_IRQ` 邮件转发到注册线程的 mailbox（见 `kernel/irq.c` 的 `dispatch_user_mode_irq`），内核 IRQ（如时钟）仍直接调用 handler。但 `irqline` 结构尚未显式持有 `owner_mailbox` / `owner_process` 字段。
 
 ### 4.1 修改内核 IRQ handler 为消息转发
 
@@ -604,6 +632,9 @@ void kb_server_main(void) {
 ## 第 5 步：搬移驱动到用户态
 
 > **基础设施齐全后，逐个将驱动从内核空间迁移到用户态服务进程。**
+>
+> 🚧 **当前状态**：`include/kernel/driver.h` 已定义 `DRIVER_CLASS_KERNEL` / `DRIVER_CLASS_USER`，`drivers/platform/platform_bus.c` 已按 class 分支拉起用户态 server 并授予 capability。但 `struct driver` 目前使用 `start`/`stop` 而非路线图里的 `entry/pid/tid`，也没有独立的顶层 `servers/` 目录（server 源码仍在 `drivers/*_server.c`）。
+
 ### 5.0 复用 bus-driver-device 架构（推荐做法）
 
 > **核心思路：bus-driver-device 模型解决的是"绑定 + 生命周期"（probe/remove），
@@ -880,6 +911,8 @@ uint64_t sys_name_lookup(const char *name);
 ## 第 6 步：Demo 程序独立运行
 
 > **将 airplane 和 snake 从直接调用内核 API 改为通过 IPC 与用户态服务通信。**
+>
+> ⏳ **当前状态**：尚未开始。`demo/airplane.c`、`demo/snake.c`、`demo/games_entry.c` 仍直接调用 `graphics_server` / `kb_server` / `timer_server` 库函数并调用 `proc_create` 创建子进程；命名服务 `sys_name_register` / `sys_name_lookup` 未实现。
 
 ### 6.1 改造 airplane
 
@@ -951,16 +984,16 @@ $(OBJS_DIR)/demo_%.o: $(DEMO_DIR)/%.c
 
 ## 工作量估算
 
-| 步骤 | 内容 | 预计时间 | 难度 | 新增/修改文件数 |
-|------|------|---------|------|---------------|
-| 0 | 修现有 bug | 2-3 天 | ⭐ | ~5 个文件 |
-| 1 | 能力系统 | 5-7 天 | ⭐⭐⭐ | ~4 个新文件 + 3 个修改 |
-| 2 | IPC 增强 | 5-7 天 | ⭐⭐⭐ | ~3 个新文件 + 2 个修改 |
-| 3 | 内存映射原语 | 3-5 天 | ⭐⭐ | ~1 个新文件 + 2 个修改 |
-| 4 | IRQ 转发 | 3-5 天 | ⭐⭐⭐ | ~1 个新文件 + 2 个修改 |
-| 5 | 搬移驱动 | 5-7 天 | ⭐⭐ | ~4 个新文件 |
-| 6 | demo 独立运行 | 3-4 天 | ⭐⭐ | ~2 个修改 |
-| **总计** | | **4-6 周** | | **~25 个文件** |
+| 步骤 | 内容 | 状态 | 预计剩余时间 | 难度 | 新增/修改文件数 |
+|------|------|------|-------------|------|---------------|
+| 0 | 修现有 bug | 🚧 | ~0.5 天 | ⭐ | ~1 个文件（`heap.c` 对齐） |
+| 1 | 能力系统 | ✅ | 0 | ⭐⭐⭐ | 已落地 |
+| 2 | IPC 增强 | 🚧 | 3-5 天 | ⭐⭐⭐ | ~3 个新文件 + 2 个修改 |
+| 3 | 内存映射原语 | 🚧 | 1-2 天 | ⭐⭐ | 重命名/封装即可（功能已存在） |
+| 4 | IRQ 转发 | 🚧 | 1-2 天 | ⭐⭐⭐ | `irqline` 结构 + owner 字段 |
+| 5 | 搬移驱动 | 🚧 | 3-5 天 | ⭐⭐ | 新增 `servers/` 目录 + `struct driver` 字段调整 |
+| 6 | demo 独立运行 | ⏳ | 3-4 天 | ⭐⭐ | ~2 个修改 + 命名服务 |
+| **总计** | | | **2-4 周** | | **~15 个文件** |
 
 ---
 
@@ -996,13 +1029,13 @@ void ipc_latency_test(void) {
 
 每一步完成后都应该有一个**可以启动并演示的版本**：
 
-- 第 0 步后：现有功能正常，bug 修复
-- 第 1 步后：能力系统就绪，但所有进程仍有全部能力（向后兼容）
-- 第 2 步后：新 IPC API 可用，旧 API 暂存
-- 第 3 步后：内存映射 syscall 可用
-- 第 4 步后：可以手动测试 IRQ 转发
-- 第 5 步后：键盘/VGA/RTC 在用户态运行
-- 第 6 步后：airplane/snake 作为独立进程运行
+- ✅ 第 0 步后：现有功能正常，关键 bug 已修复（仅剩 `kmalloc` 对齐）
+- ✅ 第 1 步后：能力系统就绪；当前所有用户 server 在创建时已被授予所需能力
+- 🚧 第 2 步后：新 IPC API 可用，旧 API 暂存（wait queue 已就绪，`mailbox_call` 待实现）
+- 🚧 第 3 步后：内存映射 syscall 可用（`vmm_map_memory`/`shm_share` 已可用）
+- 🚧 第 4 步后：可以手动测试 IRQ 转发（邮件转发已工作，`irqline` owner 字段待补齐）
+- 🚧 第 5 步后：键盘/VGA/RTC 在用户态运行（已按 `DRIVER_CLASS_USER` 跑在用户态，目录结构待整理）
+- ⏳ 第 6 步后：airplane/snake 作为独立进程运行
 
 **永远不要一次性改完所有东西再测试。**
 

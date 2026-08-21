@@ -6,11 +6,6 @@
 #include "mm/heap.h"
 #include <stddef.h>
 
-/* Capacity of the kernel-side dispatch table.  Slots are allocated
- * dynamically: syscall_register() returns an opaque handle (a slot
- * number) that callers pass to arch_syscall(). */
-#define SYSCALL_MAX_HANDLES     (16)
-
 /* Handler registered for a handle.  `arg` is the value the caller passed in
  * ECX (for the current struct-based ABI this is a user pointer).  The
  * handler returns an int errno/status that is propagated back to the

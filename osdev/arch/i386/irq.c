@@ -2,6 +2,7 @@
 #include "arch_protm.h"
 #include "arch_irq.h"
 #include "sync/spinlock.h"
+#include "kernel/errno.h"
 
 #define INT_MASTER_CMD          (0x20)
 #define INT_MASTER_DATA         (0x21)
@@ -129,6 +130,18 @@ void arch_init_irq(void)
 int arch_syscall(u32 handle, void* data, size_t data_size)
 {
     int ret;
+
+    /*
+     * Reentrancy guard: issuing int $100 while already inside a syscall
+     * or an IRQ handler (irq_reenter_cnt == 0) hits arch_syscall_entry's
+     * reenter skip — it only dispatches when the count is 0 after the
+     * increment — and returns with EAX untouched, so the caller would
+     * silently get a stale garbage value.  Refuse loudly instead so the
+     * driver can retry after the outer syscall/ISR completes.
+     * (irq_reenter_cnt: -1 = idle, 0 = inside a handler.)
+     */
+    if (irq_reenter_cnt != -1)
+        return E_AGAIN;
 
     /*
      * Bind the arguments to the exact registers the gate expects
