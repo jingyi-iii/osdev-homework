@@ -13,6 +13,7 @@ int  wait_queue_init        (wait_queue *wq);
 void wait_queue_destroy     (wait_queue *wq);
 void wait_queue_sleep_locked(wait_queue *wq);
 void wait_queue_wake_one    (wait_queue *wq);
+void wait_queue_wake_by_tid (wait_queue *wq, u32 tid);
 void wait_queue_wake_all    (wait_queue *wq);
 
 #endif

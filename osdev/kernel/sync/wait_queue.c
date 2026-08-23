@@ -59,6 +59,31 @@ void wait_queue_wake_one(wait_queue *wq)
     spinlock_unlock(wq->sp_lock);
 }
 
+void wait_queue_wake_by_tid(wait_queue *wq, u32 tid)
+{
+    spinlock_lock(wq->sp_lock);
+    if (list_empty(&wq->waiters)) {
+        spinlock_unlock(wq->sp_lock);
+        return;
+    }
+
+    list_for_each_safe(pos, n, &wq->waiters) {
+        list_node* node = pos;
+        tcb* t = list_entry(node, tcb, wait_node);
+
+        if (t->waiting_on != wq || t->tid != tid) {
+            continue;
+        }
+
+        t->waiting_on = 0;
+        list_del(node);
+        spinlock_unlock(wq->sp_lock);
+        thread_unblock(t->tid);
+        return;
+    }
+    spinlock_unlock(wq->sp_lock);
+}
+
 void wait_queue_wake_all(wait_queue *wq)
 {
     spinlock_lock(wq->sp_lock);

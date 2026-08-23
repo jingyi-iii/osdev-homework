@@ -31,6 +31,22 @@ static tcb *thread_run = 0;
 spinlock* schedule_lock = 0;
 
 /*
+ * Whether a context-switching t_xxx/p_xxx call may execute directly.
+ * True only for ring-0 code already inside a syscall/IRQ gate
+ * (irq_reenter_cnt == 0): the gate entry saved the current thread's
+ * context and the gate exit performs the actual switch.  At CPL3 or in
+ * plain ring-0 context (irq_reenter_cnt == -1) the syscall gate must be
+ * used — arch_task_restore_context() only re-points curr_task_ctx, the
+ * switch completes on gate exit, and a direct call outside a gate would
+ * leave the current thread's context unsaved (and corrupt the target's
+ * saved frame on the next gate entry).
+ */
+static inline int may_run_direct(void)
+{
+    return !arch_running_ring3() && irq_reenter_cnt == 0;
+}
+
+/*
  * find_next_runnable - find the next runnable thread starting from @current.
  * Caller MUST hold schedule_lock.
  * Returns the next TS_READY thread, or NULL if none found.
@@ -705,42 +721,68 @@ static void proc_env_exit(void)
 #endif
 }
 
-/* Syscall Interfaces */
+/*
+ * Thread / process API.  The implementation is shared between user mode
+ * and the kernel: CPL3 callers always trap through the syscall gate;
+ * ring-0 callers run the t_xxx / p_xxx implementation directly only when
+ * already inside a gate (see may_run_direct()).  Outside a gate the gate
+ * must be used, because the actual context switch happens in the gate's
+ * save/restore machinery.
+ */
 void thread_yield(void)
 {
-    proc_thread_ctrl_config config = {0};
-    config.cmd = THREAD_CTRL_YIELD;
+    if (!may_run_direct()) {
+        proc_thread_ctrl_config config = {0};
+        config.cmd = THREAD_CTRL_YIELD;
 
-    arch_syscall(proc_scall_handle, &config, sizeof(config));
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
+        return;
+    }
+
+    /* Ring-0 inside a gate: yield directly; the gate exit performs the
+     * switch to the next thread. */
+    t_yield();
 }
 
 void thread_block(i32 tid)
 {
-    proc_thread_ctrl_config config = {0};
-    config.cmd = THREAD_CTRL_BLOCK;
-    config.tid = tid;
+    if (!may_run_direct()) {
+        proc_thread_ctrl_config config = {0};
+        config.cmd = THREAD_CTRL_BLOCK;
+        config.tid = tid;
 
-    arch_syscall(proc_scall_handle, &config, sizeof(config));
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
+        return;
+    }
+
+    /* Ring-0 inside a gate: block directly. */
+    t_block(tid);
 }
 
 void thread_unblock(i32 tid)
 {
-    proc_thread_ctrl_config config = {0};
-    config.cmd = THREAD_CTRL_UNBLOCK;
-    config.tid = tid;
+    if (!may_run_direct()) {
+        proc_thread_ctrl_config config = {0};
+        config.cmd = THREAD_CTRL_UNBLOCK;
+        config.tid = tid;
 
-    arch_syscall(proc_scall_handle, &config, sizeof(config));
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
+        return;
+    }
+
+    /* Ring-0 inside a gate: unblock directly. */
+    t_unblock(tid);
 }
 
 i32 thread_create(task_priv priv, task_entry_t entry, void* param)
 {
-    if (arch_running_ring3()) {
+    if (!may_run_direct()) {
         /*
          * A user (CPL3) process may only spawn kernel-privileged threads
          * if it has been granted the CAP_CREATE_KRNL_THREAD capability.
          * Creating plain user threads is always allowed.
          */
-        if (priv == TASK_PRIV_KERNEL) {
+        if (arch_running_ring3() && priv == TASK_PRIV_KERNEL) {
             pcb* proc = get_current_process();
             if (!proc || cap_check(proc, CAP_CREATE_KRNL_THREAD, &(int){1}) != 0) {
                 LOG("no create-kernel-thread capability for pid %d",
@@ -748,26 +790,36 @@ i32 thread_create(task_priv priv, task_entry_t entry, void* param)
                 return E_PERM;
             }
         }
+
+        proc_thread_ctrl_config config = {0};
+        config.cmd = THREAD_CTRL_CREATE;
+        config.priv = priv;
+        config.entry = entry;
+        config.param = param;
+
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
+
+        return config.tid;
     }
 
-    proc_thread_ctrl_config config = {0};
-    config.cmd = THREAD_CTRL_CREATE;
-    config.priv = priv;
-    config.entry = entry;
-    config.param = param;
-
-    arch_syscall(proc_scall_handle, &config, sizeof(config));
-
-    return config.tid;
+    /* Ring-0 inside a gate: create directly. */
+    tcb* cur = thread_run;
+    return cur ? t_create(cur->parent, priv, entry, param) : E_INVAL;
 }
 
 void thread_exit(i32 tid)
 {
-    proc_thread_ctrl_config config = {0};
-    config.cmd = THREAD_CTRL_DELETE;
-    config.tid = tid;
+    if (!may_run_direct()) {
+        proc_thread_ctrl_config config = {0};
+        config.cmd = THREAD_CTRL_DELETE;
+        config.tid = tid;
 
-    arch_syscall(proc_scall_handle, &config, sizeof(config));
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
+        return;
+    }
+
+    /* Ring-0 inside a gate: delete directly. */
+    t_delete(tid);
 }
 
 int thread_get_tid(void)
@@ -802,13 +854,13 @@ tcb* thread_get_by_tid(i32 tid)
 
 i32 proc_create(proc_priv priv, task_entry_t entry, void* param)
 {
-    if (arch_running_ring3()) {
+    if (!may_run_direct()) {
         /*
          * A user (CPL3) process may only spawn kernel-privileged processes
          * if it has been granted the CAP_CREATE_KRNL_PROC capability.
          * Creating plain user processes is always allowed.
          */
-        if (priv == PROC_PRIV_KERNEL) {
+        if (arch_running_ring3() && priv == PROC_PRIV_KERNEL) {
             pcb* proc = get_current_process();
             if (!proc || cap_check(proc, CAP_CREATE_KRNL_PROC, &(int){1}) != 0) {
                 LOG("no create-kernel-proc capability for pid %d",
@@ -816,47 +868,66 @@ i32 proc_create(proc_priv priv, task_entry_t entry, void* param)
                 return E_PERM;
             }
         }
+
+        proc_thread_ctrl_config config = {0};
+        config.cmd = PROC_CTRL_CREATE;
+        config.priv = priv;
+        config.entry = entry;
+        config.param = param;
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
+
+        return config.pid;
     }
 
-    proc_thread_ctrl_config config = {0};
-    config.cmd = PROC_CTRL_CREATE;
-    config.priv = priv;
-    config.entry = entry;
-    config.param = param;
-    arch_syscall(proc_scall_handle, &config, sizeof(config));
-
-    return config.pid;
+    /* Ring-0 inside a gate: create directly. */
+    return p_create(priv, entry, param);
 }
 
 void proc_exit(i32 pid)
 {
-    proc_thread_ctrl_config config = {0};
-    config.cmd = PROC_CTRL_EXIT;
-    config.pid = pid;
+    if (!may_run_direct()) {
+        proc_thread_ctrl_config config = {0};
+        config.cmd = PROC_CTRL_EXIT;
+        config.pid = pid;
 
-    arch_syscall(proc_scall_handle, &config, sizeof(config));
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
+        return;
+    }
+
+    /* Ring-0 inside a gate: exit directly. */
+    p_exit(pid);
 }
 
 int proc_block(i32 pid)
 {
-    proc_thread_ctrl_config config = {0};
-    config.cmd = PROC_CTRL_BLOCK;
-    config.pid = pid;
+    if (!may_run_direct()) {
+        proc_thread_ctrl_config config = {0};
+        config.cmd = PROC_CTRL_BLOCK;
+        config.pid = pid;
 
-    arch_syscall(proc_scall_handle, &config, sizeof(config));
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
 
-    return 0;
+        return 0;
+    }
+
+    /* Ring-0 inside a gate: block directly. */
+    return p_block(pid);
 }
 
 int proc_unblock(i32 pid)
 {
-    proc_thread_ctrl_config config = {0};
-    config.cmd = PROC_CTRL_UNBLOCK;
-    config.pid = pid;
+    if (!may_run_direct()) {
+        proc_thread_ctrl_config config = {0};
+        config.cmd = PROC_CTRL_UNBLOCK;
+        config.pid = pid;
 
-    arch_syscall(proc_scall_handle, &config, sizeof(config));
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
 
-    return 0;
+        return 0;
+    }
+
+    /* Ring-0 inside a gate: unblock directly. */
+    return p_unblock(pid);
 }
 
 int proc_get_pid(void)

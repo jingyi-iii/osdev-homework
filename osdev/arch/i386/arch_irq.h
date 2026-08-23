@@ -46,6 +46,13 @@ void arch_mask_irq(u16 irq_nr);
 int arch_syscall(u32 handle, void* data, size_t data_size);
 
 /*
+ * Gate reentrancy counter (arch/i386/irq.c): -1 = idle, 0 = inside a
+ * syscall/IRQ gate, >0 = nested.  Ring-0 code uses it to decide whether a
+ * context-switching call may run directly inside the current gate frame.
+ */
+extern i32 irq_reenter_cnt;
+
+/*
  * Return 1 if the caller is currently executing at CPL3 (user mode),
  * 0 otherwise.  Drivers use this to decide whether privileged I/O
  * must go through the syscall gate instead of being done directly.
