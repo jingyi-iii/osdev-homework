@@ -290,41 +290,24 @@ static u8 parse(u8 code)
  * scancode from port 0x60 via ioread8() (syscall gate at ring-3), parses
  * it and distributes one key to every registered listener.
  */
-static void kb_server_loop(void)
+static void kb_server_loop(void* context)
 {
-    tcb* me = thread_get_by_tid(thread_get_tid());
-    if (!me || !me->mailbox) {
-        LOG("kb_server: no mailbox for tid %d", thread_get_tid());
-        return;
-    }
+    u8 scancode = ioread8(0x60);
+    u8 key = parse(scancode);
+    if (key)
+        kbuf_add(&kb_device.buf, (char)key);
 
-    for (;;) {
-        mail* m = mailbox_listen(me->mailbox);
-        if (!m)
-            continue;
-        if (m->type != MAIL_TYPE_IRQ) {
-            mailbox_release_mail(m);
-            continue;
+    /* distribute one key from the buffer to all registered listeners */
+    char keybuf[2] = {0};
+    keybuf[0] = kbuf_pop(&kb_device.buf);
+    if (keybuf[0]) {
+        spinlock_lock(kb_device.lock);
+        list_for_each(pos, &kb_device.listener_list) {
+            struct kb_listener* lsn = list_entry(pos, struct kb_listener, node);
+            if (lsn->cb)
+                lsn->cb(keybuf, 1);
         }
-        mailbox_release_mail(m);
-
-        u8 scancode = ioread8(0x60);
-        u8 key = parse(scancode);
-        if (key)
-            kbuf_add(&kb_device.buf, (char)key);
-
-        /* distribute one key from the buffer to all registered listeners */
-        char keybuf[2] = {0};
-        keybuf[0] = kbuf_pop(&kb_device.buf);
-        if (keybuf[0]) {
-            spinlock_lock(kb_device.lock);
-            list_for_each(pos, &kb_device.listener_list) {
-                struct kb_listener* lsn = list_entry(pos, struct kb_listener, node);
-                if (lsn->cb)
-                    lsn->cb(keybuf, 1);
-            }
-            spinlock_unlock(kb_device.lock);
-        }
+        spinlock_unlock(kb_device.lock);
     }
 }
 
@@ -343,8 +326,8 @@ int kb_start(struct device* dev)
     }
 
     /* user IRQ (handler == 0): delivered to this thread's mailbox */
-    int ret = irq_request(&kb_device.irq, "kbd", KEYBOARD_IRQ_NO,
-                          IRQ_ANY_MINOR, 0, 0);
+    int ret = irq_request_threaded(&kb_device.irq, "kbd", KEYBOARD_IRQ_NO,
+                          IRQ_ANY_MINOR, kb_server_loop, 0);
     if (ret) {
         LOG("kb_server: irq_request failed %d", ret);
         return ret;
@@ -353,7 +336,7 @@ int kb_start(struct device* dev)
 
     LOG("kb_server started");
 
-    kb_server_loop();   /* never returns */
+    while (1);
     return 0;
 }
 

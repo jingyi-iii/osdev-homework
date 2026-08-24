@@ -198,9 +198,7 @@ static void irq_handle_thread(void)
         return;
 
     for ( ;; ) {
-        spinlock_lock(this->kernel_irq_wq.sp_lock);
-        wait_queue_sleep_locked(&this->kernel_irq_wq);
-        spinlock_unlock(this->kernel_irq_wq.sp_lock);
+        semaphore_wait(this->sem->id);
 
         /* Consume the pending flag before running the handler.  If a new
          * interrupt arrives while the handler is running, the ISR will set
@@ -240,7 +238,7 @@ void irqline_handler(u32 major, u32 minor, void* context)
             p->context = context;
             p->pending = 1;
             irq_defer_unmask = 1;
-            wait_queue_wake_all(&p->kernel_irq_wq);
+            semaphore_signal(p->sem->id);
         } else {
             p->handler(p->context);
         }
@@ -415,8 +413,21 @@ int irq_request_threaded(irq **out, const char* name, u32 major, u32 minor,
                     irq_handler_fn cb, void* cb_param)
 {
     /* User mode (CPL3): not supported yet. */
-    if (arch_running_ring3())
-        return E_PERM;
+    if (arch_running_ring3()) {
+        irq_syscall_data data = {0};
+        data.cmd         = IRQ_SYSCALL_REQUEST_THREADED;
+        data.name        = name;
+        data.major       = major;
+        data.minor       = minor;
+        data.handler     = cb;
+        data.param       = cb_param;
+        data.is_user_irq = 1;
+        data.tid         = thread_get_tid();
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
+        if (out)
+            *out = data.handle;
+        return data.ret;
+    }
 
     int ret = irq_request_internal(out, name, major, minor, cb, cb_param, 0, 0);
     if (ret || !out || !*out)
@@ -425,10 +436,13 @@ int irq_request_threaded(irq **out, const char* name, u32 major, u32 minor,
     (*out)->is_threaded = 1;
     (*out)->kernel_irq_tid = thread_create(TASK_PRIV_KERNEL,
                                            irq_handle_thread, *out);
-    if ((*out)->kernel_irq_tid > 0)
-        ret = wait_queue_init(&(*out)->kernel_irq_wq);
-    else
+    if ((*out)->kernel_irq_tid > 0) {
+        (*out)->sem = semaphore_create(1);
+        if (!(*out)->sem)
+            ret = E_FAULT;
+    } else {
         ret = (*out)->kernel_irq_tid;
+    }
 
     return ret;
 }
@@ -544,6 +558,10 @@ static int irq_syscall_handler(void* context)
         data->ret = irq_request_internal(&data->handle, data->name, data->major,
                                          data->minor, data->handler, data->param,
                                          data->is_user_irq, data->tid);
+        break;
+    case IRQ_SYSCALL_REQUEST_THREADED:
+        data->ret = irq_request_threaded(&data->handle, data->name, data->major,
+                                         data->minor, data->handler, data->param);
         break;
     case IRQ_SYSCALL_RELEASE:
         irq_release(data->handle);

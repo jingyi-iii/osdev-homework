@@ -6,7 +6,7 @@
 #include "lib/list.h"
 #include "sync/spinlock.h"
 #include "kernel/errno.h"
-#include "sync/wait_queue.h"
+#include "sync/semaphore.h"
 
 #define IRQ_ANY_MINOR  0xFFFFFFFFu
 
@@ -29,7 +29,7 @@ typedef struct irq {
     irq_handler_fn handler;
 
     int kernel_irq_tid;
-    wait_queue kernel_irq_wq;
+    semaphore* sem;
 } irq;
 
 typedef struct irqline {
@@ -60,6 +60,7 @@ typedef enum {
     IRQ_SYSCALL_RELEASE = 1,
     IRQ_SYSCALL_MASK    = 2,
     IRQ_SYSCALL_UNMASK  = 3,
+    IRQ_SYSCALL_REQUEST_THREADED,
 } irq_syscall_cmd;
 
 /* Data structure carried through the IRQ syscall gate */
