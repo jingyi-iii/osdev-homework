@@ -149,13 +149,30 @@ irq_stack_top:
         movb    $0x20,          %al
         outb    %al,            $0x20
 
-1:
         decl    irq_reenter_cnt
+
+        /*
+         * Threaded irq (irqline_handler set irq_defer_unmask): keep the
+         * PIC line masked — the handler thread unmask it after it runs —
+         * and kick the scheduler so the woken thread runs promptly.
+         * Synchronous irq: unmask here, as before.
+         */
+        movl    irq_defer_unmask, %eax
+        testl   %eax, %eax
+        jnz     3f
 
         pushl   \irq_no
         call    arch_unmask_irq
         addl    $4,             %esp
+        jmp     4f
+3:
+        call    schedule_from_isr
+        jmp     4f
 
+1:
+        decl    irq_reenter_cnt
+
+4:
         RESTORE_REGS_AND_SWITCH_USER_STACK
         iret
 .endm

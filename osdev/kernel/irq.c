@@ -15,6 +15,15 @@ static i32 irq_scall_handle = -1;
 
 static irqline* irqlines[IDT_ENTRIES] = {0};
 
+/*
+ * Set by irqline_handler() when a threaded irq was woken in this ISR.
+ * arch/i386/irq.S checks it on gate exit:
+ *   - 1: defer PIC unmask to the handler thread (irq_handle_thread calls
+ *        irq_unmask after the handler) and kick the scheduler.
+ *   - 0: normal synchronous irq — unmask here as before.
+ */
+volatile int irq_defer_unmask = 0;
+
 static int irqline_alloc(u32 major, irqline **out)
 {
     if (!out)
@@ -182,13 +191,40 @@ static void dispatch_user_mode_irq(irq* p)
     send_mail(t->mailbox, m);
 }
 
+static void irq_handle_thread(void)
+{
+    irq* this = thread_get_param();
+    if (!this)
+        return;
+
+    for ( ;; ) {
+        spinlock_lock(this->kernel_irq_wq.sp_lock);
+        wait_queue_sleep_locked(&this->kernel_irq_wq);
+        spinlock_unlock(this->kernel_irq_wq.sp_lock);
+
+        /* Consume the pending flag before running the handler.  If a new
+         * interrupt arrives while the handler is running, the ISR will set
+         * pending again and the next wait_queue_wake_all() will immediately
+         * re-wake us after we go back to sleep. */
+        int was_pending = __sync_lock_test_and_set(&this->pending, 0);
+        if (!was_pending)
+            continue;
+
+        if (this->handler)
+            this->handler(this->context);
+
+        irq_unmask(this);
+    }
+}
+
 void irqline_handler(u32 major, u32 minor, void* context)
 {
     /* Syscalls no longer flow through this path: int $100 goes straight to
      * syscall_dispatch() (see irq.S / kernel/syscall.c).  This handler now
      * only serves real hardware IRQ lines. */
     (void)minor;
-    (void)context;
+
+    irq_defer_unmask = 0;
 
     if (!irqlines[major])
         return;
@@ -198,10 +234,16 @@ void irqline_handler(u32 major, u32 minor, void* context)
         if (!p->enabled)
             continue;
 
-        if (p->is_user_irq)
+        if (p->is_user_irq) {
             dispatch_user_mode_irq(p);
-        else
+        } else if (p->is_threaded) {
+            p->context = context;
+            p->pending = 1;
+            irq_defer_unmask = 1;
+            wait_queue_wake_all(&p->kernel_irq_wq);
+        } else {
             p->handler(p->context);
+        }
     }
 }
 
@@ -222,6 +264,8 @@ static int irq_alloc(u32 major, u32 minor, int is_user_irq, int tid, const char 
     p->handler = handler;
     p->enabled = 0;
     p->is_user_irq = is_user_irq;
+    p->is_threaded = 0;
+    p->pending = 0;
     p->tid = tid;
     p->owner = 0;
     p->sp_lock = spinlock_alloc();
@@ -342,6 +386,7 @@ static int irq_request_internal(irq **out, const char* name, u32 major,
     return 0;
 }
 
+
 int irq_request(irq **out, const char* name, u32 major, u32 minor,
                     irq_handler_fn cb, void* cb_param)
 {
@@ -362,8 +407,30 @@ int irq_request(irq **out, const char* name, u32 major, u32 minor,
         return data.ret;
     }
 
-    /* Kernel mode (CPL0): kernel irq, no syscall round-trip. */
+    /* Kernel mode (CPL0): synchronous kernel irq (legacy). */
     return irq_request_internal(out, name, major, minor, cb, cb_param, 0, 0);
+}
+
+int irq_request_threaded(irq **out, const char* name, u32 major, u32 minor,
+                    irq_handler_fn cb, void* cb_param)
+{
+    /* User mode (CPL3): not supported yet. */
+    if (arch_running_ring3())
+        return E_PERM;
+
+    int ret = irq_request_internal(out, name, major, minor, cb, cb_param, 0, 0);
+    if (ret || !out || !*out)
+        return ret;
+
+    (*out)->is_threaded = 1;
+    (*out)->kernel_irq_tid = thread_create(TASK_PRIV_KERNEL,
+                                           irq_handle_thread, *out);
+    if ((*out)->kernel_irq_tid > 0)
+        ret = wait_queue_init(&(*out)->kernel_irq_wq);
+    else
+        ret = (*out)->kernel_irq_tid;
+
+    return ret;
 }
 
 void irq_release(irq *p)

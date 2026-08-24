@@ -589,6 +589,41 @@ static int p_unblock(i32 pid)
     return 0;
 }
 
+int schedule_if_needed(void)
+{
+    tcb* next = find_next_runnable(thread_run);
+    if (!next || next == thread_run)
+        return E_NODEV;
+
+    tcb* old = thread_run;
+    thread_run = next;
+    switch_address_space(old, next);
+    arch_task_restore_context(&next->context);
+    return 0;
+}
+
+/*
+ * schedule_from_isr - scheduler kick for the threaded-irq gate exit.
+ * Called from arch/i386/irq.S only when irq_defer_unmask is set (a
+ * threaded irq was woken).  trylock: a ring-3 thread may hold
+ * schedule_lock with interrupts unmasked (IOPL=0), and blocking here
+ * would deadlock against the thread this ISR just preempted.
+ * arch_task_restore_context() only re-points curr_task_ctx — the actual
+ * switch happens at iret in irq.S — so this function always returns and
+ * the lock is released normally.
+ */
+void schedule_from_isr(void)
+{
+    if (!thread_run)
+        return;
+
+    if (spinlock_trylock(schedule_lock) != 0)
+        return;
+
+    schedule_if_needed();
+    spinlock_unlock(schedule_lock);
+}
+
 static void schedule_isr(void* p)
 {
     (void)p;
@@ -618,17 +653,7 @@ static void schedule_isr(void* p)
         return;
     }
 
-    tcb* next = find_next_runnable(thread_run);
-    if (next) {
-        tcb* old = thread_run;
-        thread_run = next;
-
-        /* Switch address space if we're moving to a different process */
-        switch_address_space(old, next);
-
-        arch_task_restore_context(&next->context);
-    }
-
+    schedule_if_needed();
     spinlock_unlock(schedule_lock);
 }
 

@@ -92,6 +92,10 @@ int     proc_get_pid        (void);
 pcb*    get_current_process (void);
 pcb*    get_process_by_pid  (i32 pid);
 
+/* Scheduler entry for ISR gate exit (arch/i386/irq.S) */
+int     schedule_if_needed  (void);
+void    schedule_from_isr   (void);
+
 /* Exported for mailbox broadcast — must be held when iterating thread_head */
 extern list_node thread_head;
 extern spinlock* schedule_lock;
