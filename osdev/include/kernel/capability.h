@@ -19,7 +19,7 @@ typedef struct cap_mem {
     u32 flags;
 } cap_mem;
 
-typedef struct cam_io_port {
+typedef struct cap_io_port {
     u32 base;
     u32 count;
 } cap_io_port;

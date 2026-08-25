@@ -328,6 +328,7 @@ static void spawn_particles(int x, int y, u8 color)
             particles[i].y = y;
             particle_timers[i] = 6 + (int)(my_rand() % 4);
             particle_colors[i] = color;
+            break;  /* one particle per collision — don't fill every slot */
         }
     }
 }

@@ -37,22 +37,24 @@ static const struct platform_device_desc device_table[] = {
     {
         .name = "keyboard",
         .type = "keyboard",
-        .num_res = 4,
+        .num_res = 5,
         .resources = {
             { .type = PLAT_RES_IRQ, .irq = { .major = 0x21, .minor = 0 } },
             { .type = PLAT_RES_IO,  .io  = { .base = 0x60, .size = 5 } },  /* PS/2 data + status/command 0x60-0x64 */
             { .type = PLAT_RES_IO,  .io  = { .base = 0x3F8, .size = 8 } },  /* COM1: ring-3 LOG() output */
+            { .type = PLAT_RES_IO,  .io  = { .base = 0x70, .size = 2 } },  /* CMOS 0x70-0x71: LOG() timestamps */
             { .type = PLAT_RES_IPC, .ipc = { .grant = 1 } },               /* CAP_IPC: IRQ->mailbox delivery (mailbox_listen) */
         },
     },
     {
         .name = "keyboard2",
         .type = "keyboard2",
-        .num_res = 4,
+        .num_res = 5,
         .resources = {
             { .type = PLAT_RES_IRQ, .irq = { .major = 0x21, .minor = 0 } },
             { .type = PLAT_RES_IO,  .io  = { .base = 0x60, .size = 5 } },
             { .type = PLAT_RES_IO,  .io  = { .base = 0x3F8, .size = 8 } },
+            { .type = PLAT_RES_IO,  .io  = { .base = 0x70, .size = 2 } },
             { .type = PLAT_RES_IPC, .ipc = { .grant = 1 } },
         },
     },
@@ -70,9 +72,10 @@ static const struct platform_device_desc device_table[] = {
     {
         .name = "log",
         .type = "log",
-        .num_res = 1,
+        .num_res = 2,
         .resources = {
             { .type = PLAT_RES_IO,  .io  = { .base = 0x3F8, .size = 8 } },  /* COM1 0x3F8-0x3FF */
+            { .type = PLAT_RES_IO,  .io  = { .base = 0x70, .size = 2 } },  /* CMOS 0x70-0x71: LOG() timestamps */
         },
     },
     {
@@ -87,11 +90,12 @@ static const struct platform_device_desc device_table[] = {
     {
         .name = "graphics",
         .type = "graphics",
-        .num_res = 3,
+        .num_res = 4,
         .resources = {
             { .type = PLAT_RES_MEM, .mem = { .addr = 0xA0000, .size = 320 * 200 } },
             { .type = PLAT_RES_IO,  .io  = { .base = 0x3C0, .size = 32 } },  /* VGA 0x3C0-0x3DF */
             { .type = PLAT_RES_IO,  .io  = { .base = 0x3F8, .size = 8 } },  /* COM1: ring-3 LOG() output */
+            { .type = PLAT_RES_IO,  .io  = { .base = 0x70, .size = 2 } },  /* CMOS 0x70-0x71: LOG() timestamps */
         },
     },
 };

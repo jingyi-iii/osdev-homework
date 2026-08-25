@@ -514,9 +514,12 @@ int vsnprintf(char *str, size_t size, const char *format, va_list ap) {
             }
             format++;
         } else {
-            *current++ = *format++;
-            written++;
-            remaining--;
+            if (remaining > 0) {
+                *current++ = *format;
+                written++;
+                remaining--;
+            }
+            format++;
         }
     }
 

@@ -434,17 +434,28 @@ int irq_request_threaded(irq **out, const char* name, u32 major, u32 minor,
         return ret;
 
     (*out)->is_threaded = 1;
-    (*out)->kernel_irq_tid = thread_create(TASK_PRIV_KERNEL,
-                                           irq_handle_thread, *out);
-    if ((*out)->kernel_irq_tid > 0) {
-        (*out)->sem = semaphore_create(1);
-        if (!(*out)->sem)
-            ret = E_FAULT;
-    } else {
-        ret = (*out)->kernel_irq_tid;
+
+    /* Allocate the semaphore BEFORE spawning the handler thread: the
+     * thread immediately blocks on this->sem->id, so a NULL sem here
+     * would crash it.  The irq is still disabled at this point, so no
+     * ISR can deliver a signal to it until irq_unmask(). */
+    (*out)->sem = semaphore_create(0);
+    if (!(*out)->sem) {
+        irq_release(*out);
+        *out = 0;
+        return E_NOMEM;
     }
 
-    return ret;
+    (*out)->kernel_irq_tid = thread_create(TASK_PRIV_KERNEL,
+                                           irq_handle_thread, *out);
+    if ((*out)->kernel_irq_tid < 0) {
+        int err = (*out)->kernel_irq_tid;
+        irq_release(*out);
+        *out = 0;
+        return err;
+    }
+
+    return 0;
 }
 
 void irq_release(irq *p)
@@ -464,6 +475,15 @@ void irq_release(irq *p)
     if (p->major >= IDT_ENTRIES)
         return;
 
+    /* A threaded irq owns a kernel handler thread that loops forever on
+     * p->sem and p->handler.  Delete that thread first so it can never
+     * touch the irq struct after we free it. */
+    if (p->is_threaded && p->kernel_irq_tid >= 0) {
+        int tid = p->kernel_irq_tid;
+        p->kernel_irq_tid = -1;
+        thread_exit(tid);
+    }
+
     if (irqlines[p->major]) {
         irqline_remove_irq(irqlines[p->major], p);
         irqline_mask(irqlines[p->major]);
@@ -474,6 +494,11 @@ void irq_release(irq *p)
         spinlock_lock(t->sp_lock);
         list_del(&p->thread_node);
         spinlock_unlock(t->sp_lock);
+    }
+
+    if (p->sem) {
+        semaphore_destroy(p->sem);
+        p->sem = 0;
     }
 
     /* irq_free() releases the spinlock and kfrees the struct */

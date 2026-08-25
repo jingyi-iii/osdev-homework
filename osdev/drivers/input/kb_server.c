@@ -251,9 +251,14 @@ static u8 parse(u8 code)
         col = 1;                /* shifted column */
     }
 
-    /* Caps Lock inverts the shift state for letter keys */
-    if (isCapsLocked)
-        col = (col == 0) ? 1 : 0;
+    /* Caps Lock inverts the shift state for letter keys only.  E0
+     * extended keys (col == 2: arrows, Home/End ...) and non-letter
+     * keys are unaffected. */
+    if (isCapsLocked && col != 2) {
+        u8 base = keymap[(code & 0x7f) * MAP_COLS + 0];
+        if (base >= 'a' && base <= 'z')
+            col = (col == 0) ? 1 : 0;
+    }
 
     key = keymap[(code & 0x7f) * MAP_COLS + col];
 
@@ -292,10 +297,20 @@ static u8 parse(u8 code)
  */
 static void kb_server_loop(void* context)
 {
-    u8 scancode = ioread8(0x60);
-    u8 key = parse(scancode);
-    if (key)
-        kbuf_add(&kb_device.buf, (char)key);
+    int drained = 0;
+
+    /* Drain the 8042 output buffer (bounded) so a burst of scancodes
+     * arriving under one IRQ cannot desynchronize the parser. */
+    while (drained < 8) {
+        u8 status = ioread8(0x64);
+        if (!(status & 0x01))
+            break;
+        u8 scancode = ioread8(0x60);
+        u8 key = parse(scancode);
+        if (key)
+            kbuf_add(&kb_device.buf, (char)key);
+        drained++;
+    }
 
     /* distribute one key from the buffer to all registered listeners */
     char keybuf[2] = {0};
@@ -336,7 +351,6 @@ int kb_start(struct device* dev)
 
     LOG("kb_server started");
 
-    while (1);
     return 0;
 }
 
@@ -390,6 +404,11 @@ int kb_register_callback(kb_callback_fn cb)
 void kb_unregister_callback(kb_callback_fn cb)
 {
     if (!cb)
+        return;
+
+    /* Listener list may never have been initialized (lock alloc
+     * failed); nothing registered, nothing to remove. */
+    if (!kb_device.lock)
         return;
 
     spinlock_lock(kb_device.lock);

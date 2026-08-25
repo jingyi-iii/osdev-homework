@@ -8,11 +8,14 @@ int rbtree_ut(void);
 
 int main(void)
 {
-    lock_ut();
-    list_ut();
-    heap_ut();
-    cxa_guard_ut();
-    rbtree_ut();
+    int ret = 0;
 
-    return 0;
+    ret |= lock_ut();
+    ret |= list_ut();
+    ret |= heap_ut();
+    ret |= cxa_guard_ut();
+    ret |= rbtree_ut();
+
+    /* A failing suite must fail the process, not be silently swallowed. */
+    return ret != 0;
 }

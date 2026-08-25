@@ -42,8 +42,16 @@ static void log_write_direct(const char* buf, size_t size)
 {
     spinlock_lock(log_device.lock);
     for (size_t i = 0; i < size; i++) {
-        while ((ioread8(log_device.io_port + SERIAL_LSR_OFF) & LSR_THR_EMPTY) == 0)
-            ;
+        int timeout = 0;
+        while ((ioread8(log_device.io_port + SERIAL_LSR_OFF) & LSR_THR_EMPTY) == 0) {
+            /* If the transmitter never becomes ready (no UART / broken
+             * status line), drop the rest instead of hanging forever. */
+            if (++timeout > 1000000) {
+                spinlock_unlock(log_device.lock);
+                return;
+            }
+            __asm__ __volatile__("pause" ::: "memory");
+        }
         iowrite8(log_device.io_port, (u8)buf[i]);
     }
     spinlock_unlock(log_device.lock);

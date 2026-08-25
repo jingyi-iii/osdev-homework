@@ -38,24 +38,24 @@ static void draw_menu(void)
     gfx_write("===  GAME  MENU  ===", 9, 0, GFX_YELLOW, GFX_DARK_GREY);
 
     /* Option 1 — Snake */
-    gfx_write("[1]  SNAKE GAME", 4, 3, GFX_LIGHT_GREEN, GFX_BLACK);
-    gfx_write("     Eat, grow, avoid walls!", 4, 4,
+    gfx_write("[1]  SNAKE GAME", 4, 2, GFX_LIGHT_GREEN, GFX_BLACK);
+    gfx_write("     Eat, grow, avoid walls!", 4, 3,
               GFX_DARK_GREY, GFX_BLACK);
 
     /* Option 2 — Airplane */
-    gfx_write("[2]  AIRPLANE BATTLE", 4, 6, GFX_LIGHT_CYAN, GFX_BLACK);
-    gfx_write("     Shoot, dodge, survive!", 4, 7,
+    gfx_write("[2]  AIRPLANE BATTLE", 4, 5, GFX_LIGHT_CYAN, GFX_BLACK);
+    gfx_write("     Shoot, dodge, survive!", 4, 6,
               GFX_DARK_GREY, GFX_BLACK);
 
     /* Option 3 — Breakout */
-    gfx_write("[3]  BREAKOUT", 4, 9, GFX_LIGHT_MAGENTA, GFX_BLACK);
-    gfx_write("     Break all the bricks!", 4, 10,
+    gfx_write("[3]  BREAKOUT", 4, 8, GFX_LIGHT_MAGENTA, GFX_BLACK);
+    gfx_write("     Break all the bricks!", 4, 9,
               GFX_DARK_GREY, GFX_BLACK);
 
-    /* Separator + prompt */
-    gfx_write("----------------------------------------", 0, 12,
+    /* Separator + prompt (rows 0..GFX_ROWS-1 = 0..11) */
+    gfx_write("----------------------------------------", 0, 10,
               GFX_DARK_GREY, GFX_BLACK);
-    gfx_write("   Press 1, 2 or 3 to select a game", 3, 13,
+    gfx_write("   Press 1, 2 or 3 to select a game", 3, 11,
               GFX_WHITE, GFX_BLACK);
 }
 

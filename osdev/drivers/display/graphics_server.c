@@ -553,7 +553,8 @@ void gfx_fill_rect(size_t x, size_t y, size_t w, size_t h, u8 color)
     spinlock_unlock(dev->lock);
 }
 
-void gfx_put_char(char c, size_t col, size_t row, u8 fg, u8 bg)
+/* Internal renderer — the caller must hold dev->lock. */
+static void gfx_put_char_locked(char c, size_t col, size_t row, u8 fg, u8 bg)
 {
     if (col >= GFX_COLS || row >= GFX_ROWS)
         return;
@@ -563,8 +564,6 @@ void gfx_put_char(char c, size_t col, size_t row, u8 fg, u8 bg)
         c = ' ';
 
     struct graphics_device* dev = &gfx_dev;
-
-    spinlock_lock(dev->lock);
 
     const u8* glyph = font_8x16[c - 32];
     u8* fb = dev->fb;
@@ -578,7 +577,14 @@ void gfx_put_char(char c, size_t col, size_t row, u8 fg, u8 bg)
             fb[offset + fx] = (row_bits & (0x80 >> fx)) ? fg : bg;
         }
     }
+}
 
+void gfx_put_char(char c, size_t col, size_t row, u8 fg, u8 bg)
+{
+    struct graphics_device* dev = &gfx_dev;
+
+    spinlock_lock(dev->lock);
+    gfx_put_char_locked(c, col, row, fg, bg);
     spinlock_unlock(dev->lock);
 }
 
@@ -604,11 +610,10 @@ void gfx_write(const char* str, size_t col, size_t row, u8 fg, u8 bg)
     }
 }
 
-void gfx_scroll(u8 bg)
+/* Internal scroller — the caller must hold dev->lock. */
+static void gfx_scroll_locked(u8 bg)
 {
     struct graphics_device* dev = &gfx_dev;
-
-    spinlock_lock(dev->lock);
 
     u8* fb = dev->fb;
     size_t row_bytes = GFX_WIDTH * FONT_HEIGHT;
@@ -625,7 +630,14 @@ void gfx_scroll(u8 bg)
     size_t last_start = (GFX_ROWS - 1) * FONT_HEIGHT * GFX_WIDTH;
     for (size_t i = 0; i < row_bytes; i++)
         fb[last_start + i] = bg;
+}
 
+void gfx_scroll(u8 bg)
+{
+    struct graphics_device* dev = &gfx_dev;
+
+    spinlock_lock(dev->lock);
+    gfx_scroll_locked(bg);
     spinlock_unlock(dev->lock);
 }
 
@@ -646,11 +658,11 @@ void gfx_putchar(char c)
             dev->curr_col = GFX_COLS - 1;
         }
         /* Erase the character cell */
-        gfx_put_char(' ', dev->curr_col, dev->curr_row,
-                     dev->curr_fg, dev->curr_bg);
+        gfx_put_char_locked(' ', dev->curr_col, dev->curr_row,
+                            dev->curr_fg, dev->curr_bg);
     } else if (c >= ' ') {
-        gfx_put_char(c, dev->curr_col, dev->curr_row,
-                     dev->curr_fg, dev->curr_bg);
+        gfx_put_char_locked(c, dev->curr_col, dev->curr_row,
+                            dev->curr_fg, dev->curr_bg);
         dev->curr_col++;
         if (dev->curr_col >= GFX_COLS) {
             dev->curr_col = 0;
@@ -660,9 +672,7 @@ void gfx_putchar(char c)
 
     if (dev->curr_row >= GFX_ROWS) {
         dev->curr_row = GFX_ROWS - 1;
-        spinlock_unlock(dev->lock);
-        gfx_scroll(dev->curr_bg);
-        spinlock_lock(dev->lock);
+        gfx_scroll_locked(dev->curr_bg);
     }
 
     spinlock_unlock(dev->lock);

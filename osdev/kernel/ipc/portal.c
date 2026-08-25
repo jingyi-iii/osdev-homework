@@ -16,7 +16,7 @@ static portal* portal_get_by_tid(u32 tid)
     spinlock_lock(&portal_lock);
     list_for_each(node, &portal_header) {
         portal* p = list_entry(node, portal, this_node);
-        if (p->tid == tid) {
+        if ((u32)p->tid == tid) {
             spinlock_unlock(&portal_lock);
             return p;
         }
@@ -104,7 +104,10 @@ void portal_destroy(portal* p)
 
     wait_queue_destroy(&p->client_wq);
     wait_queue_destroy(&p->server_wq);
+
+    spinlock_lock(&portal_lock);
     list_del(&p->this_node);
+    spinlock_unlock(&portal_lock);
 }
 
 
@@ -152,13 +155,16 @@ int portal_call(u32 portal_id, void* va, size_t size)
     list_add(&req->this_node, &ptl->reqs);
     spinlock_unlock(&portal_lock);
 
-    spinlock_lock(ptl->client_wq.sp_lock);
+    u32 eflags = spinlock_lock_irqsave(ptl->client_wq.sp_lock);
     wait_queue_sleep_locked(&ptl->client_wq);
-    spinlock_unlock(ptl->client_wq.sp_lock);
+    spinlock_unlock_irqrestore(ptl->client_wq.sp_lock, eflags);
 
     /* RESP here */
     ret = req->resp.ret;
+    spinlock_lock(&portal_lock);
     list_del(&req->this_node);
+    spinlock_unlock(&portal_lock);
+    kfree(req);
     shm_unshare(ptl->pid, target_va);
 
     return ret;

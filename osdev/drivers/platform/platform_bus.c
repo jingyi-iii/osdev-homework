@@ -81,8 +81,7 @@ static void user_drv_probe(void)
 
     kfree(param);
 
-    for ( ;; )
-        thread_yield();
+    thread_block(thread_get_tid());
 }
 
 static int platform_probe(struct driver *drv, struct device *dev)
@@ -118,9 +117,11 @@ static int platform_probe(struct driver *drv, struct device *dev)
          * yet and the pid would be stale/zero).  servers_lock is allocated
          * in platform_bus_init() (CPL0, single-threaded).  Lock order here:
          * bus->splock (held by the caller) -> servers_lock. */
-        spinlock_lock(servers_lock);
-        list_add(&get_platform_device(dev)->this_node, &servers);
-        spinlock_unlock(servers_lock);
+        if (servers_lock) {
+            spinlock_lock(servers_lock);
+            list_add(&get_platform_device(dev)->this_node, &servers);
+            spinlock_unlock(servers_lock);
+        }
 
         platform_device_grant_capabilities(get_platform_device(dev));
     } else {
@@ -172,7 +173,6 @@ void platform_bus_init(void)
 
 int platform_driver_register(struct driver* drv)
 {
-    int ret = 0;
     if (!drv)
         return E_INVAL;
 
@@ -181,7 +181,6 @@ int platform_driver_register(struct driver* drv)
 
 int platform_device_register(struct device* dev)
 {
-    int ret = 0;
     if (!dev)
         return E_INVAL;
 

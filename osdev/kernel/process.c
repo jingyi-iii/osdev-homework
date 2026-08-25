@@ -84,6 +84,29 @@ static tcb* find_next_runnable(tcb* current)
 }
 
 /*
+ * tcb_detach_wait - remove @t from the wait queue it is sleeping on.
+ * Must be called before a tcb is freed, otherwise a later
+ * wait_queue_wake_* would dereference a freed node.  Callers hold
+ * schedule_lock with interrupts disabled, so taking wq->sp_lock here
+ * can never deadlock against a concurrent waker (single CPU, IF=0).
+ */
+static void tcb_detach_wait(tcb* t)
+{
+    wait_queue* wq;
+
+    if (!t || !t->waiting_on)
+        return;
+
+    wq = t->waiting_on;
+    spinlock_lock(wq->sp_lock);
+    if (t->waiting_on == wq) {
+        list_del(&t->wait_node);
+        t->waiting_on = 0;
+    }
+    spinlock_unlock(wq->sp_lock);
+}
+
+/*
  * switch_address_space - Load the page directory of @next if it differs
  * from the currently active one.  Must be called with schedule_lock held.
  */
@@ -202,6 +225,10 @@ static void t_delete(i32 tid)
         arch_task_context_release(&target->parent->vcb, &target->context);
         spinlock_unlock(target->sp_lock);
 
+        /* A blocked thread may still sit on a wait queue; detach it
+         * before freeing so no waker can reach freed memory. */
+        tcb_detach_wait(target);
+
         list_del(&target->this_node);
 
         /*
@@ -254,6 +281,7 @@ static void t_delete(i32 tid)
 
         /* Now safe to release the old thread's resources */
         arch_task_context_release(&old->parent->vcb, &old->context);
+        tcb_detach_wait(old);
         list_del(&old->this_node);
         list_del(&old->proc_node);
 
@@ -479,6 +507,7 @@ static void p_exit(i32 pid)
                 arch_task_restore_context(&next->context);
 
                 arch_task_context_release(&old->parent->vcb, &old->context);
+                tcb_detach_wait(old);
                 list_del(&old->this_node);
                 list_del(&old->proc_node);
                 spinlock_release(old->sp_lock);
@@ -488,6 +517,7 @@ static void p_exit(i32 pid)
                 arch_task_context_release(&thread->parent->vcb, &thread->context);
                 spinlock_unlock(thread->sp_lock);
 
+                tcb_detach_wait(thread);
                 list_del(&thread->this_node);
                 list_del(&thread->proc_node);
 
@@ -896,7 +926,7 @@ i32 proc_create(proc_priv priv, task_entry_t entry, void* param)
 
         proc_thread_ctrl_config config = {0};
         config.cmd = PROC_CTRL_CREATE;
-        config.priv = priv;
+        config.priv = (task_priv)priv;
         config.entry = entry;
         config.param = param;
         arch_syscall(proc_scall_handle, &config, sizeof(config));

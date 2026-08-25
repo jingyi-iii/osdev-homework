@@ -24,13 +24,11 @@ static u8 timer_read_reg(struct timer_device* dev, u8 reg)
 {
     u8 value = 0;
 
-    /* Port I/O goes through the io layer (kernel/io.c): direct at CPL0,
-     * capability-checked syscall at CPL3.  spinlock_lock(NULL) is a safe
-     * no-op before the lock is allocated. */
-    spinlock_lock(dev->lock);
+    /* Locking is done by the callers (timer_get_time / timer_read_time_str
+     * hold dev->lock across the whole cached_time update) so the register
+     * reads are consistent and the cached copy cannot tear. */
     iowrite8(dev->cmos_addr, reg & 0x7F);  /* NMI bit cleared */
     value = ioread8(dev->cmos_data);
-    spinlock_unlock(dev->lock);
 
     return value;
 }
@@ -103,12 +101,32 @@ static void timer_update_rtc_time(struct timer_device* dev)
         }
     }
 
-    /* Beijing time: +8 hours (UTC+8), wrapping past midnight.
-     * Note: month/year rollover is not handled here. */
+    /* Beijing time: +8 hours (UTC+8), wrapping past midnight with
+     * full day/month/year rollover. */
     dev->cached_time.hour += 8;
     if (dev->cached_time.hour >= 24) {
+        static const u8 mdays[] = {31, 28, 31, 30, 31, 30,
+                                   31, 31, 30, 31, 30, 31};
+        int month;
+        int dim;
+
         dev->cached_time.hour -= 24;
         dev->cached_time.day++;
+
+        month = (dev->cached_time.month >= 1 && dev->cached_time.month <= 12)
+                ? dev->cached_time.month : 1;
+        dim = mdays[month - 1];
+        if (month == 2 && (dev->cached_time.year % 4) == 0)
+            dim = 29;   /* leap year (adequate for 2-digit years) */
+
+        if (dev->cached_time.day > (u8)dim) {
+            dev->cached_time.day = 1;
+            dev->cached_time.month++;
+            if (dev->cached_time.month > 12) {
+                dev->cached_time.month = 1;
+                dev->cached_time.year++;
+            }
+        }
     }
 }
 
@@ -116,8 +134,11 @@ void timer_get_time(rtc_time* time)
 {
     if (!time)
         return;
+
+    spinlock_lock(timer_device.lock);
     timer_update_rtc_time(&timer_device);
     *time = timer_device.cached_time;
+    spinlock_unlock(timer_device.lock);
 }
 
 int timer_read_time_str(char* buf, size_t size)
@@ -125,13 +146,13 @@ int timer_read_time_str(char* buf, size_t size)
     if (!buf || size == 0)
         return E_INVAL;
 
-    timer_update_rtc_time(&timer_device);
-    rtc_time* t = &timer_device.cached_time;
-
     /* Need at least 20 bytes for "YYYY-MM-DD HH:MM:SS\0" */
     if (size < 20)
-        return 0;
+        return -1;
 
+    spinlock_lock(timer_device.lock);
+    timer_update_rtc_time(&timer_device);
+    rtc_time* t = &timer_device.cached_time;
     buf[0]  = '0' + (t->century / 10);
     buf[1]  = '0' + (t->century % 10);
     buf[2]  = '0' + (t->year / 10);
@@ -152,6 +173,7 @@ int timer_read_time_str(char* buf, size_t size)
     buf[17] = '0' + (t->second / 10);
     buf[18] = '0' + (t->second % 10);
     buf[19] = '\0';
+    spinlock_unlock(timer_device.lock);
 
     return 19;
 }

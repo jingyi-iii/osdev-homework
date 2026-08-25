@@ -371,8 +371,23 @@ void mailbox_syscall_exit(void)
     syscall_unregister(mailbox_scall_handle);
 }
 
+/*
+ * Inside a syscall/IRQ gate (ring-0, irq_reenter_cnt == 0) issuing
+ * int $100 again would hit the reentrancy guard in arch_syscall() and
+ * silently return E_AGAIN with a stale (zeroed) config — the caller
+ * would see a bogus "success".  Call the kernel implementation
+ * directly instead; at CPL3 or idle ring-0 the gate works normally.
+ */
+static inline int mb_run_direct(void)
+{
+    return !arch_running_ring3() && irq_reenter_cnt == 0;
+}
+
 mail* mailbox_alloc_mail(void)
 {
+    if (mb_run_direct())
+        return alloc_mail();
+
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_ALLOC_MAIL;
 
@@ -383,6 +398,11 @@ mail* mailbox_alloc_mail(void)
 
 void mailbox_release_mail(mail* m)
 {
+    if (mb_run_direct()) {
+        release_mail(m);
+        return;
+    }
+
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_RELEASE_MAIL;
     config.m = m;
@@ -392,6 +412,9 @@ void mailbox_release_mail(mail* m)
 
 mailbox* mailbox_alloc(int owner_pid, int owner_tid)
 {
+    if (mb_run_direct())
+        return alloc_mailbox(owner_pid, owner_tid);
+
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_ALLOC;
     config.pid = owner_pid;
@@ -404,6 +427,11 @@ mailbox* mailbox_alloc(int owner_pid, int owner_tid)
 
 void mailbox_release(mailbox* mb)
 {
+    if (mb_run_direct()) {
+        release_mailbox(mb);
+        return;
+    }
+
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_RELEASE;
     config.mb = mb;
@@ -414,6 +442,9 @@ void mailbox_release(mailbox* mb)
 
 int mailbox_send(mail* m)
 {
+    if (mb_run_direct())
+        return send(m);
+
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_SEND;
     config.m = m;
@@ -426,6 +457,16 @@ int mailbox_send(mail* m)
 mail* mailbox_listen(mailbox* mb)
 {
     for ( ;; ) {
+        if (mb_run_direct()) {
+            mail* m = try_get_mail(mb);
+            if (m)
+                return m;
+            /* No mail yet: yield HERE in kernel context (direct, safe
+             * inside the gate), so other threads and IRQ handlers run. */
+            thread_yield();
+            continue;
+        }
+
         mailbox_ctrl_config config = {0};
         config.cmd = MAILBOX_CTRL_LISTEN;
         config.mb = mb;
@@ -444,6 +485,9 @@ mail* mailbox_listen(mailbox* mb)
 
 int mailbox_register_handler(mailbox* mb, mail_handler handler)
 {
+    if (mb_run_direct())
+        return register_handler(mb, handler);
+
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_REGISTER_HANDLER;
     config.mb = mb;
@@ -456,6 +500,9 @@ int mailbox_register_handler(mailbox* mb, mail_handler handler)
 
 int mailbox_unregister_handler(mailbox* mb, mail_handler handler)
 {
+    if (mb_run_direct())
+        return unregister_handler(mb, handler);
+
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_UNREGISTER_HANDLER;
     config.mb = mb;

@@ -410,8 +410,8 @@ void terminal_write_at_str(const char* str, u8 color, size_t x, size_t y)
 
     struct terminal_device* dev = &term_device;
 
-    if (color)
-        dev->curr_color = color;
+    /* Set the requested color unconditionally (0 = black is valid). */
+    dev->curr_color = color;
 
     while (*str != '\0') {
         terminal_write_at(*str, dev->curr_color, x, y);
@@ -459,14 +459,21 @@ void terminal_putchar(char c)
         if (++dev->curr_row >= VGA_HEIGHT)
             dev->curr_row = 0;
     } else if (c == '\b') {
+        int moved = 0;
         if (dev->curr_col > 0) {
             dev->curr_col--;
+            moved = 1;
         } else if (dev->curr_row > 0) {
             dev->curr_row--;
             dev->curr_col = VGA_WIDTH - 1;
+            moved = 1;
         }
-        size_t index = dev->curr_row * VGA_WIDTH + dev->curr_col;
-        dev->vga_buffer[index] = to_vga_char(' ', dev->curr_color);
+        /* Only erase the cell if the cursor actually moved back;
+         * at (0,0) a backspace is a no-op. */
+        if (moved) {
+            size_t index = dev->curr_row * VGA_WIDTH + dev->curr_col;
+            dev->vga_buffer[index] = to_vga_char(' ', dev->curr_color);
+        }
     } else if (c >= ' ') {
         size_t index = dev->curr_row * VGA_WIDTH + dev->curr_col;
         dev->vga_buffer[index] = to_vga_char(c, dev->curr_color);
@@ -538,7 +545,9 @@ void terminal_unregister_cmd(const char* name)
 /************************************************************************/
 static void terminal_kb_handler(const char* data, size_t size)
 {
-    (void)size;
+    if (!data || size == 0)
+        return;
+
     char c = data[0];
 
     /* ENTER (0x03 from keymap) or ASCII CR/LF */

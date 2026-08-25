@@ -29,6 +29,9 @@ void wait_queue_sleep_locked(wait_queue *wq)
     curr->waiting_on = wq;
     list_add(&curr->wait_node, &wq->waiters);
 
+    /* The caller acquired wq->sp_lock with irqsave (IF=0).  A plain
+     * unlock keeps IF=0, so no IRQ can preempt us before we block;
+     * the caller restores the flag on its own irqrestore. */
     spinlock_unlock(wq->sp_lock);
     thread_block(curr->tid);
     spinlock_lock(wq->sp_lock);
@@ -36,9 +39,9 @@ void wait_queue_sleep_locked(wait_queue *wq)
 
 void wait_queue_wake_one(wait_queue *wq)
 {
-    spinlock_lock(wq->sp_lock);
+    u32 eflags = spinlock_lock_irqsave(wq->sp_lock);
     if (list_empty(&wq->waiters)) {
-        spinlock_unlock(wq->sp_lock);
+        spinlock_unlock_irqrestore(wq->sp_lock, eflags);
         return;
     }
 
@@ -52,18 +55,18 @@ void wait_queue_wake_one(wait_queue *wq)
 
         t->waiting_on = 0;
         list_del(node);
-        spinlock_unlock(wq->sp_lock);
+        spinlock_unlock_irqrestore(wq->sp_lock, eflags);
         thread_unblock(t->tid);
         return;
     }
-    spinlock_unlock(wq->sp_lock);
+    spinlock_unlock_irqrestore(wq->sp_lock, eflags);
 }
 
 void wait_queue_wake_by_tid(wait_queue *wq, u32 tid)
 {
-    spinlock_lock(wq->sp_lock);
+    u32 eflags = spinlock_lock_irqsave(wq->sp_lock);
     if (list_empty(&wq->waiters)) {
-        spinlock_unlock(wq->sp_lock);
+        spinlock_unlock_irqrestore(wq->sp_lock, eflags);
         return;
     }
 
@@ -71,24 +74,24 @@ void wait_queue_wake_by_tid(wait_queue *wq, u32 tid)
         list_node* node = pos;
         tcb* t = list_entry(node, tcb, wait_node);
 
-        if (t->waiting_on != wq || t->tid != tid) {
+        if (t->waiting_on != wq || (u32)t->tid != tid) {
             continue;
         }
 
         t->waiting_on = 0;
         list_del(node);
-        spinlock_unlock(wq->sp_lock);
+        spinlock_unlock_irqrestore(wq->sp_lock, eflags);
         thread_unblock(t->tid);
         return;
     }
-    spinlock_unlock(wq->sp_lock);
+    spinlock_unlock_irqrestore(wq->sp_lock, eflags);
 }
 
 void wait_queue_wake_all(wait_queue *wq)
 {
-    spinlock_lock(wq->sp_lock);
+    u32 eflags = spinlock_lock_irqsave(wq->sp_lock);
     if (list_empty(&wq->waiters)) {
-        spinlock_unlock(wq->sp_lock);
+        spinlock_unlock_irqrestore(wq->sp_lock, eflags);
         return;
     }
 
@@ -104,5 +107,5 @@ void wait_queue_wake_all(wait_queue *wq)
         list_del(node);
         thread_unblock(t->tid);
     }
-    spinlock_unlock(wq->sp_lock);
+    spinlock_unlock_irqrestore(wq->sp_lock, eflags);
 }

@@ -254,10 +254,13 @@ static void move_snake(void)
 
     /* shift the ring buffer: insert new head, drop tail if not eating */
     if (ate_food) {
-        /* grow: shift everything right, insert new head */
-        for (int i = snake_len; i > 0; i--)
-            snake[i] = snake[i - 1];
-        snake_len++;
+        /* grow only while the ring buffer has room — the grid can fill
+         * completely, which would make snake[snake_len] out of bounds */
+        if (snake_len < SNAKE_MAX_LEN) {
+            for (int i = snake_len; i > 0; i--)
+                snake[i] = snake[i - 1];
+            snake_len++;
+        }
         score++;
         spawn_food();
     } else {
