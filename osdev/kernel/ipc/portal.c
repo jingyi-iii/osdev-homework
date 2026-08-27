@@ -56,8 +56,12 @@ static int portal_syscall_isr(void* data)
         config->out = portal_wait(config->client_id);
         return 0;
 
-    case PORTAL_CTRL_CALL:
-        return portal_call(config->server_id, config->va, config->va_size);
+    case PORTAL_CTRL_MMAP:
+        return shm_share(config->target_pid,
+                        config->va, config->va_size, &config->out);
+
+    case PORTAL_CTRL_UNMMAP:
+        return shm_unshare(config->target_pid, config->va);
 
     case PORTAL_CTRL_REPLY:
         return portal_reply(config->req);
@@ -85,8 +89,12 @@ int portal_init(portal* p)
     p->id = id++;
     p->pid = proc_get_pid();
     p->tid = thread_get_tid();
-    wait_queue_init(&p->client_wq);
-    wait_queue_init(&p->server_wq);
+    p->req_sem =  semaphore_create(0);
+    if (!p->req_sem) {
+        memset(p, 0, sizeof(portal));
+        return E_NOMEM;
+    }
+
     list_init(&p->reqs);
     list_init(&p->this_node);
 
@@ -102,12 +110,22 @@ void portal_destroy(portal* p)
     if (!p)
         return;
 
-    wait_queue_destroy(&p->client_wq);
-    wait_queue_destroy(&p->server_wq);
-
+    /* Drop any requests still parked on the portal.  Callers must ensure
+     * no client is blocked mid-call (its req / done_sem would be freed out
+     * from under it). */
     spinlock_lock(&portal_lock);
+    list_for_each_safe(pos, n, &p->reqs) {
+        portal_req* r = list_entry(pos, portal_req, this_node);
+        list_del(pos);
+        if (r->done_sem)
+            semaphore_destroy(r->done_sem);
+        kfree(r);
+    }
     list_del(&p->this_node);
     spinlock_unlock(&portal_lock);
+
+    if (p->req_sem)
+        semaphore_destroy(p->req_sem);
 }
 
 
@@ -118,15 +136,6 @@ int portal_call(u32 portal_id, void* va, size_t size)
     void* target_va = 0;
     int found = 0;
     int ret = 0;
-
-    if (arch_running_ring3()) {
-        portal_ctrl_config config;
-        config.server_id = portal_id;
-        config.cmd = PORTAL_CTRL_CALL;
-        config.va = va;
-        config.va_size = size;
-        return arch_syscall(portal_scall_handle, &config, sizeof(config));
-    }
 
     spinlock_lock(&portal_lock);
     list_for_each(node, &portal_header) {
@@ -141,75 +150,98 @@ int portal_call(u32 portal_id, void* va, size_t size)
     if (!found)
         return E_NOTFOUND;
 
-    ret = shm_share(ptl->pid, va, size, &target_va);
-    if (ret)
-        return ret;
+    /* Share the caller's buffer with the server process so the payload is
+     * reachable on both sides.  Ring-3 callers go through the MMAP syscall
+     * gate (the handler runs with the caller's CR3); ring-0 callers call
+     * shm_share directly. */
+    if (arch_running_ring3()) {
+        portal_ctrl_config config;
+        int r;
+        config.server_id = portal_id;
+        config.cmd = PORTAL_CTRL_MMAP;
+        config.va = va;
+        config.va_size = size;
+        config.target_pid = ptl->pid;
+        r = arch_syscall(portal_scall_handle, &config, sizeof(config));
+        if (r != 0)
+            return r;
+        target_va = config.out;
+    } else {
+        ret = shm_share(ptl->pid, va, size, &target_va);
+        if (ret)
+            return ret;
+    }
 
     req = kmalloc(sizeof(portal_req));
     if (!req)
         return E_NOMEM;
+    memset(req, 0, sizeof(*req));
     req->client_id = thread_get_tid();
     req->shm_va = target_va;
     req->shm_size = size;
+    req->done_sem = semaphore_create(0);
+    if (!req->done_sem) {
+        kfree(req);
+        return E_NOMEM;
+    }
+
     spinlock_lock(&portal_lock);
     list_add(&req->this_node, &ptl->reqs);
     spinlock_unlock(&portal_lock);
 
-    u32 eflags = spinlock_lock_irqsave(ptl->client_wq.sp_lock);
-    wait_queue_sleep_locked(&ptl->client_wq);
-    spinlock_unlock_irqrestore(ptl->client_wq.sp_lock, eflags);
+    /* Wake the server: one req_sem signal per posted request. */
+    semaphore_signal(ptl->req_sem->id);
+
+    /* Block until the server replies to THIS request.  `done_sem` is a
+     * per-request semaphore, so a reply can only ever wake the client
+     * that posted this exact req (no cross-client wakeups). */
+    semaphore_wait(req->done_sem->id);
 
     /* RESP here */
     ret = req->resp.ret;
     spinlock_lock(&portal_lock);
     list_del(&req->this_node);
     spinlock_unlock(&portal_lock);
+    semaphore_destroy(req->done_sem);
     kfree(req);
-    shm_unshare(ptl->pid, target_va);
+
+    if (arch_running_ring3()) {
+        portal_ctrl_config config;
+        config.cmd = PORTAL_CTRL_UNMMAP;
+        config.va = target_va;
+        config.target_pid = ptl->pid;
+        arch_syscall(portal_scall_handle, &config, sizeof(config));
+    } else {
+        shm_unshare(ptl->pid, target_va);
+    }
 
     return ret;
 }
 
 portal_req* portal_wait(u32 portal_id)
 {
-    for ( ;; ) {
-        if (arch_running_ring3()) {
-            portal_ctrl_config config;
-            config.client_id = portal_id;
-            config.cmd = PORTAL_CTRL_WAIT;
-            config.out = 0;
-            arch_syscall(portal_scall_handle, &config, sizeof(config));
-            
-            if (config.out) {
-                return (portal_req*)config.out;
-            } else {
-                thread_yield();
-                continue;
-            }
-        }
+    portal* ptl = portal_get_by_tid(thread_get_tid());
+    if (!ptl)
+        return 0;
 
-        portal* ptl = portal_get_by_tid(thread_get_tid());
-        if (!ptl)
-            return 0;
-
-        return portal_get_req_by_id(ptl, portal_id);;
-    }
+    /* Block until a client posts a request. */
+    semaphore_wait(ptl->req_sem->id);
+    return portal_get_req_by_id(ptl, portal_id);
 }
 
 int portal_reply(portal_req* req)
 {
-    if (!req)
+    portal* ptl;
+
+    if (!req || !req->done_sem)
         return E_INVAL;
 
-    if (arch_running_ring3()) {
-        portal_ctrl_config config;
-        config.cmd = PORTAL_CTRL_REPLY;
-        config.req = req;
-        return arch_syscall(portal_scall_handle, &config, sizeof(config));
-    }
+    ptl = portal_get_by_tid(thread_get_tid());
+    if (!ptl)
+        return E_NOTFOUND;
 
-    portal* ptl = portal_get_by_tid(thread_get_tid());
-    wait_queue_wake_by_tid(&ptl->client_wq, req->client_id);
+    /* Wake exactly the client that posted @req. */
+    semaphore_signal(req->done_sem->id);
 
     return 0;
 }

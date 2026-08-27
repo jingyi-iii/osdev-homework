@@ -22,6 +22,7 @@ extern void rbtree_test_main(void);
 extern void sched_mix_test_main(void);
 extern void shm_test_main(void);
 extern void shm_stress_main(void);
+extern void portal_api_test_main(void);
 
 /* Menu state: 0 = waiting, 1 = thread tests, 2 = process tests, 3 = mailbox tests, 4 = rbtree tests, 5 = mixed scheduling tests, 6 = run all */
 static volatile int menu_choice = 0;
@@ -52,6 +53,7 @@ static void menu_kb_handler(const char* data, size_t size)
     if (key == '6') menu_choice = 6;
     if (key == '7') menu_choice = 7;
     if (key == '8') menu_choice = 8;
+    if (key == '9') menu_choice = 9;
     if (key == 'k' || key == 'K') priv_choice = 1;
     if (key == 'u' || key == 'U') priv_choice = 2;
 }
@@ -76,8 +78,9 @@ static void draw_menu(void)
     terminal_write("  [6] Run All Test Suites\n");
     terminal_write("  [7] SHM Test Suite\n");
     terminal_write("  [8] SHM Stress Test\n");
+    terminal_write("  [9] Portal RPC Test Suite\n");
     terminal_write("\n");
-    terminal_write("  Press 1, 2, 3, 4, 5, 6, 7 or 8 to select\n");
+    terminal_write("  Press 1, 2, 3, 4, 5, 6, 7, 8 or 9 to select\n");
 }
 
 /* ------------------------------------------------------------------ *
@@ -136,6 +139,7 @@ static void run_all_test_suites(proc_priv priv)
     /* SHM tests handshake via globals — all processes share the address space */
     run_test_suite("SHM Test Suite", shm_test_main, PROC_PRIV_USER);
     run_test_suite("SHM Stress Test", shm_stress_main, PROC_PRIV_USER);
+    run_test_suite("Portal RPC Test Suite", portal_api_test_main, priv);
 
     terminal_write("\n========== ALL TEST SUITES COMPLETE ==========\n\n");
 }
@@ -175,6 +179,8 @@ void process_test_main_thread(void)
             priv = PROC_PRIV_USER;
         } else if (menu_choice == 8) {
             priv = PROC_PRIV_USER;
+        } else if (menu_choice == 9) {
+            priv = menu_ask_priv("Portal RPC Test Suite");
         } else {
             priv = menu_ask_priv("Red-Black Tree Test Suite");
         }
@@ -195,6 +201,8 @@ void process_test_main_thread(void)
             run_test_suite("SHM Test Suite", shm_test_main, priv);
         } else if (menu_choice == 8) {
             run_test_suite("SHM Stress Test", shm_stress_main, priv);
+        } else if (menu_choice == 9) {
+            run_test_suite("Portal RPC Test Suite", portal_api_test_main, priv);
         } else {
             run_test_suite("Red-Black Tree Test Suite", rbtree_test_main, priv);
         }

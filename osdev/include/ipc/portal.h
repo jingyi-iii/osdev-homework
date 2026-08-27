@@ -2,7 +2,7 @@
 #define PORTAL_H
 
 #include "lib/types.h"
-#include "sync/wait_queue.h"
+#include "sync/semaphore.h"
 #include "lib/list.h"
 #include <stddef.h>
 
@@ -21,6 +21,7 @@ typedef struct portal_req {
     u8* payload;
     u32 req_size;
 
+    semaphore* done_sem;          /* per-request: client blocks, server signals */
     portal_resp resp;
     list_node this_node;
 } portal_req;
@@ -32,8 +33,7 @@ typedef struct portal {
 
     list_node   reqs;
 
-    wait_queue  client_wq;
-    wait_queue  server_wq;
+    semaphore*  req_sem;      /* server waits here for a request to arrive */
 
     enum {
         PORTAL_IDLE = 0,
@@ -49,9 +49,12 @@ typedef struct portal_ctrl_config {
         PORTAL_CTRL_WAIT = 0,
         PORTAL_CTRL_CALL,
         PORTAL_CTRL_REPLY,
+        PORTAL_CTRL_MMAP,
+        PORTAL_CTRL_UNMMAP,
     } cmd;
     u32 client_id;
     u32 server_id;
+    u32 target_pid;
     void* va;
     size_t va_size;
     portal_req* req;
