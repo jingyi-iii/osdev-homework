@@ -17,6 +17,10 @@ extern void timer_server_init(void);
 extern u8 user_hello_elf_start[];
 extern u8 user_hello_elf_end[];
 
+/* Embedded user-mode log server ELF — same embed file. */
+extern u8 log_server_elf_start[];
+extern u8 log_server_elf_end[];
+
 /*
  * Grant the top-level demo/test process everything its ring-3 code needs:
  *   - port ranges (all I/O goes through the capability-checked io syscall
@@ -63,6 +67,17 @@ void init_thread(void)
     terminal_init();
     timer_server_init();
     log_server_init();
+
+    /* Load and run the user-mode log server ELF (user/server/serial/
+     * log_server2.c): its _start claims SYSCALL_LOG via SYSCALL_SYSCTL, so
+     * user programs can log directly.  Loaded BEFORE the hello demo so the
+     * syscall is normally registered first (hello.c retries regardless). */
+    i32 log_pid = proc_load_from_elf(log_server_elf_start, log_server_elf_end, 0);
+    if (log_pid > 0) {
+        /* COM1 port access for the ring-3 server loop (CAP_ACCESS_IO). */
+        grant_demo_caps(get_process_by_pid(log_pid));
+        proc_unblock(log_pid);
+    }
 
      /* Load and run the user-mode ELF demo (user/hello.elf) in its own
       * process — exercises the ELF loader + fixed syscall ABI. */

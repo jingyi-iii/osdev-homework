@@ -11,10 +11,18 @@ CXXOBJS  := $(patsubst %.cpp, $(OBJS_DIR)%.cpp.o, $(CXXSRCS))
 ASMOBJS  := $(patsubst %.S,   $(OBJS_DIR)%.S.o,   $(ASMSRCS))
 
 # ---- user-space programs (compiled to ELF, embedded into the kernel) ----
-USER_SRCS  := $(shell find user -type f -name '*.c' -not -name 'userheap.c')
+# user/server/** holds the standalone ring-3 server ELFs; keep them out of
+# the hello.elf source list so they are not linked into the demo program.
+USER_SRCS  := $(shell find user -type f -name '*.c' -not -name 'userheap.c' -not -path 'user/server/*')
 USER_EMBED := user/hello_embed.S
 USER_ELF   := $(OUT_DIR)hello.elf
 USER_LD    := user/user.ld
+
+# log_server.elf — user-mode log server (user/server/serial/log_server2.c).
+# user_service.c is the shared user-mode service layer (io/thread syscalls
+# + ring-3 stubs); kernel/lib/string.c provides memset/snprintf/strlen.
+LOG_SRCS   := user/server/serial/log_server2.c user/server/user_service.c kernel/lib/string.c
+LOG_ELF    := $(OUT_DIR)log_server.elf
 
 OBJS     := $(COBJS) $(CXXOBJS) $(ASMOBJS) $(OBJS_DIR)user/userheap.c.o $(OBJS_DIR)user_hello_embed.S.o
 
@@ -39,7 +47,8 @@ LDFLAGS    := -ffreestanding -O2 -g -nostdlib
 
 # User programs: linked as position-dependent executables at the high user
 # base (see user/user.ld); -fno-pic keeps absolute addresses.
-USER_CFLAGS := -std=gnu99 -ffreestanding -fno-builtin -fno-pic -fno-pie -nostdlib -Iinclude
+# -Iarch/i386 exposes arch_irq.h; -Iuser exposes userlib.h to user/server/*.
+USER_CFLAGS := -std=gnu99 -ffreestanding -fno-builtin -fno-pic -fno-pie -nostdlib -Iinclude -Iarch/i386 -Iuser
 
 MEMORY_MAP := $(OUT_DIR)memory_map
 
@@ -81,9 +90,12 @@ $(OBJS_DIR)user/userheap.c.o: user/userheap.c
 $(USER_ELF): $(USER_SRCS) $(USER_LD) | $(OUT_DIR)
 	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(USER_SRCS) -o $@ -lgcc
 
+$(LOG_ELF): $(LOG_SRCS) $(USER_LD) | $(OUT_DIR)
+	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(LOG_SRCS) -o $@ -lgcc
+
 # Explicit embedding: user/hello_embed.S .incbin's the ELF and defines
 # user_hello_elf_start/_end by name (no objcopy magic symbols).
-$(OBJS_DIR)user_hello_embed.S.o: $(USER_EMBED) $(USER_ELF)
+$(OBJS_DIR)user_hello_embed.S.o: $(USER_EMBED) $(USER_ELF) $(LOG_ELF)
 	@mkdir -p $(@D)
 	$(AS) $(ASFLAGS) $< -o $@
 

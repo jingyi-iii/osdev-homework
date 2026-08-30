@@ -22,3 +22,12 @@ user_hello_elf_start:
 
     .globl user_hello_elf_end
 user_hello_elf_end:
+
+/* user-mode log server ELF — loaded by kernel/init.c via proc_load_from_elf
+ * (log_server_elf_start/_end). */
+    .globl log_server_elf_start
+log_server_elf_start:
+    .incbin "output/log_server.elf"
+
+    .globl log_server_elf_end
+log_server_elf_end:
