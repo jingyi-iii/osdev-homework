@@ -35,7 +35,7 @@ int shm_share(i32 pid, void* va, size_t size, void** out_va)
     aligned_pa = pa & ~(PAGE_SIZE - 1);  // aligned PA
     aligned_pa_size = (size + (pa - aligned_pa) + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);   // aligned size
 
-    if (vmm_lookup_region(curr, (u32)va, &src_pa, &src_size) != 0)
+    if (vmm_lookup_region(curr, (u32)va, &src_pa, &src_size, 0) != 0)
         return E_INVAL;
     if (aligned_pa < src_pa ||
         aligned_pa_size > src_size - (aligned_pa - src_pa))
@@ -65,6 +65,7 @@ int shm_unshare(i32 pid, void* va)
     pcb* target = get_process_by_pid(pid);
     u32 pa = 0;
     u32 pa_size = 0;
+    void* region_va = 0;
     cap_mem cmem = {0};
 
     if (!curr || !target)
@@ -78,9 +79,15 @@ int shm_unshare(i32 pid, void* va)
             return E_PERM;
     }
 
-    if (vmm_lookup_region(target, (u32)va, &pa, &pa_size))
+    if (vmm_lookup_region(target, (u32)va, &pa, &pa_size, &region_va))
         return E_NOTFOUND;
-    if (vmm_unmap_memory(target, va, pa_size))
+    /* Unmap from the region's ALIGNED start with the full region size.
+     * Unmapping from the (possibly unaligned) payload VA with the full
+     * size would fail vmm_mmap_release's bounds check
+     * (va + size > region end), leaking the mapping + its CAP_MAP_MEM
+     * grant — which then makes a second share of the same page fail on
+     * the duplicate cap grant (portal console prints hit this). */
+    if (vmm_unmap_memory(target, region_va, pa_size))
         return E_LIMIT;
 
     cmem.base = pa;

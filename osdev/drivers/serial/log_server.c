@@ -1,60 +1,41 @@
 #include "drivers/log_server.h"
-#include "sync/spinlock.h"
 #include "kernel/process.h"
 #include "kernel/io.h"
+#include "kernel/klog.h"
+#include "user/uspinlock.h"
 
 #define SERIAL_COM1_BASE   0x3F8
 #define SERIAL_LSR_OFF     5      /* Line Status Register offset  */
 #define LSR_THR_EMPTY      0x20   /* Transmitter Holding Register empty */
 
-struct log_device {
-    spinlock* lock;
-    u16 io_port;
-    int ready;
-};
+/*
+ * User-mode (ring-3) log writer.
+ *
+ * log_device is gone: no kernel struct, no kernel spinlock.  The COM1
+ * port is owned and initialised by klog (kernel/klog.c); ring-3 LOG
+ * output is written straight to the port through the io layer, which
+ * routes ring-3 port I/O through the syscall gate (CAP_ACCESS_IO).
+ * Exclusion between user threads is a user-mode spinlock.
+ */
+static uspinlock ulog_lock = USPINLOCK_INIT;
 
-static struct log_device log_device = {
-    .lock    = NULL,
-    .io_port = SERIAL_COM1_BASE,
-    .ready   = 0,
-};
-
-/* ---- serial port init (port I/O via the io layer, no probing) ------- */
-static void serial_port_init(u16 port)
+static void ulog_write_direct(const char* buf, size_t size)
 {
-    iowrite8(port + 1, 0x00);    /* Disable all interrupts          */
-    iowrite8(port + 3, 0x80);    /* Enable DLAB (baud rate divisor) */
-    iowrite8(port + 0, 0x03);    /* Divisor lo = 3  → 38400 baud    */
-    iowrite8(port + 1, 0x00);    /* Divisor hi                      */
-    iowrite8(port + 3, 0x03);    /* 8 bits, no parity, one stop bit */
-    iowrite8(port + 2, 0xC7);    /* Enable FIFO, 14-byte threshold  */
-    iowrite8(port + 4, 0x0B);    /* IRQs enabled, RTS/DSR set       */
-    iowrite8(port + 4, 0x0F);    /* Normal operation (not loopback) */
-}
-
-/* ---- direct serial write ----------------------------------------------
- * Works in every context: early kernel boot (before the log server has
- * started), CPL0 and CPL3 (port I/O goes through the io layer, kernel/io.c,
- * which routes ring-3 access through the syscall gate).  spinlock_lock(NULL)
- * is a safe no-op, so this is fine even before the lock is allocated (very
- * early boot is single-threaded). */
-static void log_write_direct(const char* buf, size_t size)
-{
-    spinlock_lock(log_device.lock);
+    uspin_lock(&ulog_lock);
     for (size_t i = 0; i < size; i++) {
         int timeout = 0;
-        while ((ioread8(log_device.io_port + SERIAL_LSR_OFF) & LSR_THR_EMPTY) == 0) {
+        while ((ioread8(SERIAL_COM1_BASE + SERIAL_LSR_OFF) & LSR_THR_EMPTY) == 0) {
             /* If the transmitter never becomes ready (no UART / broken
              * status line), drop the rest instead of hanging forever. */
             if (++timeout > 1000000) {
-                spinlock_unlock(log_device.lock);
+                uspin_unlock(&ulog_lock);
                 return;
             }
             __asm__ __volatile__("pause" ::: "memory");
         }
-        iowrite8(log_device.io_port, (u8)buf[i]);
+        iowrite8(SERIAL_COM1_BASE, (u8)buf[i]);
     }
-    spinlock_unlock(log_device.lock);
+    uspin_unlock(&ulog_lock);
 }
 
 /*
@@ -71,7 +52,8 @@ void log_handler(void* context)
     if (!p || !p->log || p->size == 0)
         return;
 
-    const char* tag = arch_running_ring3() ? "ULOG: " : "KLOG: ";
+    int ring3 = arch_running_ring3();
+    const char* tag = ring3 ? "ULOG: " : "KLOG: ";
     char out_buf[512] = {0};
 
     if (timer_is_ready()) {
@@ -82,15 +64,22 @@ void log_handler(void* context)
         snprintf(out_buf, sizeof(out_buf), "%s%s", tag, p->log);
     }
 
-    log_write_direct(out_buf, strlen(out_buf));
+    /* Ring-3 → user-mode writer (uspinlock + direct port I/O);
+     * ring-0 → klog (cli-guarded direct port I/O).  Neither path touches
+     * a kernel data structure. */
+    if (ring3)
+        ulog_write_direct(out_buf, strlen(out_buf));
+    else
+        klog_write(out_buf);
 }
 
 /* ======================= user-mode log server ======================= */
 
 static void log_server_loop(void)
 {
-    /* LOG() writes the serial port directly from any privilege level, so
-     * this server thread simply idles, keeping the server process alive. */
+    /* LOG() writes the serial port directly (klog for ring-0, this
+     * server's own direct port writer for ring-3), so this thread simply
+     * idles, keeping the server process alive. */
     for (;;)
         thread_yield();
 }
@@ -99,15 +88,9 @@ int log_server_start(struct device* dev)
 {
     (void)dev;
 
-    if (!log_device.lock) {
-        log_device.lock = spinlock_alloc();
-        if (!log_device.lock)
-            return E_LIMIT;
-    }
-
-    /* Idempotent — the port was already brought up early by log_init(). */
-    serial_port_init(log_device.io_port);
-    log_device.ready = 1;
+    /* The COM1 port is owned and already brought up by klog_init() at
+     * boot; the server itself needs no lock and no kernel data
+     * structure. */
 
     LOG("log_server started");
 
@@ -118,7 +101,6 @@ int log_server_start(struct device* dev)
 int log_server_stop(struct device* dev)
 {
     (void)dev;
-    log_device.ready = 0;
     return 0;
 }
 
@@ -129,18 +111,12 @@ static struct driver log_server = {
     .stop  = log_server_stop,
 };
 
-/* Early kernel phase: bring up COM1 right away so LOG() works before the
- * user-mode server is started (and before paging / scheduler / heap). */
+/* Early kernel phase: bring up COM1 right away (via klog) so LOG() works
+ * before the user-mode server is started (and before paging / scheduler /
+ * heap). */
 void log_init(void)
 {
-    if (!log_device.lock) {
-        log_device.lock = spinlock_alloc();
-        if (!log_device.lock)
-            return;
-    }
-
-    serial_port_init(log_device.io_port);
-    log_device.ready = 1;
+    klog_init();
 }
 
 /* Register the user-mode log server.  Called from init_thread() once the

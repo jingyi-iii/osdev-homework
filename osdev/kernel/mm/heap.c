@@ -35,7 +35,14 @@ static void kheap_init(void)
         return;
 
     u32 eflags = spinlock_lock_irqsave(pool.lock_dev);
-    pool.avail_size = HEAP_TOTAL_SIZE - HEAP_HDR_SIZE;
+    /*
+     * avail_size tracks the total free bytes (header + payload of every
+     * free chunk), so it starts at the whole pool size.  kmalloc() then
+     * subtracts req_size (the new chunk's header+payload) and kfree()
+     * adds back the freed chunk's header+payload — see the note in
+     * kfree() about why that accounting must happen before merging.
+     */
+    pool.avail_size = HEAP_TOTAL_SIZE;
     pool.init = 1;
     pool.head_node.prev = &pool.head_node;
     pool.head_node.next = &pool.head_node;
@@ -59,6 +66,11 @@ void* kmalloc(unsigned int alloc_size)
 
     /* Round the request up so every payload is HEAP_ALIGN-aligned
      * (chunk bases are HEAP_ALIGN multiples and so is the header). */
+    /* Reject requests that cannot fit the pool: this also prevents u32
+     * wrap of req_size (HEAP_HDR_SIZE + aligned_size) for absurd sizes,
+     * which would bypass the avail_size check and corrupt the heap. */
+    if (alloc_size > HEAP_TOTAL_SIZE)
+        return 0;
     if (alloc_size > (0xFFFFFFFFu - (HEAP_ALIGN - 1)))   /* align overflow */
         return 0;
     aligned_size = (alloc_size + HEAP_ALIGN - 1) & ~(HEAP_ALIGN - 1);
@@ -117,6 +129,16 @@ void kfree(void* pointer)
         return;
     }
 
+    /*
+     * Account the newly freed space BEFORE merging.  avail_size tracks
+     * the total free bytes (header + payload of every free chunk).
+     * Free neighbours were already counted while they were free, so the
+     * merge pass below must only reorganise the chunk list — adding
+     * their sizes here again would double-count and let kmalloc() hand
+     * out more memory than the pool actually contains.
+     */
+    pool.avail_size += HEAP_HDR_SIZE + free_chunk->size;
+
     // merge with next chunk
     if (list_next(&free_chunk->this_node) != &pool.head_node) {
         chunk = list_entry(list_next(&free_chunk->this_node), heapchunk, this_node);
@@ -136,7 +158,6 @@ void kfree(void* pointer)
         }
     }
 
-    pool.avail_size += HEAP_HDR_SIZE + free_chunk->size;
     free_chunk->used = 0;
     spinlock_unlock_irqrestore(pool.lock_dev, eflags);
 }

@@ -16,12 +16,12 @@
  *******************************************************************************/
 
 #include "drivers/kb_server.h"
-#include "sync/spinlock.h"
+#include "user/uspinlock.h"
 #include "kernel/irq.h"
 #include "arch_irq.h"
 #include "kernel/io.h"
 #include "lib/string.h"
-#include "mm/heap.h"
+#include "user/userheap.h"
 #include "drivers/log_server.h"
 #include "kernel/process.h"
 #include "ipc/mailbox.h"
@@ -174,11 +174,17 @@ struct kb_listener {
 struct kb_device {
     kbuf buf;                           /* circular input buffer        */
     list_node listener_list;            /* registered callback list     */
-    spinlock* lock;                     /* protects listener_list       */
+    uspinlock lock;                     /* protects listener_list       */
     irq* irq;                           /* keyboard IRQ descriptor      */
 };
 
 static struct kb_device kb_device = {0};
+
+/* The listener list is inited in kb_server_init() (ring-0, before any
+ * server runs); this flag keeps the defensive lazy-init in
+ * kb_register_callback() working now that the lock is embedded (there is
+ * no NULL == not-inited state any more). */
+static int kb_listeners_inited = 0;
 
 /* ===========================================================
  *  Circular buffer operations
@@ -316,13 +322,13 @@ static void kb_server_loop(void* context)
     char keybuf[2] = {0};
     keybuf[0] = kbuf_pop(&kb_device.buf);
     if (keybuf[0]) {
-        spinlock_lock(kb_device.lock);
+        uspin_lock(&kb_device.lock);
         list_for_each(pos, &kb_device.listener_list) {
             struct kb_listener* lsn = list_entry(pos, struct kb_listener, node);
             if (lsn->cb)
                 lsn->cb(keybuf, 1);
         }
-        spinlock_unlock(kb_device.lock);
+        uspin_unlock(&kb_device.lock);
     }
 }
 
@@ -332,13 +338,7 @@ int kb_start(struct device* dev)
 
     /* The lock and listener list are already set up by kb_server_init()
      * (which runs synchronously before any other server starts), so a
-     * listener registered before this thread runs is never lost.  Keep
-     * the defensive lock allocation in case init was skipped. */
-    if (!kb_device.lock) {
-        kb_device.lock = spinlock_alloc();
-        if (!kb_device.lock)
-            return E_LIMIT;
-    }
+     * listener registered before this thread runs is never lost. */
 
     /* user IRQ (handler == 0): delivered to this thread's mailbox */
     int ret = irq_request_threaded(&kb_device.irq, "kbd", KEYBOARD_IRQ_NO,
@@ -376,7 +376,7 @@ int kb_register_callback(kb_callback_fn cb)
     if (!cb)
         return E_INVAL;
 
-    struct kb_listener* lsn = (struct kb_listener*)kmalloc(sizeof(*lsn));
+    struct kb_listener* lsn = (struct kb_listener*)malloc(sizeof(*lsn));
     if (!lsn)
         return E_NOMEM;
 
@@ -385,18 +385,14 @@ int kb_register_callback(kb_callback_fn cb)
     /* Safe to call before the kb server has started: lazily initialise the
      * listener list so an early listener is never added to a zeroed list
      * (and later wiped by kb_start). */
-    if (!kb_device.lock) {
-        kb_device.lock = spinlock_alloc();
-        if (!kb_device.lock) {
-            kfree(lsn);
-            return E_LIMIT;
-        }
+    if (!kb_listeners_inited) {
+        kb_listeners_inited = 1;
         list_init(&kb_device.listener_list);
     }
 
-    spinlock_lock(kb_device.lock);
+    uspin_lock(&kb_device.lock);
     list_add(&lsn->node, &kb_device.listener_list);
-    spinlock_unlock(kb_device.lock);
+    uspin_unlock(&kb_device.lock);
 
     return 0;
 }
@@ -406,21 +402,21 @@ void kb_unregister_callback(kb_callback_fn cb)
     if (!cb)
         return;
 
-    /* Listener list may never have been initialized (lock alloc
-     * failed); nothing registered, nothing to remove. */
-    if (!kb_device.lock)
+    /* Listener list may never have been initialized; nothing registered,
+     * nothing to remove. */
+    if (!kb_listeners_inited)
         return;
 
-    spinlock_lock(kb_device.lock);
+    uspin_lock(&kb_device.lock);
     list_for_each(pos, &kb_device.listener_list) {
         struct kb_listener* lsn = list_entry(pos, struct kb_listener, node);
         if (lsn->cb == cb) {
             list_del(&lsn->node);
-            kfree(lsn);
+            free(lsn);
             break;
         }
     }
-    spinlock_unlock(kb_device.lock);
+    uspin_unlock(&kb_device.lock);
 }
 
 static struct driver kb_server = {
@@ -439,12 +435,10 @@ static struct driver kb_server = {
  * serves the mailbox loop. */
 void kb_server_init(void)
 {
-    if (!kb_device.lock) {
-        kb_device.lock = spinlock_alloc();
-        if (!kb_device.lock)
-            return;
+    if (!kb_listeners_inited) {
+        kb_listeners_inited = 1;
+        list_init(&kb_device.listener_list);
     }
-    list_init(&kb_device.listener_list);
     kbuf_reset(&kb_device.buf);
 
     platform_driver_register(&kb_server);

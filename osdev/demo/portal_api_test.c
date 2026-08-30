@@ -80,32 +80,33 @@ static void check_flush(void)
  *  Runs as a plain USER thread so the suite works under either        *
  *  KERNEL or USER menu selection.                                     *
  * ------------------------------------------------------------------ */
-static struct portal g_server_portal;
+static u32 g_server_portal_id;
 
 static void portal_server_entry(void)
 {
-    memset(&g_server_portal, 0, sizeof(g_server_portal));
-    if (portal_init(&g_server_portal) != 0) {
+    if (portal_init(&g_server_portal_id) != 0) {
         portal_server_err = 1;
         portal_server_ready = 1;
         for (;;) thread_yield();
     }
 
-    portal_server_id  = g_server_portal.id;
+    portal_server_id  = g_server_portal_id;
     portal_server_ready = 1;
 
     for (;;) {
-        portal_req* req = portal_wait(PORTAL_ID_ANY);
+        void* shm_va = 0;
+        u32   shm_size = 0;
+        portal_req* req = portal_wait(PORTAL_ID_ANY, &shm_va, &shm_size);
         if (!req) {
-            portal_server_err = 1;
+            /* Spurious wakeup (request already consumed): wait again. */
             continue;
         }
 
         /* Verify the payload arrived through the shared mapping. */
-        volatile unsigned char* p = (volatile unsigned char*)req->shm_va;
+        volatile unsigned char* p = (volatile unsigned char*)shm_va;
         int ok = 1;
-        size_t n = (req->shm_size < PORTAL_TEST_SIZE) ? req->shm_size
-                                                      : PORTAL_TEST_SIZE;
+        size_t n = (shm_size < PORTAL_TEST_SIZE) ? shm_size
+                                                 : PORTAL_TEST_SIZE;
         for (size_t i = 0; i < n; i++) {
             if (p[i] != (unsigned char)PORTAL_TEST_PATTERN) {
                 ok = 0;
@@ -118,8 +119,9 @@ static void portal_server_entry(void)
         for (size_t i = 0; i < n; i++)
             p[i] = (unsigned char)(PORTAL_TEST_PATTERN + 1);
 
-        req->resp.ret = PORTAL_TEST_RESP;
-        portal_reply(req);
+        /* The kernel stores the response code and wakes the client, which
+         * reads it as portal_call()'s return value. */
+        portal_reply(req, PORTAL_TEST_RESP);
         portal_server_done = 1;
     }
 }
@@ -148,11 +150,11 @@ void portal_api_test_main(void)
      *  Test 1 — portal_init / portal_destroy lifecycle                *
      * -------------------------------------------------------------- */
     {
-        struct portal p;
-        int ret = portal_init(&p);
-        if (ret == 0 && p.id != 0) {
+        u32 pid = 0;
+        int ret = portal_init(&pid);
+        if (ret == 0 && pid != 0) {
             term_pass("portal_init (id assigned)");
-            portal_destroy(&p);
+            portal_destroy(pid);
             term_pass("portal_destroy (no crash)");
         } else {
             term_fail("portal_init");
@@ -194,6 +196,7 @@ void portal_api_test_main(void)
             pass = 0;
             goto done;
         }
+        thread_unblock(server_tid);
         while (!portal_server_ready)
             thread_yield();
         if (portal_server_err) {
@@ -281,7 +284,7 @@ void portal_api_test_main(void)
             pass = 0;
         }
 
-        ret = portal_reply(0);
+        ret = portal_reply(0, 0);
         if (ret != 0)
             term_pass("portal_reply(NULL) rejected");
         else {
@@ -307,8 +310,8 @@ done:
      * portal_wait), then destroy the portal and free the buffer. */
     if (server_tid > 0)
         thread_exit(server_tid);
-    if (g_server_portal.id)
-        portal_destroy(&g_server_portal);
+    if (g_server_portal_id)
+        portal_destroy(g_server_portal_id);
     if (buf)
         vmm_free_pages(&self->vcb, buf);
 

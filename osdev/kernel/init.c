@@ -1,6 +1,7 @@
 #include "kernel/init.h"
 #include "kernel/process.h"
 #include "kernel/capability.h"
+#include "lib/elf.h"
 
 extern void process_test_main_thread(void);
 
@@ -11,6 +12,10 @@ extern void kb_server_init(void);
 extern void terminal_init(void);
 extern void log_server_init(void);
 extern void timer_server_init(void);
+
+/* Embedded user program — bytes placed by user/hello_embed.S (.incbin). */
+extern u8 user_hello_elf_start[];
+extern u8 user_hello_elf_end[];
 
 /*
  * Grant the top-level demo/test process everything its ring-3 code needs:
@@ -52,19 +57,32 @@ static void grant_demo_caps(pcb* proc)
 
 void init_thread(void)
 {
-     kb_server_init();
+    kb_server_init();
 
-     /* case1: test mode */
-     terminal_init();
-     timer_server_init();
-     log_server_init();
-     int pid = proc_create(PROC_PRIV_USER, process_test_main_thread, 0);
-     grant_demo_caps(get_process_by_pid(pid));
+    /* case1: test mode */
+    terminal_init();
+    timer_server_init();
+    log_server_init();
+
+     /* Load and run the user-mode ELF demo (user/hello.elf) in its own
+      * process — exercises the ELF loader + fixed syscall ABI. */
+    //  user_elf_demo();
+    i32 pid = proc_load_from_elf(user_hello_elf_start, user_hello_elf_end, 0);
+    if (pid > 0) {
+        /* The ELF demo prints via the terminal server's console portal
+         * (portal_call → shm_share), which requires CAP_IPC. */
+        grant_demo_caps(get_process_by_pid(pid));
+        proc_unblock(pid);
+    }
+
+    pid = proc_create(PROC_PRIV_USER, process_test_main_thread, 0);
+    grant_demo_caps(get_process_by_pid(pid));
+    proc_unblock(pid);
 
      // /* case2: game mode */
      // gfx_server_init();
      // pid = proc_create(PROC_PRIV_USER, game_proc_main_thread, 0);
      // grant_demo_caps(get_process_by_pid(pid));
 
-     proc_exit(proc_get_pid());
+    proc_exit(proc_get_pid());
 }

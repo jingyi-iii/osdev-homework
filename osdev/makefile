@@ -3,13 +3,20 @@ GRUB_DIR := $(OUT_DIR)iso/boot/grub
 OBJS_DIR := $(OUT_DIR)objs/
 INC_DIRS := -Iinclude -Iarch/i386
 
-ASMSRCS  := $(shell find . -type f -name '*.S' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*")
-CSRCS    := $(shell find . -type f -name '*.c' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*")
-CXXSRCS  := $(shell find . -type f -name '*.cpp' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*")
+ASMSRCS  := $(shell find . -type f -name '*.S' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*" -not -path "./user*")
+CSRCS    := $(shell find . -type f -name '*.c' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*" -not -path "./user*")
+CXXSRCS  := $(shell find . -type f -name '*.cpp' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*" -not -path "./user*")
 COBJS    := $(patsubst %.c,   $(OBJS_DIR)%.c.o,   $(CSRCS))
 CXXOBJS  := $(patsubst %.cpp, $(OBJS_DIR)%.cpp.o, $(CXXSRCS))
 ASMOBJS  := $(patsubst %.S,   $(OBJS_DIR)%.S.o,   $(ASMSRCS))
-OBJS     := $(COBJS) $(CXXOBJS) $(ASMOBJS)
+
+# ---- user-space programs (compiled to ELF, embedded into the kernel) ----
+USER_SRCS  := $(shell find user -type f -name '*.c' -not -name 'userheap.c')
+USER_EMBED := user/hello_embed.S
+USER_ELF   := $(OUT_DIR)hello.elf
+USER_LD    := user/user.ld
+
+OBJS     := $(COBJS) $(CXXOBJS) $(ASMOBJS) $(OBJS_DIR)user/userheap.c.o $(OBJS_DIR)user_hello_embed.S.o
 
 TARGET_BIN := $(OUT_DIR)myos.bin
 TARGET_ISO := $(OUT_DIR)myos.iso
@@ -29,6 +36,10 @@ CFLAGS     := -std=gnu99 -ffreestanding -O2 -g -Wall -Wextra -fno-omit-frame-poi
 CXXFLAGS   := -ffreestanding -O2 -Wall -Wextra -g -fno-exceptions -fno-rtti $(INC_DIRS) $(DEPFLAGS)
 ASFLAGS    :=
 LDFLAGS    := -ffreestanding -O2 -g -nostdlib
+
+# User programs: linked as position-dependent executables at the high user
+# base (see user/user.ld); -fno-pic keeps absolute addresses.
+USER_CFLAGS := -std=gnu99 -ffreestanding -fno-builtin -fno-pic -fno-pie -nostdlib -Iinclude
 
 MEMORY_MAP := $(OUT_DIR)memory_map
 
@@ -57,6 +68,22 @@ $(OBJS_DIR)%.cpp.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(OBJS_DIR)%.S.o: %.S
+	@mkdir -p $(@D)
+	$(AS) $(ASFLAGS) $< -o $@
+
+# User-mode heap: built into the kernel (the ring-3 servers run from the
+# kernel image) but excluded from USER_SRCS so it is not linked into the
+# user hello.elf.  -fno-builtin stops GCC treating malloc/free as builtins.
+$(OBJS_DIR)user/userheap.c.o: user/userheap.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -fno-builtin -c $< -o $@
+
+$(USER_ELF): $(USER_SRCS) $(USER_LD) | $(OUT_DIR)
+	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(USER_SRCS) -o $@ -lgcc
+
+# Explicit embedding: user/hello_embed.S .incbin's the ELF and defines
+# user_hello_elf_start/_end by name (no objcopy magic symbols).
+$(OBJS_DIR)user_hello_embed.S.o: $(USER_EMBED) $(USER_ELF)
 	@mkdir -p $(@D)
 	$(AS) $(ASFLAGS) $< -o $@
 

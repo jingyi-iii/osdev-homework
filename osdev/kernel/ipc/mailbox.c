@@ -5,6 +5,7 @@
 #include "arch_irq.h"
 #include "kernel/irq.h"
 #include "kernel/syscall.h"
+#include "kernel/uapi.h"
 #include "kernel/process.h"
 #include "kernel/capability.h"
 
@@ -363,7 +364,7 @@ static i32 mailbox_scall_handle = -1;
 
 void mailbox_syscall_init(void)
 {
-    mailbox_scall_handle = syscall_register(mailbox_syscall_isr, sizeof(mailbox_ctrl_config));
+    mailbox_scall_handle = syscall_register(SYSCALL_MAILBOX, mailbox_syscall_isr, sizeof(mailbox_ctrl_config));
 }
 
 void mailbox_syscall_exit(void)

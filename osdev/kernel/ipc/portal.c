@@ -7,9 +7,28 @@
 #include "lib/module.h"
 #include "arch_irq.h"
 #include "kernel/syscall.h"
+#include "kernel/uapi.h"
+#include "mm/heap.h"
 
 static DECLARE_HEAD_NODE(portal_header);
 static spinlock portal_lock = { .state = LOCK_UNLOCKED };
+
+static u32 portal_next_id = PORTAL_ID_ANY + 1;
+
+static portal* portal_get_by_id(u32 id)
+{
+    spinlock_lock(&portal_lock);
+    list_for_each(node, &portal_header) {
+        portal* p = list_entry(node, portal, this_node);
+        if (p->id == id) {
+            spinlock_unlock(&portal_lock);
+            return p;
+        }
+    }
+    spinlock_unlock(&portal_lock);
+
+    return 0;
+}
 
 static portal* portal_get_by_tid(u32 tid)
 {
@@ -26,46 +45,189 @@ static portal* portal_get_by_tid(u32 tid)
     return 0;
 }
 
-static portal_req* portal_get_req_by_id(portal* ptl, u32 id)
-{
-    if (!ptl)
-        return 0;
-
-    spinlock_lock(&portal_lock);
-    list_for_each(node, &ptl->reqs) {
-        portal_req* p = list_entry(node, portal_req, this_node);
-        if (p->client_id == id || id == PORTAL_ID_ANY) {
-            spinlock_unlock(&portal_lock);
-            return p;
-        }
-    }
-    spinlock_unlock(&portal_lock);
-
-    return 0;
-}
-
+/*
+ * All handlers run inside the int $100 gate (ring-0, IF=0).
+ *
+ * Blocking rule: WAIT / WAIT_REPLY park the caller with a plain
+ * semaphore_wait() as the LAST meaningful action of the gate body.
+ * This kernel defers context switches to the gate exit, so the caller is
+ * suspended at its own gate exit and resumes in user mode after the
+ * syscall — never in the middle of the gate.  Any state-dependent
+ * post-wake logic therefore lives on the user side as separate,
+ * non-blocking syscalls (GET_RESULT / GET_REQ) that run after the park.
+ */
 static int portal_syscall_isr(void* data)
 {
-    if (!data)
+    portal_ctrl_config* cfg = (portal_ctrl_config*)data;
+    portal* p = 0;
+    portal_req* req = 0;
+    int ret = 0;
+
+    if (!cfg)
         return E_INVAL;
 
-    portal_ctrl_config* config = data;
-    switch (config->cmd)
+    switch (cfg->cmd)
     {
-    case PORTAL_CTRL_WAIT:
-        config->out = portal_wait(config->client_id);
+    case PORTAL_CTRL_INIT:
+        p = (portal*)kmalloc(sizeof(portal));
+        if (!p)
+            return E_NOMEM;
+        memset(p, 0, sizeof(*p));
+        /* A non-zero cfg->server_id requests a specific well-known id (the
+         * terminal server publishes the console portal at the fixed
+         * PORTAL_ID_CONSOLE so separately-linked user ELFs can find it via
+         * the ABI constant).  0 = auto-assign. */
+        if (cfg->server_id != 0) {
+            if (portal_get_by_id(cfg->server_id)) {
+                kfree(p);
+                return E_EXISTS;
+            }
+            p->id = cfg->server_id;
+        } else {
+            p->id = portal_next_id;
+        }
+        if (p->id >= portal_next_id)
+            portal_next_id = p->id + 1;
+        p->pid = proc_get_pid();
+        p->tid = thread_get_tid();
+        p->req_sem = semaphore_create(0);
+        if (!p->req_sem) {
+            kfree(p);
+            return E_NOMEM;
+        }
+        list_init(&p->reqs);
+        list_init(&p->this_node);
+        spinlock_lock(&portal_lock);
+        list_add(&p->this_node, &portal_header);
+        spinlock_unlock(&portal_lock);
+        cfg->out = (void*)(uptr)p->id;
         return 0;
 
-    case PORTAL_CTRL_MMAP:
-        return shm_share(config->target_pid,
-                        config->va, config->va_size, &config->out);
+    case PORTAL_CTRL_DESTROY:
+        p = portal_get_by_id(cfg->server_id);
+        if (!p)
+            return E_NOTFOUND;
+        /* Tear down any requests still queued on this portal.  The caller
+         * must ensure no client is blocked mid-call on one of them. */
+        spinlock_lock(&portal_lock);
+        list_for_each_safe(pos, n, &p->reqs) {
+            portal_req* r = list_entry(pos, portal_req, this_node);
+            list_del(pos);
+            if (r->done_sem)
+                semaphore_destroy(r->done_sem);
+            kfree(r);
+        }
+        list_del(&p->this_node);
+        spinlock_unlock(&portal_lock);
+        if (p->req_sem)
+            semaphore_destroy(p->req_sem);
+        kfree(p);
+        return 0;
 
-    case PORTAL_CTRL_UNMMAP:
-        return shm_unshare(config->target_pid, config->va);
+    case PORTAL_CTRL_CALL:
+        p = portal_get_by_id(cfg->server_id);
+        if (!p)
+            return E_NOTFOUND;
+
+        /* Map the caller's buffer into the server's address space. */
+        ret = shm_share(p->pid, cfg->va, cfg->va_size, &cfg->out);
+        if (ret)
+            return ret;
+
+        req = (portal_req*)kmalloc(sizeof(portal_req));
+        if (!req)
+            return E_NOMEM;
+        memset(req, 0, sizeof(*req));
+        req->client_id = thread_get_tid();
+        req->server_pid = p->pid;
+        req->shm_va = cfg->out;
+        req->shm_size = (u32)cfg->va_size;
+        req->done_sem = semaphore_create(0);
+        if (!req->done_sem) {
+            kfree(req);
+            return E_NOMEM;
+        }
+
+        spinlock_lock(&portal_lock);
+        list_add(&req->this_node, &p->reqs);
+        spinlock_unlock(&portal_lock);
+
+        /* Wake the server: one signal per posted request. */
+        semaphore_signal(p->req_sem->id);
+
+        cfg->req = req;                 /* opaque handle back to the client */
+        return 0;
+
+    case PORTAL_CTRL_WAIT_REPLY:
+        req = cfg->req;
+        if (!req || !req->done_sem)
+            return E_INVAL;
+        /* Tail-block: suspended at this gate's exit, resumes in user mode
+         * after the syscall.  No post-block logic here. */
+        semaphore_wait(req->done_sem->id);
+        return 0;
+
+    case PORTAL_CTRL_GET_RESULT:
+        req = cfg->req;
+        if (!req)
+            return E_INVAL;
+        /* Runs only after the client has been woken (the reply was stored
+         * by PORTAL_CTRL_REPLY before the signal), so resp.ret is fresh. */
+        cfg->ret = req->resp.ret;
+        return 0;
+
+    case PORTAL_CTRL_CLEANUP:
+        req = cfg->req;
+        if (!req)
+            return E_INVAL;
+        if (req->shm_va)
+            ret = shm_unshare(req->server_pid, req->shm_va);
+        spinlock_lock(&portal_lock);
+        if (!req->dequeued)
+            list_del(&req->this_node);
+        spinlock_unlock(&portal_lock);
+        if (req->done_sem)
+            semaphore_destroy(req->done_sem);
+        kfree(req);
+        return ret;
+
+    case PORTAL_CTRL_WAIT:
+        p = portal_get_by_tid(thread_get_tid());
+        if (!p)
+            return E_NOTFOUND;
+        /* Tail-block; the request is dequeued by the following GET_REQ. */
+        semaphore_wait(p->req_sem->id);
+        return 0;
+
+    case PORTAL_CTRL_GET_REQ:
+        p = portal_get_by_tid(thread_get_tid());
+        if (!p)
+            return E_NOTFOUND;
+        spinlock_lock(&portal_lock);
+        req = 0;
+        if (!list_empty(&p->reqs)) {
+            req = list_entry(p->reqs.next, portal_req, this_node);
+            list_del(&req->this_node);   /* hand off: dequeue now */
+            req->dequeued = 1;
+        }
+        spinlock_unlock(&portal_lock);
+        cfg->req = req;
+        if (req) {
+            cfg->va = req->shm_va;
+            cfg->va_size = req->shm_size;
+        }
+        return 0;
 
     case PORTAL_CTRL_REPLY:
-        return portal_reply(config->req);
-    
+        req = cfg->req;
+        if (!req || !req->done_sem)
+            return E_INVAL;
+        /* Store the response before signaling; the client's GET_RESULT
+         * runs only after it has been woken, so it sees this value. */
+        req->resp.ret = cfg->ret;
+        semaphore_signal(req->done_sem->id);
+        return 0;
+
     default:
         return E_INVAL;
     }
@@ -75,175 +237,115 @@ static i32 portal_scall_handle = -1;
 
 void portal_syscall_init(void)
 {
-    portal_scall_handle = syscall_register(portal_syscall_isr, sizeof(portal_ctrl_config));
+    portal_scall_handle = syscall_register(SYSCALL_PORTAL, portal_syscall_isr, sizeof(portal_ctrl_config));
 }
 
-int portal_init(portal* p)
-{
-    static u32 id = PORTAL_ID_ANY + 1;
+/*
+ * Public API — thin wrappers.  Every one of them only builds a config and
+ * traps through the portal syscall gate, so ring-3 code never touches
+ * kernel locks / heap / semaphores directly.
+ */
 
-    if (!p)
+int portal_init(u32* out_id)
+{
+    return portal_init_fixed(0, out_id);
+}
+
+int portal_init_fixed(u32 want_id, u32* out_id)
+{
+    portal_ctrl_config cfg = {0};
+    int ret;
+
+    if (!out_id)
         return E_INVAL;
 
-    memset(p, 0, sizeof(portal));
-    p->id = id++;
-    p->pid = proc_get_pid();
-    p->tid = thread_get_tid();
-    p->req_sem =  semaphore_create(0);
-    if (!p->req_sem) {
-        memset(p, 0, sizeof(portal));
-        return E_NOMEM;
-    }
+    cfg.cmd = PORTAL_CTRL_INIT;
+    cfg.server_id = want_id;
+    ret = arch_syscall(portal_scall_handle, &cfg, sizeof(cfg));
+    if (ret)
+        return ret;
 
-    list_init(&p->reqs);
-    list_init(&p->this_node);
-
-    spinlock_lock(&portal_lock);
-    list_add(&p->this_node, &portal_header);
-    spinlock_unlock(&portal_lock);
-
+    *out_id = (u32)(uptr)cfg.out;
     return 0;
 }
 
-void portal_destroy(portal* p)
+int portal_destroy(u32 portal_id)
 {
-    if (!p)
-        return;
+    portal_ctrl_config cfg = {0};
 
-    /* Drop any requests still parked on the portal.  Callers must ensure
-     * no client is blocked mid-call (its req / done_sem would be freed out
-     * from under it). */
-    spinlock_lock(&portal_lock);
-    list_for_each_safe(pos, n, &p->reqs) {
-        portal_req* r = list_entry(pos, portal_req, this_node);
-        list_del(pos);
-        if (r->done_sem)
-            semaphore_destroy(r->done_sem);
-        kfree(r);
-    }
-    list_del(&p->this_node);
-    spinlock_unlock(&portal_lock);
-
-    if (p->req_sem)
-        semaphore_destroy(p->req_sem);
+    cfg.cmd = PORTAL_CTRL_DESTROY;
+    cfg.server_id = portal_id;
+    return arch_syscall(portal_scall_handle, &cfg, sizeof(cfg));
 }
-
 
 int portal_call(u32 portal_id, void* va, size_t size)
 {
-    portal* ptl = 0;
-    portal_req* req = 0;
-    void* target_va = 0;
-    int found = 0;
-    int ret = 0;
+    portal_ctrl_config cfg = {0};
+    portal_req* req;
+    int ret;
 
-    spinlock_lock(&portal_lock);
-    list_for_each(node, &portal_header) {
-        ptl = list_entry(node, portal, this_node);
-        if (ptl->id == portal_id) {
-            found = 1;
-            break;
-        }
-    }
-    spinlock_unlock(&portal_lock);
+    /* ① enqueue (kernel: shm_share + req alloc + register + wake server) */
+    cfg.cmd = PORTAL_CTRL_CALL;
+    cfg.server_id = portal_id;
+    cfg.va = va;
+    cfg.va_size = size;
+    ret = arch_syscall(portal_scall_handle, &cfg, sizeof(cfg));
+    if (ret)
+        return ret;
+    if (!cfg.req)
+        return E_INVAL;
+    req = cfg.req;
 
-    if (!found)
-        return E_NOTFOUND;
+    /* ② park until the server replies (the block takes effect at the
+     *    gate exit; on resume the reply is already stored) */
+    cfg.cmd = PORTAL_CTRL_WAIT_REPLY;
+    cfg.req = req;
+    arch_syscall(portal_scall_handle, &cfg, sizeof(cfg));
 
-    /* Share the caller's buffer with the server process so the payload is
-     * reachable on both sides.  Ring-3 callers go through the MMAP syscall
-     * gate (the handler runs with the caller's CR3); ring-0 callers call
-     * shm_share directly. */
-    if (arch_running_ring3()) {
-        portal_ctrl_config config;
-        int r;
-        config.server_id = portal_id;
-        config.cmd = PORTAL_CTRL_MMAP;
-        config.va = va;
-        config.va_size = size;
-        config.target_pid = ptl->pid;
-        r = arch_syscall(portal_scall_handle, &config, sizeof(config));
-        if (r != 0)
-            return r;
-        target_va = config.out;
-    } else {
-        ret = shm_share(ptl->pid, va, size, &target_va);
-        if (ret)
-            return ret;
-    }
+    /* ③ fetch the response code — only valid once we have been woken */
+    cfg.cmd = PORTAL_CTRL_GET_RESULT;
+    cfg.req = req;
+    arch_syscall(portal_scall_handle, &cfg, sizeof(cfg));
+    ret = cfg.ret;
 
-    req = kmalloc(sizeof(portal_req));
-    if (!req)
-        return E_NOMEM;
-    memset(req, 0, sizeof(*req));
-    req->client_id = thread_get_tid();
-    req->shm_va = target_va;
-    req->shm_size = size;
-    req->done_sem = semaphore_create(0);
-    if (!req->done_sem) {
-        kfree(req);
-        return E_NOMEM;
-    }
-
-    spinlock_lock(&portal_lock);
-    list_add(&req->this_node, &ptl->reqs);
-    spinlock_unlock(&portal_lock);
-
-    /* Wake the server: one req_sem signal per posted request. */
-    semaphore_signal(ptl->req_sem->id);
-
-    /* Block until the server replies to THIS request.  `done_sem` is a
-     * per-request semaphore, so a reply can only ever wake the client
-     * that posted this exact req (no cross-client wakeups). */
-    semaphore_wait(req->done_sem->id);
-
-    /* RESP here */
-    ret = req->resp.ret;
-    spinlock_lock(&portal_lock);
-    list_del(&req->this_node);
-    spinlock_unlock(&portal_lock);
-    semaphore_destroy(req->done_sem);
-    kfree(req);
-
-    if (arch_running_ring3()) {
-        portal_ctrl_config config;
-        config.cmd = PORTAL_CTRL_UNMMAP;
-        config.va = target_va;
-        config.target_pid = ptl->pid;
-        arch_syscall(portal_scall_handle, &config, sizeof(config));
-    } else {
-        shm_unshare(ptl->pid, target_va);
-    }
+    /* ④ tear down (kernel: shm_unshare + free req) */
+    cfg.cmd = PORTAL_CTRL_CLEANUP;
+    cfg.req = req;
+    arch_syscall(portal_scall_handle, &cfg, sizeof(cfg));
 
     return ret;
 }
 
-portal_req* portal_wait(u32 portal_id)
+portal_req* portal_wait(u32 portal_id, void** out_shm_va, u32* out_shm_size)
 {
-    portal* ptl = portal_get_by_tid(thread_get_tid());
-    if (!ptl)
-        return 0;
+    portal_ctrl_config cfg = {0};
 
-    /* Block until a client posts a request. */
-    semaphore_wait(ptl->req_sem->id);
-    return portal_get_req_by_id(ptl, portal_id);
+    /* ① park until a request arrives (tail-block) */
+    cfg.cmd = PORTAL_CTRL_WAIT;
+    cfg.client_id = portal_id;
+    arch_syscall(portal_scall_handle, &cfg, sizeof(cfg));
+
+    /* ② dequeue the request now that one is known to be pending */
+    cfg.cmd = PORTAL_CTRL_GET_REQ;
+    arch_syscall(portal_scall_handle, &cfg, sizeof(cfg));
+
+    if (!cfg.req)
+        return 0;
+    if (out_shm_va)
+        *out_shm_va = cfg.va;
+    if (out_shm_size)
+        *out_shm_size = (u32)cfg.va_size;
+    return cfg.req;
 }
 
-int portal_reply(portal_req* req)
+int portal_reply(portal_req* req, int resp_ret)
 {
-    portal* ptl;
+    portal_ctrl_config cfg = {0};
 
-    if (!req || !req->done_sem)
-        return E_INVAL;
-
-    ptl = portal_get_by_tid(thread_get_tid());
-    if (!ptl)
-        return E_NOTFOUND;
-
-    /* Wake exactly the client that posted @req. */
-    semaphore_signal(req->done_sem->id);
-
-    return 0;
+    cfg.cmd = PORTAL_CTRL_REPLY;
+    cfg.req = req;
+    cfg.ret = resp_ret;
+    return arch_syscall(portal_scall_handle, &cfg, sizeof(cfg));
 }
 
 module_init(portal_syscall_init);

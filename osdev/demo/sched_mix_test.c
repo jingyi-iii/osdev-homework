@@ -203,6 +203,7 @@ void sched_mix_test_main(void)
             if (tid >= 0) {
                 g_helper_tids[g_num_helpers] = tid;
                 g_num_helpers++;
+                thread_unblock(tid);
                 terminal_write("  Created KERNEL helper, TID=");
                 term_write_int("", tid);
             } else {
@@ -216,6 +217,7 @@ void sched_mix_test_main(void)
             if (tid >= 0) {
                 g_helper_tids[g_num_helpers] = tid;
                 g_num_helpers++;
+                thread_unblock(tid);
                 terminal_write("  Created USER helper, TID=");
                 term_write_int("", tid);
             } else {

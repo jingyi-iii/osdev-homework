@@ -124,6 +124,10 @@ static int platform_probe(struct driver *drv, struct device *dev)
         }
 
         platform_device_grant_capabilities(get_platform_device(dev));
+
+        /* Processes are born TS_PENDING now; start the server only after
+         * its capabilities are in place. */
+        proc_unblock(pid);
     } else {
         return E_DRV_PROBE;
     }

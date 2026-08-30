@@ -25,6 +25,8 @@ typedef struct proc_thread_ctrl_config {
     i32 tid;    // out param for create, in param for delete, block and unblock
     task_priv priv;
     task_entry_t entry;
+    u8* elf_start;
+    u8* elf_end;
     void* param;
 } proc_thread_ctrl_config;
 
@@ -75,7 +77,7 @@ typedef struct tcb {
     wait_queue*         waiting_on;
 } tcb;
 
-i32 thread_create       (task_priv priv, task_entry_t entry, void* param);
+i32     thread_create       (task_priv priv, task_entry_t entry, void* param);
 void    thread_exit         (i32 tid);
 void    thread_yield        (void);
 void    thread_block        (i32 tid);
@@ -84,7 +86,8 @@ int     thread_get_tid      (void);
 void*   thread_get_param    (void);
 tcb*    thread_get_by_tid   (i32 tid);
 
-i32 proc_create         (proc_priv priv, task_entry_t entry, void* param);
+i32     proc_create         (proc_priv priv, task_entry_t entry, void* param);
+i32     proc_load_from_elf  (u8* elf_start, u8* elf_end, void* param);
 void    proc_exit           (i32 pid);
 int     proc_block          (i32 pid);
 int     proc_unblock        (i32 pid);

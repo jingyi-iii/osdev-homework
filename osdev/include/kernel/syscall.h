@@ -20,13 +20,12 @@ typedef struct syscall {
 } syscall;
 
 /*
- * Register a handler and get an opaque handle back (>= 0), or a negative
- * errno.  The handle is allocated by this function — callers do NOT pick
- * their own minor number.  Called only at init time by kernel subsystems;
- * never reachable from user mode, so user processes cannot register
- * syscall handlers.
+ * Register a handler under a FIXED syscall number (see kernel/uapi.h)
+ * and return the number back (>= 0), or a negative errno.  The numbers
+ * are part of the user ABI — user-space ELF programs call them directly —
+ * so the same number can never be registered twice.
  */
-i32 syscall_register(syscall_handler_fn fn, size_t max_param_size);
+i32 syscall_register(i32 num, syscall_handler_fn fn, size_t max_param_size);
 int syscall_unregister(i32 handle);
 
 /* Dispatcher invoked by arch_syscall_entry (int $100).  Looks up the

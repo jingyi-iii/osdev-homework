@@ -1,11 +1,11 @@
 #include "drivers/timer_server.h"
 #include "drivers/log_server.h"
-#include "sync/spinlock.h"
+#include "user/uspinlock.h"
 #include "kernel/process.h"
 #include "kernel/io.h"
 
 struct timer_device {
-    spinlock* lock;
+    uspinlock lock;
     u16 cmos_addr;
     u16 cmos_data;
     rtc_time cached_time;  /* cached RTC time */
@@ -13,7 +13,7 @@ struct timer_device {
 };
 
 struct timer_device timer_device = {
-    .lock = NULL,
+    .lock = USPINLOCK_INIT,
     .cmos_addr = 0x70,
     .cmos_data = 0x71,
     .cached_time = {0},
@@ -135,10 +135,10 @@ void timer_get_time(rtc_time* time)
     if (!time)
         return;
 
-    spinlock_lock(timer_device.lock);
+    uspin_lock(&timer_device.lock);
     timer_update_rtc_time(&timer_device);
     *time = timer_device.cached_time;
-    spinlock_unlock(timer_device.lock);
+    uspin_unlock(&timer_device.lock);
 }
 
 int timer_read_time_str(char* buf, size_t size)
@@ -150,7 +150,7 @@ int timer_read_time_str(char* buf, size_t size)
     if (size < 20)
         return -1;
 
-    spinlock_lock(timer_device.lock);
+    uspin_lock(&timer_device.lock);
     timer_update_rtc_time(&timer_device);
     rtc_time* t = &timer_device.cached_time;
     buf[0]  = '0' + (t->century / 10);
@@ -173,7 +173,7 @@ int timer_read_time_str(char* buf, size_t size)
     buf[17] = '0' + (t->second / 10);
     buf[18] = '0' + (t->second % 10);
     buf[19] = '\0';
-    spinlock_unlock(timer_device.lock);
+    uspin_unlock(&timer_device.lock);
 
     return 19;
 }
@@ -283,11 +283,8 @@ int timer_server_start(struct device* dev)
 {
     (void)dev;
 
-    if (!timer_device.lock) {
-        timer_device.lock = spinlock_alloc();
-        if (!timer_device.lock)
-            return E_LIMIT;
-    }
+    /* The lock is embedded (USPINLOCK_INIT); the server needs no kernel
+     * lock object. */
     timer_device.cmos_addr = 0x70;
     timer_device.cmos_data = 0x71;
     timer_device.ready = 1;

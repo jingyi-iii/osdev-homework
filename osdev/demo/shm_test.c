@@ -129,7 +129,11 @@ void shm_test_main(void)
     shm_source_size = SHM_TEST_SIZE;
 
     /* 2. spawn the target process (USER: all processes share the address space) */
-    proc_create(PROC_PRIV_USER, shm_target_main, 0);
+    {
+        int spawn_pid = proc_create(PROC_PRIV_USER, shm_target_main, 0);
+        if (spawn_pid >= 0)
+            proc_unblock(spawn_pid);
+    }
     while (!shm_target_ready)
         thread_yield();
 
@@ -279,7 +283,11 @@ void shm_stress_main(void)
     }
     shm_stress_size = SHM_STRESS_PAGES * PAGE_SIZE;
 
-    proc_create(PROC_PRIV_USER, shm_stress_target_main, 0);
+    {
+        int spawn_pid = proc_create(PROC_PRIV_USER, shm_stress_target_main, 0);
+        if (spawn_pid >= 0)
+            proc_unblock(spawn_pid);
+    }
     while (!shm_stress_ready)
         thread_yield();
 

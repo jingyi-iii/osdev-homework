@@ -16,12 +16,14 @@
  *******************************************************************************/
 
 #include "drivers/terminal_server.h"
-#include "sync/spinlock.h"
 #include "drivers/kb_server.h"
-#include "mm/heap.h"
+#include "user/userheap.h"
+#include "user/uspinlock.h"
+#include "ipc/portal.h"
 #include "lib/string.h"
 #include "kernel/process.h"
 #include "kernel/io.h"
+#include "kernel/uapi.h"
 #include "arch_irq.h"
 #include "regs.h"
 
@@ -34,7 +36,7 @@
 
 struct terminal_device {
     struct platform_bus_ops* bus_ops;   /* set at start(): RING3-safe wrappers */
-    spinlock* lock;
+    uspinlock lock;
     u16* vga_buffer;
     size_t curr_row;
     size_t curr_col;
@@ -42,7 +44,7 @@ struct terminal_device {
 };
 
 static struct terminal_device term_device = {
-    .lock = NULL,
+    .lock = USPINLOCK_INIT,
     .vga_buffer = (u16*)VGA_BUF_ADDR,
     .curr_row = 0,
     .curr_col = 0,
@@ -71,26 +73,28 @@ static struct platform_bus_ops term_bus_ops = {
     .out_port8 = term_out8,
 };
 
-/* ---- IRQ-safe terminal lock -------------------------------------------
- * Terminal state is touched from RING3 apps and from kernel threads.  On
- * this single-CPU kernel, cli around the spinlock prevents a holder from
- * being preempted by an interrupt handler that takes the same lock.
- * RING3 now runs with IOPL=0 (see task.c), so cli is only available at
- * CPL0; at CPL3 mutual exclusion relies on the spinlock alone.  pushf/popf
- * restores the previous IF (popfl at CPL3 ignores the IF/IOPL bits). */
+/* ---- terminal lock -----------------------------------------------------
+ * Terminal state is touched from RING3 apps and from kernel threads (the
+ * console syscall handler, crash_cmd).  Mutual exclusion is a user-mode
+ * spinlock (uspinlock — atomic RMW, legal at both CPL0 and CPL3).
+ * On this single-CPU kernel, cli around the lock prevents a CPL0 holder
+ * from being preempted by an interrupt handler; RING3 runs with IOPL=0
+ * (see task.c), so cli is only available at CPL0 — at CPL3 mutual
+ * exclusion relies on the spinlock alone.  pushf/popf restores the
+ * previous IF (popfl at CPL3 ignores the IF/IOPL bits). */
 static u32 term_lock(void)
 {
     u32 eflags;
     __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags) : : "memory");
     if (!arch_running_ring3())
         arch_cli();
-    spinlock_lock(term_device.lock);
+    uspin_lock(&term_device.lock);
     return eflags;
 }
 
 static void term_unlock(u32 eflags)
 {
-    spinlock_unlock(term_device.lock);
+    uspin_unlock(&term_device.lock);
     __asm__ __volatile__("pushl %0; popfl" : : "r"(eflags) : "memory");
 }
 
@@ -300,7 +304,10 @@ struct terminal_cmd_entry {
 
 static char input_buf[CMD_BUF_SIZE];
 static list_node cmd_registry;
-static spinlock* cmd_lock = NULL;
+/* Command registry guard.  Pure ring-3 domain: register/unregister and
+ * dispatch all run inside user server processes, so a user-mode spinlock
+ * suffices — no kernel lock object, and no cli (unavailable at CPL3). */
+static uspinlock cmd_registry_lock = USPINLOCK_INIT;
 static int cmd_ready = 0;
 
 static void cmd_init(void)
@@ -309,27 +316,11 @@ static void cmd_init(void)
         return;
 
     list_init(&cmd_registry);
-    cmd_lock = spinlock_alloc();
-    if (cmd_lock)
-        cmd_ready = 1;
+    cmd_ready = 1;
 }
 
-/* IRQ-safe guard for the command registry (same rationale as term_lock) */
-static u32 cmd_lock_irq(void)
-{
-    u32 eflags;
-    __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags) : : "memory");
-    if (!arch_running_ring3())
-        arch_cli();
-    spinlock_lock(cmd_lock);
-    return eflags;
-}
-
-static void cmd_unlock_irq(u32 eflags)
-{
-    spinlock_unlock(cmd_lock);
-    __asm__ __volatile__("pushl %0; popfl" : : "r"(eflags) : "memory");
-}
+static void cmd_lock(void)   { uspin_lock(&cmd_registry_lock); }
+static void cmd_unlock(void) { uspin_unlock(&cmd_registry_lock); }
 
 static int str_cmp(const char* a, const char* b, size_t max)
 {
@@ -503,7 +494,7 @@ int terminal_register_cmd(const char* name, terminal_cmd_fn callback)
         return E_NOTREADY;
 
     struct terminal_cmd_entry* entry =
-        (struct terminal_cmd_entry*)kmalloc(sizeof(*entry));
+        (struct terminal_cmd_entry*)malloc(sizeof(*entry));
     if (!entry)
         return E_NOMEM;
 
@@ -514,9 +505,9 @@ int terminal_register_cmd(const char* name, terminal_cmd_fn callback)
     entry->callback = callback;
     list_init(&entry->node);
 
-    u32 eflags = cmd_lock_irq();
+    cmd_lock();
     list_add(&entry->node, &cmd_registry);
-    cmd_unlock_irq(eflags);
+    cmd_unlock();
 
     return 0;
 }
@@ -526,18 +517,18 @@ void terminal_unregister_cmd(const char* name)
     if (!name || !cmd_ready)
         return;
 
-    u32 eflags = cmd_lock_irq();
+    cmd_lock();
     list_for_each(pos, &cmd_registry) {
         struct terminal_cmd_entry* entry =
             list_entry(pos, struct terminal_cmd_entry, node);
         if (str_cmp(entry->name, name, CMD_NAME_MAX)) {
             list_del(&entry->node);
-            cmd_unlock_irq(eflags);
-            kfree(entry);
+            cmd_unlock();
+            free(entry);
             return;
         }
     }
-    cmd_unlock_irq(eflags);
+    cmd_unlock();
 }
 
 /************************************************************************/
@@ -563,7 +554,7 @@ static void terminal_kb_handler(const char* data, size_t size)
 
         int matched = 0;
         if (cmd_ready && input_len > 0) {
-            u32 eflags = cmd_lock_irq();
+            cmd_lock();
             list_for_each(pos, &cmd_registry) {
                 struct terminal_cmd_entry* entry =
                     list_entry(pos, struct terminal_cmd_entry, node);
@@ -590,7 +581,7 @@ static void terminal_kb_handler(const char* data, size_t size)
                     break;
                 }
             }
-            cmd_unlock_irq(eflags);
+            cmd_unlock();
         }
 
         if (!matched && input_len > 0) {
@@ -636,23 +627,53 @@ static void terminal_server_loop(void)
 {
     /* Keyboard echo and command dispatch are driven by the kb_server
      * callback (kb_server → kb_register_callback → terminal_kb_handler).
-     * This server thread simply idles, keeping the server process alive. */
-    for (;;)
-        thread_yield();
+     * This server thread also services the console portal: user-mode ELF
+     * programs send their output as portal requests whose payload is
+     * shm-mapped into this process, and we print it.  The portal id is a
+     * fixed well-known ABI constant (PORTAL_ID_CONSOLE) so separately-
+     * linked user programs can reach us without a kernel symbol. */
+    u32 portal_id = 0;
+
+    if (portal_init_fixed(PORTAL_ID_CONSOLE, &portal_id) != 0) {
+        /* Publishing the well-known console portal failed (should not
+         * happen at boot); keep the server process alive anyway. */
+        for (;;)
+            thread_yield();
+    }
+
+    for (;;) {
+        void* shm_va = 0;
+        u32   shm_size = 0;
+        portal_req* req = portal_wait(PORTAL_ID_ANY, &shm_va, &shm_size);
+        if (!req) {
+            /* Spurious wakeup (request already consumed): wait again. */
+            continue;
+        }
+
+        if (shm_va && shm_size) {
+            /* The shm payload is not guaranteed to be NUL-terminated, so
+             * print a private NUL-terminated copy (user heap). */
+            char* buf = (char*)malloc(shm_size + 1);
+            if (buf) {
+                memcpy(buf, shm_va, shm_size);
+                buf[shm_size] = 0;
+                terminal_write(buf);
+                free(buf);
+            }
+        }
+
+        portal_reply(req, 0);
+    }
 }
 
 int terminal_start(struct device* dev)
 {
     (void)dev;
 
-    /* DRIVER_CLASS_USER drivers never get probe() called, so allocate the
-     * terminal lock here (inside the server process) instead.  Before this
-     * runs, term_lock() still provides mutual exclusion via cli alone. */
-    if (!term_device.lock) {
-        term_device.lock = spinlock_alloc();
-        if (!term_device.lock)
-            return E_LIMIT;
-    }
+    /* DRIVER_CLASS_USER drivers never get probe() called.  The terminal
+     * lock is embedded (USPINLOCK_INIT) — no kernel lock object.  Before
+     * this runs, term_lock() still provides mutual exclusion via cli
+     * alone at CPL0. */
 
     /* Attach RING3-safe VGA I/O (raw in/out — user threads have IOPL=3) */
     term_device.bus_ops = &term_bus_ops;

@@ -47,7 +47,17 @@ void vmm_free_pages(vmm_control_block* vcb, void* va);
 void* vmm_map_memory(pcb* proc, u32 phys_addr, size_t size, u32 flags);
 int   vmm_unmap_memory(pcb* proc, void* virt_addr, size_t size);
 
-int vmm_lookup_region(pcb* proc, u32 va, u32* out_pa, u32* out_pa_size);
+/*
+ * vmm_map_fixed - map @size bytes of physical memory at a FIXED virtual
+ * address (the caller's choice, e.g. an ELF segment's linked VA).
+ * Requires the caller to hold a CAP_MAP_MEM capability covering the range.
+ * The pages are recorded as owned (freed on address-space destroy).
+ * Returns 0 or a negative errno.
+ */
+int vmm_map_fixed(pcb* proc, u32 phys_addr, void* vaddr, size_t size, u32 flags);
+
+int vmm_lookup_region(pcb* proc, u32 va, u32* out_pa, u32* out_pa_size,
+                      void** out_start_va);
 u32 vmm_va_to_pa(pcb* proc, u32 va);
 
 /*

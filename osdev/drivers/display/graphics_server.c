@@ -17,7 +17,7 @@
  *******************************************************************************/
 
 #include "drivers/graphics_server.h"
-#include "sync/spinlock.h"
+#include "user/uspinlock.h"
 #include "drivers/log_server.h"
 #include "kernel/process.h"
 #include "kernel/io.h"
@@ -55,7 +55,7 @@
 
 struct graphics_device {
     struct platform_bus_ops* bus_ops;
-    spinlock* lock;
+    uspinlock lock;    /* user-mode spinlock (gfx_* run at ring-3) */
     u8* fb;            /* framebuffer pointer (0xA0000) */
     size_t    curr_col;     /* cursor column (0..GFX_COLS-1) */
     size_t    curr_row;     /* cursor row    (0..GFX_ROWS-1) */
@@ -64,7 +64,7 @@ struct graphics_device {
 };
 
 static struct graphics_device gfx_dev = {
-    .lock     = NULL,
+    .lock     = USPINLOCK_INIT,
     .fb       = (u8*)GFX_BUF_ADDR,
     .curr_col = 0,
     .curr_row = 0,
@@ -441,12 +441,8 @@ int gfx_server_start(struct device* dev)
     (void)dev;
 
     /* DRIVER_CLASS_USER drivers never get probe() called, so attach the
-     * RING3-safe VGA I/O wrapper and allocate the lock here instead. */
-    if (!gfx_dev.lock) {
-        gfx_dev.lock = spinlock_alloc();
-        if (!gfx_dev.lock)
-            return E_LIMIT;
-    }
+     * RING3-safe VGA I/O wrapper here instead.  The user spinlock is
+     * embedded (USPINLOCK_INIT), no allocation needed. */
     gfx_dev.bus_ops = &gfx_bus_ops;
     gfx_dev.fb = (u8*)GFX_BUF_ADDR;
 
@@ -479,11 +475,6 @@ static struct driver graphics_server = {
  * then only keeps the server process alive. */
 void gfx_server_init(void)
 {
-    if (!gfx_dev.lock) {
-        gfx_dev.lock = spinlock_alloc();
-        if (!gfx_dev.lock)
-            return;
-    }
     gfx_dev.bus_ops = &gfx_bus_ops;
     gfx_dev.fb = (u8*)GFX_BUF_ADDR;
 
@@ -508,7 +499,7 @@ void gfx_clear(u8 color)
 {
     struct graphics_device* dev = &gfx_dev;
 
-    spinlock_lock(dev->lock);
+    uspin_lock(&dev->lock);
 
     u8* fb = dev->fb;
     size_t total = GFX_WIDTH * GFX_HEIGHT;
@@ -518,7 +509,7 @@ void gfx_clear(u8 color)
     dev->curr_col = 0;
     dev->curr_row = 0;
 
-    spinlock_unlock(dev->lock);
+    uspin_unlock(&dev->lock);
 }
 
 void gfx_put_pixel(size_t x, size_t y, u8 color)
@@ -528,9 +519,9 @@ void gfx_put_pixel(size_t x, size_t y, u8 color)
 
     struct graphics_device* dev = &gfx_dev;
 
-    spinlock_lock(dev->lock);
+    uspin_lock(&dev->lock);
     dev->fb[y * GFX_WIDTH + x] = color;
-    spinlock_unlock(dev->lock);
+    uspin_unlock(&dev->lock);
 }
 
 void gfx_fill_rect(size_t x, size_t y, size_t w, size_t h, u8 color)
@@ -541,7 +532,7 @@ void gfx_fill_rect(size_t x, size_t y, size_t w, size_t h, u8 color)
 
     struct graphics_device* dev = &gfx_dev;
 
-    spinlock_lock(dev->lock);
+    uspin_lock(&dev->lock);
 
     u8* fb = dev->fb;
     for (size_t row = y; row < y + h; row++) {
@@ -550,7 +541,7 @@ void gfx_fill_rect(size_t x, size_t y, size_t w, size_t h, u8 color)
             fb[offset + col] = color;
     }
 
-    spinlock_unlock(dev->lock);
+    uspin_unlock(&dev->lock);
 }
 
 /* Internal renderer — the caller must hold dev->lock. */
@@ -583,9 +574,9 @@ void gfx_put_char(char c, size_t col, size_t row, u8 fg, u8 bg)
 {
     struct graphics_device* dev = &gfx_dev;
 
-    spinlock_lock(dev->lock);
+    uspin_lock(&dev->lock);
     gfx_put_char_locked(c, col, row, fg, bg);
-    spinlock_unlock(dev->lock);
+    uspin_unlock(&dev->lock);
 }
 
 void gfx_write(const char* str, size_t col, size_t row, u8 fg, u8 bg)
@@ -636,16 +627,16 @@ void gfx_scroll(u8 bg)
 {
     struct graphics_device* dev = &gfx_dev;
 
-    spinlock_lock(dev->lock);
+    uspin_lock(&dev->lock);
     gfx_scroll_locked(bg);
-    spinlock_unlock(dev->lock);
+    uspin_unlock(&dev->lock);
 }
 
 void gfx_putchar(char c)
 {
     struct graphics_device* dev = &gfx_dev;
 
-    spinlock_lock(dev->lock);
+    uspin_lock(&dev->lock);
 
     if (c == '\n') {
         dev->curr_col = 0;
@@ -675,7 +666,7 @@ void gfx_putchar(char c)
         gfx_scroll_locked(dev->curr_bg);
     }
 
-    spinlock_unlock(dev->lock);
+    uspin_unlock(&dev->lock);
 }
 
 void gfx_get_cursor(size_t* col, size_t* row)

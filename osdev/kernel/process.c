@@ -7,8 +7,10 @@
 #include "drivers/log_server.h"
 #include "kernel/irq.h"
 #include "kernel/syscall.h"
+#include "kernel/uapi.h"
 #include "ipc/mailbox.h"
 #include "kernel/capability.h"
+#include "lib/elf.h"
 
 extern mailbox* alloc_mailbox(int owner_pid, int owner_tid);
 extern void release_mailbox(mailbox* mb);
@@ -20,6 +22,7 @@ enum proc_thread_ctrl {
     THREAD_CTRL_BLOCK,
     THREAD_CTRL_UNBLOCK,
     PROC_CTRL_CREATE,
+    PROC_CTRL_LOAD_FROM_ELF,
     PROC_CTRL_EXIT,
     PROC_CTRL_BLOCK,
     PROC_CTRL_UNBLOCK,
@@ -120,7 +123,8 @@ static void switch_address_space(tcb* old, tcb* next)
     vmm_switch(&next->parent->vcb);
 }
 
-static i32 t_create(pcb* parent, task_priv priv, task_entry_t entry, void* param)
+static i32 t_create_ex(pcb* parent, task_priv priv, task_entry_t entry,
+                       void* param, thread_state initial_state)
 {
     tcb* thread = 0;
     static u32 tid = 0;
@@ -170,9 +174,12 @@ static i32 t_create(pcb* parent, task_priv priv, task_entry_t entry, void* param
     spinlock_unlock(parent->sp_lock);
 
     list_add(&thread->this_node, &thread_head);
-    thread->state = TS_READY;
+    thread->state = initial_state;
 
     if (!thread_run) {    // the first thread
+        /* The boot thread is switched to directly and must be runnable,
+         * even though the default creation state is now TS_PENDING. */
+        thread->state = TS_READY;
         thread_run = thread;
         /*
          * The very first thread is switched to directly (no scheduler
@@ -195,6 +202,15 @@ static i32 t_create(pcb* parent, task_priv priv, task_entry_t entry, void* param
     LOG("add thread, tid %d", thread->tid);
 
     return thread->tid;
+}
+
+/*
+ * t_create - create a thread in TS_PENDING (not scheduled).  The caller
+ * must thread_unblock(tid) to let it run — explicit start semantics.
+ */
+static i32 t_create(pcb* parent, task_priv priv, task_entry_t entry, void* param)
+{
+    return t_create_ex(parent, priv, entry, param, TS_PENDING);
 }
 
 static void t_delete(i32 tid)
@@ -384,7 +400,8 @@ static void t_yield(void)
     spinlock_unlock_irqrestore(schedule_lock, eflags);
 }
 
-static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
+static int p_create_ex(proc_priv priv, task_entry_t main_thread_entry, void* param,
+                       thread_state initial_state)
 {
     static u32 pid = 0;
     int ret = 0;
@@ -440,7 +457,8 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
     list_add(&proc->this_node, &proc_head);
     spinlock_unlock_irqrestore(schedule_lock, eflags);
 
-    ret = t_create(proc, (task_priv)priv, main_thread_entry, proc->param);
+    ret = t_create_ex(proc, (task_priv)priv, main_thread_entry, proc->param,
+                      initial_state);
     if (ret >= 0)
         return proc->pid;
 
@@ -455,6 +473,16 @@ static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
     kfree(proc);
 
     return ret;
+}
+
+/*
+ * p_create - create a process whose main thread is born TS_PENDING.
+ * The caller must proc_unblock(pid) to let it run — explicit start
+ * semantics (the ELF loader maps the address space before unblocking).
+ */
+static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
+{
+    return p_create_ex(priv, main_thread_entry, param, TS_PENDING);
 }
 
 static void p_exit(i32 pid)
@@ -720,6 +748,9 @@ static int syscall_isr(void* data)
     case PROC_CTRL_CREATE:
         config->pid = p_create((proc_priv)config->priv, config->entry, config->param);
         break;
+    case PROC_CTRL_LOAD_FROM_ELF:
+        config->pid = proc_load_from_elf(config->elf_start, config->elf_end, config->param);
+        break;
     case PROC_CTRL_EXIT:
         p_exit(config->pid);
         break;
@@ -752,7 +783,7 @@ static void proc_env_init(void)
     if (schedule_irq)
         irq_unmask(schedule_irq);
 
-    proc_scall_handle = syscall_register(syscall_isr, sizeof(proc_thread_ctrl_config));
+    proc_scall_handle = syscall_register(SYSCALL_PROC_THREAD, syscall_isr, sizeof(proc_thread_ctrl_config));
 
 #ifdef PROCESS_SUPPORT_MAILBOX
     mailbox_syscall_init();
@@ -936,6 +967,91 @@ i32 proc_create(proc_priv priv, task_entry_t entry, void* param)
 
     /* Ring-0 inside a gate: create directly. */
     return p_create(priv, entry, param);
+}
+
+i32 proc_load_from_elf(u8* elf_start, u8* elf_end, void* param)
+{
+    if (!may_run_direct()) {
+        proc_thread_ctrl_config config = {0};
+        config.cmd = PROC_CTRL_LOAD_FROM_ELF;
+        config.priv = (task_priv)PROC_PRIV_USER;
+        config.elf_start = elf_start;
+        config.elf_end = elf_end;
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
+
+        return config.pid;
+    }
+
+    /*
+     * Sanity-check the image range FIRST.  elf_end <= elf_start would
+     * make (u32)(elf_end - elf_start) wrap to 0 or a huge value, which
+     * would bypass the bounds checks inside elf_validate()/elf_load().
+     */
+    if (!elf_start || elf_end <= elf_start)
+        return E_INVAL;
+
+    u32 image_size = (u32)(elf_end - elf_start);
+    if (image_size < sizeof(elf32_ehdr)) {
+        LOG("user elf: image too small (%u)", image_size);
+        return E_INVAL;
+    }
+
+    /*
+     * The image may live in user memory (CPL3 caller through the gate)
+     * or in the kernel's own .data (ring-0 caller with the embedded ELF).
+     * copy_from_user() validates the whole range against the CURRENT
+     * page table (CR3 = caller's while inside the gate) and copies it
+     * atomically into a kernel buffer, so elf_validate()/elf_load() never
+     * dereference an untrusted or unmapped pointer.  The embedded kernel
+     * image (low identity map, PTE_USER) passes the same range check.
+     */
+    u8* image = kmalloc(image_size);
+    if (!image)
+        return E_NOMEM;
+
+    if (copy_from_user(image, elf_start, image_size) != 0) {
+        LOG("user elf: image not readable");
+        kfree(image);
+        return E_FAULT;
+    }
+
+    int ret = elf_validate((const elf32_ehdr*)image, image_size);
+    if (ret) {
+        LOG("user elf: validation failed (%d)", ret);
+        kfree(image);
+        return ret;
+    }
+
+    u32 entry = ((const elf32_ehdr*)image)->entry;
+    if (entry >= USER_SPACE_TOP) {
+        LOG("user elf: bad entry 0x%x", entry);
+        kfree(image);
+        return E_INVAL;
+    }
+
+    i32 pid = proc_create(PROC_PRIV_USER, (task_entry_t)(uptr)entry, param);
+    if (pid < 0) {
+        LOG("user elf: proc_create failed (%d)", pid);
+        kfree(image);
+        return pid;
+    }
+
+    pcb* proc = get_process_by_pid(pid);
+    if (!proc) {
+        kfree(image);
+        proc_exit(pid);
+        return E_NOTFOUND;
+    }
+
+    ret = elf_load(proc, image, image_size, &entry);
+    kfree(image);
+    if (ret) {
+        LOG("user elf: load failed (%d)", ret);
+        proc_exit(pid);
+        return ret;
+    }
+
+    return pid;
 }
 
 void proc_exit(i32 pid)

@@ -17,34 +17,33 @@ static spinlock syscall_lock = { .state = LOCK_UNLOCKED };
  */
 static spinlock copy_lock = { .state = LOCK_UNLOCKED };
 
-i32 syscall_register(syscall_handler_fn fn, size_t max_param_size)
+i32 syscall_register(i32 num, syscall_handler_fn fn, size_t max_param_size)
 {
-    static i32 handle = 0;
-    i32 new_handle;
-
-    if (!fn)
+    if (!fn || num < 0)
         return E_INVAL;
 
     syscall* sc = kmalloc(sizeof(syscall));
     if (!sc)
         return E_NOMEM;
 
+    sc->handle = num;
     sc->fn = fn;
     sc->max_param_size = max_param_size;
     list_init(&sc->this_node);
 
     spinlock_lock(&syscall_lock);
-    if (handle < 0) {           /* i32 handle space exhausted */
-        spinlock_unlock(&syscall_lock);
-        kfree(sc);
-        return E_OVERFLOW;
+    list_for_each(node, &syscall_header) {
+        syscall* ex = list_entry(node, syscall, this_node);
+        if (ex->handle == num) {
+            spinlock_unlock(&syscall_lock);
+            kfree(sc);
+            return E_EXISTS;
+        }
     }
-    new_handle = handle++;
-    sc->handle = new_handle;
     list_add(&sc->this_node, &syscall_header);
     spinlock_unlock(&syscall_lock);
 
-    return new_handle;
+    return num;
 }
 
 int syscall_unregister(i32 handle)

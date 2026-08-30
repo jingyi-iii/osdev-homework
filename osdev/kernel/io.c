@@ -1,5 +1,6 @@
 #include "kernel/io.h"
 #include "kernel/syscall.h"
+#include "kernel/uapi.h"
 #include "arch_irq.h"
 #include "lib/module.h"
 #include "lib/types.h"
@@ -193,7 +194,7 @@ static int io_syscall_isr(void* data)
 
 void io_syscall_init(void)
 {
-    io_scall_handle = syscall_register(io_syscall_isr, sizeof(io_syscall_data));
+    io_scall_handle = syscall_register(SYSCALL_IO, io_syscall_isr, sizeof(io_syscall_data));
 }
 
 void io_syscall_exit(void)

@@ -1,6 +1,7 @@
 #include "arch_irq.h"
 #include "kernel/irq.h"
 #include "kernel/syscall.h"
+#include "kernel/uapi.h"
 #include "lib/string.h"
 #include "lib/module.h"
 #include "drivers/log_server.h"
@@ -455,6 +456,11 @@ int irq_request_threaded(irq **out, const char* name, u32 major, u32 minor,
         return err;
     }
 
+    /* Threads are born TS_PENDING now; start the handler thread.  It
+     * immediately blocks on this->sem, so this is safe even though the
+     * IRQ is still masked. */
+    thread_unblock((*out)->kernel_irq_tid);
+
     return 0;
 }
 
@@ -608,7 +614,7 @@ static int irq_syscall_handler(void* context)
 
 void irq_syscall_init(void)
 {
-    irq_scall_handle = syscall_register(irq_syscall_handler, sizeof(irq_syscall_data));
+    irq_scall_handle = syscall_register(SYSCALL_IRQ, irq_syscall_handler, sizeof(irq_syscall_data));
 }
 
 void irq_syscall_exit(void)

@@ -5,6 +5,7 @@
 #include "kernel/capability.h"
 #include "kernel/irq.h"
 #include "kernel/syscall.h"
+#include "kernel/uapi.h"
 #include "arch_irq.h"
 #include "lib/module.h"
 
@@ -410,7 +411,8 @@ static int vmm_mmap_release(vmm_control_block* vcb, void* va, u32 size,
     return found ? 0 : EINVAL;
 }
 
-int vmm_lookup_region(pcb* proc, u32 va, u32* out_pa, u32* out_pa_size)
+int vmm_lookup_region(pcb* proc, u32 va, u32* out_pa, u32* out_pa_size,
+                      void** out_start_va)
 {
     vmm_region* region = 0;
     int found = 0;
@@ -429,6 +431,8 @@ int vmm_lookup_region(pcb* proc, u32 va, u32* out_pa, u32* out_pa_size)
             found = 1;
             *out_pa = region->pa;
             *out_pa_size = region->size;
+            if (out_start_va)
+                *out_start_va = region->start_va;
             break;
         }
     }
@@ -488,6 +492,70 @@ void* vmm_map_memory(pcb* proc, u32 phys_addr, size_t size, u32 flags)
     return (void*)((u8*)va + offset);
 }
 
+int vmm_map_fixed(pcb* proc, u32 phys_addr, void* vaddr, size_t size, u32 flags)
+{
+    cap_mem mem = {phys_addr, size, flags};
+    vmm_region* region = 0;
+    u32 vs = (u32)vaddr;
+    u32 npages = size / PAGE_SIZE;
+
+    if (!proc)
+        return E_INVAL;
+    if ((phys_addr & (PAGE_SIZE - 1)) || (vs & (PAGE_SIZE - 1)))
+        return E_INVAL;
+    if (size == 0 || (size & (PAGE_SIZE - 1)))
+        return E_INVAL;
+
+    if (cap_check(proc, CAP_MAP_MEM, &mem) != 0)
+        return E_PERM;
+
+    region = kmalloc(sizeof(vmm_region));
+    if (!region)
+        return E_NOMEM;
+
+    if (spinlock_lock(proc->vcb.lock) != 0) {
+        kfree(region);
+        return E_INVAL;
+    }
+
+    /* Refuse to overlap an existing region. */
+    rbtree_for_each(node, proc->vcb.tree) {
+        vmm_region* r = rb_entry(node, vmm_region, node);
+        u32 rs = (u32)r->start_va;
+        if (vs < rs + r->size && rs < vs + size) {
+            spinlock_unlock(proc->vcb.lock);
+            kfree(region);
+            return E_EXISTS;
+        }
+    }
+
+    region->start_va = vaddr;
+    region->size     = size;
+    region->flags    = flags;
+    region->pa       = phys_addr;
+    region->own_phys = 1;   /* caller (ELF loader) owns the pages */
+    rbtree_insert(proc->vcb.tree, &region->node, vmm_rbtree_node_cmp);
+    spinlock_unlock(proc->vcb.lock);
+
+    for (u32 i = 0; i < npages; i++) {
+        if (arch_map_4kb((void*)proc->vcb.cr3,
+                         (u8*)vaddr + i * PAGE_SIZE,
+                         (void*)(phys_addr + i * PAGE_SIZE), flags) != 0) {
+            /* roll back: unmap what was mapped, drop the region */
+            for (u32 j = 0; j < i; j++)
+                arch_unmap_4kb((void*)proc->vcb.cr3,
+                               (u8*)vaddr + j * PAGE_SIZE);
+            spinlock_lock(proc->vcb.lock);
+            rbtree_delete(proc->vcb.tree, &region->node);
+            spinlock_unlock(proc->vcb.lock);
+            kfree(region);
+            return E_LIMIT;
+        }
+    }
+
+    return 0;
+}
+
 int vmm_unmap_memory(pcb* proc, void* virt_addr, size_t size)
 {
     /* RING3 caller: route through the syscall gate (privileged invlpg). */
@@ -511,7 +579,7 @@ int vmm_unmap_memory(pcb* proc, void* virt_addr, size_t size)
     if (!proc)
         return EINVAL;
 
-    ret = vmm_lookup_region(proc, (u32)virt_addr, &pa, &pa_size);
+    ret = vmm_lookup_region(proc, (u32)virt_addr, &pa, &pa_size, 0);
     if (ret)
         return E_NOTFOUND;
 
@@ -621,7 +689,7 @@ static int vmm_syscall_isr(void* context)
 
 void vmm_syscall_init(void)
 {
-    vmm_scall_handle = syscall_register(vmm_syscall_isr, sizeof(vmm_syscall_data));
+    vmm_scall_handle = syscall_register(SYSCALL_VMM, vmm_syscall_isr, sizeof(vmm_syscall_data));
 }
 
 void vmm_syscall_exit(void)
