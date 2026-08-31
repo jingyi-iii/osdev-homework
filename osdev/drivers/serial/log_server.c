@@ -115,14 +115,23 @@ static struct driver log_server = {
 /* log_init() is provided by kernel/log.h (pure-IO klog init).  The LOG()
  * macro no longer routes through this server. */
 
-/* Register the user-mode log server.  Called from init_thread() once the
- * scheduler is up (like kb_server_init / terminal_init). */
+/* Hardware resources the log server process needs. */
+static const struct platform_resource log_server_resources[] = {
+    { .type = PLAT_RES_IO, .io = { .base = 0x3F8, .size = 8 } },  /* COM1 0x3F8-0x3FF */
+    { .type = PLAT_RES_IO, .io = { .base = 0x70, .size = 2 } },  /* CMOS 0x70-0x71: LOG() timestamps */
+};
+
+/* Start the user-mode log server directly (no platform bus probing).
+ * Called from init_thread() once the scheduler is up (like kb_server_init
+ * / terminal_init). */
 void log_server_init(void)
 {
-    platform_driver_register(&log_server);
+    platform_user_server_start(&log_server, log_server_resources,
+                               sizeof(log_server_resources) /
+                               sizeof(log_server_resources[0]));
 }
 
 void log_exit(void)
 {
-    platform_driver_unregister(&log_server);
+    /* Server processes are never stopped in this design. */
 }

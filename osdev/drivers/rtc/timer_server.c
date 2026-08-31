@@ -309,9 +309,20 @@ static struct driver timer_server = {
     .stop  = timer_server_stop,
 };
 
-/* Register the user-mode timer server.  Called from init_thread() once the
- * scheduler is up (like terminal_init / log_server_init). */
+/* Hardware resources the timer server process needs. */
+static const struct platform_resource timer_server_resources[] = {
+    { .type = PLAT_RES_IO, .io = { .base = 0x40, .size = 4 } },   /* PIT channels + command 0x40-0x43 */
+    { .type = PLAT_RES_IO, .io = { .base = 0x61, .size = 1 } },   /* PPI port B (PIT gate) */
+    { .type = PLAT_RES_IO, .io = { .base = 0x70, .size = 2 } },   /* CMOS address + data 0x70-0x71 */
+    { .type = PLAT_RES_IO, .io = { .base = 0x3F8, .size = 8 } },  /* COM1: ring-3 LOG() output */
+};
+
+/* Start the user-mode timer server directly (no platform bus probing).
+ * Called from init_thread() once the scheduler is up (like terminal_init
+ * / log_server_init). */
 void timer_server_init(void)
 {
-    platform_driver_register(&timer_server);
+    platform_user_server_start(&timer_server, timer_server_resources,
+                               sizeof(timer_server_resources) /
+                               sizeof(timer_server_resources[0]));
 }

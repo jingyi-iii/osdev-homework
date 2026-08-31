@@ -466,19 +466,29 @@ static struct driver graphics_server = {
     .stop  = gfx_server_stop,
 };
 
-/* Register the user-mode graphics server.  Called from init_thread().
+/* Hardware resources the graphics server process needs. */
+static const struct platform_resource graphics_server_resources[] = {
+    { .type = PLAT_RES_MEM, .mem = { .addr = 0xA0000, .size = 320 * 200 } },
+    { .type = PLAT_RES_IO,  .io  = { .base = 0x3C0, .size = 32 } },  /* VGA 0x3C0-0x3DF */
+    { .type = PLAT_RES_IO,  .io  = { .base = 0x3F8, .size = 8 } },  /* COM1: ring-3 LOG() output */
+    { .type = PLAT_RES_IO,  .io  = { .base = 0x70, .size = 2 } },  /* CMOS 0x70-0x71: LOG() timestamps */
+};
+
+/* Start the user-mode graphics server directly (no platform bus probing).
  *
  * The lock and RING3-safe VGA I/O wrapper are set up HERE (synchronously,
- * before platform_driver_register) so that any game process created right
- * after — which may be scheduled before the graphics server thread — finds
- * a working bus_ops when it calls gfx_switch_to_mode().  gfx_server_start()
- * then only keeps the server process alive. */
+ * before the server process is created) so that any game process created
+ * right after — which may be scheduled before the graphics server thread —
+ * finds a working bus_ops when it calls gfx_switch_to_mode().
+ * gfx_server_start() then only keeps the server process alive. */
 void gfx_server_init(void)
 {
     gfx_dev.bus_ops = &gfx_bus_ops;
     gfx_dev.fb = (u8*)GFX_BUF_ADDR;
 
-    platform_driver_register(&graphics_server);
+    platform_user_server_start(&graphics_server, graphics_server_resources,
+                               sizeof(graphics_server_resources) /
+                               sizeof(graphics_server_resources[0]));
 }
 
 /************************************************************************/

@@ -3,8 +3,7 @@
 #include "kernel/capability.h"
 #include "kernel/multiboot.h"
 #include "kernel/log.h"
-#include "drivers/terminal_server.h"
-#include "drivers/kb_server.h"
+#include "kernel/kterm.h"
 #include "lib/elf.h"
 #include "lib/string.h"
 
@@ -95,50 +94,36 @@ static i32 load_user_elf_by_name(const char* name)
     }
 
     LOG("user elf '%s': not found among %d GRUB modules", name, n);
+    /* Visible on-screen hint: the module is a GRUB multiboot module, so
+     * booting via `-kernel` (no modules) silently loads nothing. */
+    kterm_write("[launcher] ERROR: '");
+    kterm_write(name);
+    kterm_write("' not found among GRUB modules\n");
+    kterm_write("           (boot the ISO, e.g. make run -- not -kernel)\n");
     return 0;
 }
 
-/* ---- Boot prompt keyboard input ------------------------------------ */
-
-static volatile int boot_key = 0;
-
-static void boot_kb_handler(const char* data, size_t size)
-{
-    (void)size;
-    if (data && data[0] && !boot_key)
-        boot_key = (unsigned char)data[0];
-}
+/* ---- Boot: run the portal test directly ---------------------------- */
 
 void init_thread(void)
 {
     kb_server_init();
     terminal_init();
+    kterm_init();
     timer_server_init();
     log_server_init();
 
-    /* ---- Boot prompt: ask the user whether to run the user-mode portal
-     * test before loading it.  terminal_* write VGA directly (kernel-image
-     * driver); the kb server delivers keypresses via kb_register_callback.
+    /* ---- Boot: run the user-mode portal test directly (no keypress
+     * prompt).  The kernel's own output goes through kterm_* (pure port
+     * I/O on the VGA text buffer, decoupled from the user-mode terminal
+     * server).  terminal_init() above directly starts the ring-3 terminal
+     * server: it publishes the console portal (PORTAL_ID_CONSOLE) that
+     * portal_test.elf prints through.
      * ---- */
-    terminal_switch_to_text_mode();
-    terminal_flush(0);
-    terminal_write("\n========================================\n");
-    terminal_write("         USER PORTAL TEST LAUNCHER       \n");
-    terminal_write("========================================\n\n");
-    terminal_write("  Press 'y' to load and run portal_test.elf\n");
-    terminal_write("  (any other key skips the test)\n\n");
-
-    kb_register_callback(boot_kb_handler);
-    while (!boot_key)
-        thread_yield();
-    kb_unregister_callback(boot_kb_handler);
-
-    if (boot_key == 'y' || boot_key == 'Y') {
-        terminal_write("[launcher] running portal_test.elf\n");
-        load_user_elf_by_name("portal_test.elf");
-    } else {
-        terminal_write("[launcher] portal test skipped\n");
-    }
+    kterm_switch_to_text_mode();
+    kterm_clear();
+    kterm_write("[launcher] running portal_test.elf\n");
+    load_user_elf_by_name("portal_test.elf");
 
     proc_exit(proc_get_pid());
 }

@@ -1,9 +1,8 @@
 #include "lib/module.h"
 #include "kernel/log.h"
-#include "drivers/terminal_server.h"
+#include "kernel/kterm.h"
 #include "kernel/process.h"
 #include "kernel/init.h"
-#include "drivers/platform_devices.h"
 #include "kernel/process.h"
 #include "lib/string.h"
 
@@ -46,42 +45,41 @@ __attribute__((noinline))
 void crash_cmd(const char *args)
 {
     if (!args || !args[0]) {
-        terminal_write_color("crash: div0 | ud | pf | gp | bp\n", 0x0E);
+        kterm_write_color("crash: div0 | ud | pf | gp | bp\n", 0x0E);
         return;
     }
 
     if (strcmp(args, "div0") == 0) {
-        terminal_write_color("Triggering #DE (Divide Error)...\n", 0x0E);
+        kterm_write_color("Triggering #DE (Divide Error)...\n", 0x0E);
         volatile int zero = 0;
         volatile int x = 1 / zero;
         (void)x;
     } else if (strcmp(args, "ud") == 0) {
         __asm__ volatile ("ud2");
-        terminal_write_color("Triggering #UD (Invalid Opcode)...\n", 0x0E);
+        kterm_write_color("Triggering #UD (Invalid Opcode)...\n", 0x0E);
     } else if (strcmp(args, "pf") == 0) {
-        terminal_write_color("Triggering #PF (Page Fault) via NULL deref...\n", 0x0E);
+        kterm_write_color("Triggering #PF (Page Fault) via NULL deref...\n", 0x0E);
         *(volatile int *)0xDEAD0000 = 0;
     } else if (strcmp(args, "gp") == 0) {
-        terminal_write_color("Triggering #GP (General Protection Fault)...\n", 0x0E);
+        kterm_write_color("Triggering #GP (General Protection Fault)...\n", 0x0E);
         /* write to a non-writable segment — simplest: cli + hlt in ring3
          * but we're in ring0, so use a bogus port access */
         __asm__ volatile ("cli; hlt");
     } else if (strcmp(args, "bp") == 0) {
-        terminal_write_color("Triggering #BP (Breakpoint)...\n", 0x0E);
+        kterm_write_color("Triggering #BP (Breakpoint)...\n", 0x0E);
         __asm__ volatile ("int3");
     } else {
-        terminal_write_color("crash: unknown type. Try: div0 ud pf gp bp\n", 0x0E);
+        kterm_write_color("crash: unknown type. Try: div0 ud pf gp bp\n", 0x0E);
     }
 }
 
 void kernel_start(void)
 {
     /*
-     * Phase 1: Set up platform bus and log early so we can trace
-     * the paging bootstrap.
+     * Phase 1: Bring up klog early so we can trace the paging bootstrap.
+     * Driver servers are started directly from init_thread() via their
+     * *_init() functions — there is no platform bus probe.
      */
-    platform_bus_init();
-    platform_devices_init();
     log_init();
 
     /*

@@ -48,7 +48,10 @@ static struct terminal_device term_device = {
     .vga_buffer = (u16*)VGA_BUF_ADDR,
     .curr_row = 0,
     .curr_col = 0,
-    .curr_color = 0,
+    /* Light grey on black.  Boot output used to reset this via
+     * terminal_flush(); now the boot prompt goes through kterm, so the
+     * server must start with a visible color (0 == black-on-black). */
+    .curr_color = 0x07,
 };
 
 /* ---- RING3-safe VGA I/O -----------------------------------------------
@@ -250,6 +253,32 @@ static void cursor_update(size_t row, size_t col)
     ops->out_port8(VGA_CRT_DATA, (u8)(pos >> 8));
     ops->out_port8(VGA_CRT_ADDR, 0x0F);
     ops->out_port8(VGA_CRT_DATA, (u8)(pos & 0xFF));
+}
+
+/*
+ * Adopt the current hardware cursor position as the terminal state.
+ * The kernel's own boot output goes through kterm (kernel/kterm.c), which
+ * writes the same VGA hardware but keeps its own private state.  This
+ * server re-syncs from the CRT controller (the shared reference point)
+ * instead of sharing a cursor struct with the kernel.
+ */
+static void term_sync_cursor_from_hw(void)
+{
+    struct platform_bus_ops* ops = term_device.bus_ops;
+    if (!ops)
+        return;
+
+    int hi, lo;
+    u16 pos;
+
+    ops->out_port8(VGA_CRT_ADDR, 0x0E);
+    hi = ops->in_port8(VGA_CRT_DATA);
+    ops->out_port8(VGA_CRT_ADDR, 0x0F);
+    lo = ops->in_port8(VGA_CRT_DATA);
+
+    pos = (u16)((hi << 8) | lo);
+    term_device.curr_row = pos / VGA_WIDTH;
+    term_device.curr_col = pos % VGA_WIDTH;
 }
 
 /*
@@ -657,6 +686,9 @@ static void terminal_server_loop(void)
             if (buf) {
                 memcpy(buf, shm_va, shm_size);
                 buf[shm_size] = 0;
+                /* kterm may have written since we last printed; re-sync
+                 * with the hardware cursor before printing the payload. */
+                term_sync_cursor_from_hw();
                 terminal_write(buf);
                 free(buf);
             }
@@ -679,6 +711,10 @@ int terminal_start(struct device* dev)
     term_device.bus_ops = &term_bus_ops;
 
     cursor_init();
+
+    /* kterm may have already written the boot prompt with the hardware
+     * cursor elsewhere; pick up its position before printing "#: ". */
+    term_sync_cursor_from_hw();
 
     /* register keyboard echo + command dispatch */
     kb_register_callback(terminal_kb_handler);
@@ -712,14 +748,24 @@ static struct driver terminal_server = {
     .stop = terminal_stop,
 };
 
+/* Hardware resources the terminal server process needs. */
+static const struct platform_resource terminal_server_resources[] = {
+    { .type = PLAT_RES_MEM, .mem = { .addr = 0xB8000, .size = 80 * 25 * 2 } },
+    { .type = PLAT_RES_IO,  .io  = { .base = 0x3C0, .size = 32 } },  /* VGA 0x3C0-0x3DF (seq/gc/ac/dac/crt/status) */
+};
+
+/* Start the user-mode terminal server directly (no platform bus probing).
+ * Called from init_thread(). */
 void terminal_init(void)
 {
-    platform_driver_register(&terminal_server);
+    platform_user_server_start(&terminal_server, terminal_server_resources,
+                               sizeof(terminal_server_resources) /
+                               sizeof(terminal_server_resources[0]));
 }
 
 void terminal_exit(void)
 {
-    platform_driver_unregister(&terminal_server);
+    /* Server processes are never stopped in this design. */
 }
 
 // module_init(terminal_init);

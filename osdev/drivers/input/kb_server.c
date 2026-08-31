@@ -426,13 +426,24 @@ static struct driver kb_server = {
     .stop  = kb_stop,
 };
 
-/* Register the user-mode keyboard server.  Called from init_thread().
+/* Hardware resources the kb server process needs, granted before its
+ * thread is unblocked (see platform_user_server_start). */
+static const struct platform_resource kb_server_resources[] = {
+    { .type = PLAT_RES_IRQ, .irq = { .major = 0x21, .minor = 0 } },
+    { .type = PLAT_RES_IO,  .io  = { .base = 0x60, .size = 5 } },  /* PS/2 data + status/command 0x60-0x64 */
+    { .type = PLAT_RES_IO,  .io  = { .base = 0x3F8, .size = 8 } },  /* COM1: ring-3 LOG() output */
+    { .type = PLAT_RES_IO,  .io  = { .base = 0x70, .size = 2 } },  /* CMOS 0x70-0x71: LOG() timestamps */
+    { .type = PLAT_RES_IPC, .ipc = { .grant = 1 } },               /* CAP_IPC: IRQ->mailbox delivery */
+};
+
+/* Start the user-mode keyboard server directly (no platform bus probing).
+ * Called from init_thread().
  *
  * The listener list and lock are initialised HERE (synchronously, before
- * platform_driver_register) so that any other server (e.g. terminal) that
- * calls kb_register_callback() right after its own start is guaranteed to
- * find an initialised list.  kb_start() then only registers the IRQ and
- * serves the mailbox loop. */
+ * the server process is created) so that any other server (e.g. terminal)
+ * that calls kb_register_callback() right after its own start is
+ * guaranteed to find an initialised list.  kb_start() then only registers
+ * the IRQ and serves the mailbox loop. */
 void kb_server_init(void)
 {
     if (!kb_listeners_inited) {
@@ -441,5 +452,7 @@ void kb_server_init(void)
     }
     kbuf_reset(&kb_device.buf);
 
-    platform_driver_register(&kb_server);
+    platform_user_server_start(&kb_server, kb_server_resources,
+                               sizeof(kb_server_resources) /
+                               sizeof(kb_server_resources[0]));
 }
