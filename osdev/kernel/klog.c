@@ -7,7 +7,7 @@
  * iowrite8()/ioread8() are plain inb/outb, so this is direct port I/O.
  *
  * klog_* is ring-0 only (it runs cli/sti, which is not available at CPL3
- * with IOPL=0).  Ring-3 LOG output is handled by log_server.c.
+ * with IOPL=0).  Ring-3 LOG output is handled by user/server/serial/log_server2.c.
  */
 
 #include "kernel/klog.h"

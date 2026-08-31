@@ -29,9 +29,8 @@ void iowrite32(u16 port, u32 value);
  * syscall_register() (kernel/syscall.c) — callers never pick a number.
  *
  * CAP_ACCESS_IO is granted as a port RANGE {port_base, port_count}
- * (each driver server passes its own resource table to
- * platform_user_server_start(), drivers/platform/platform_bus.c).  The
- * syscall handler simply
+ * (grant_terminal_caps()/grant_kb_caps() in kernel/init.c when loading
+ * the driver-server ELFs).  The syscall handler simply
  * checks that the accessed port lies inside one of the process's granted
  * ranges; there is no per-access width concept.
  */

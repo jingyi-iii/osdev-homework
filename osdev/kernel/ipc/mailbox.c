@@ -324,9 +324,17 @@ static int mailbox_syscall_isr(void* data)
          * Non-blocking on purpose: this runs inside the syscall ISR with
          * interrupts disabled, so a blocking loop that calls thread_yield()
          * would spin forever (a nested int $100 is swallowed by the irq
-         * reentrancy guard in arch_syscall_entry).  The mailbox_listen()
-         * wrapper loops and yields in user mode instead.
+         * reentrancy guard in arch_syscall_entry).  The user-side listen
+         * loop wraps LISTEN + yield in user mode instead.
+         *
+         * mb == NULL means "my own thread's mailbox": standalone user ELFs
+         * cannot know their mailbox's kernel pointer, so the handler
+         * (running in the caller's context) resolves it here.
          */
+        if (!config->mb) {
+            tcb* t = thread_get_by_tid(thread_get_tid());
+            config->mb = t ? t->mailbox : 0;
+        }
         config->m = try_get_mail(config->mb);
         config->ret = (config->m != 0) ? 0 : -1;
         break;

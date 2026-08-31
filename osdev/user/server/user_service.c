@@ -17,20 +17,17 @@
  *       timer_is_ready()       → 0, so LOG() skips the timestamp exactly
  *                                like early boot (no timer syscall gate)
  *       timer_read_time_str()  → -1 (never reached while not ready)
- *       platform_driver_*      → no-op (no user-mode platform bus yet)
  *
  * These have the same signatures as their kernel-side counterparts (see
- * kernel/io.h, kernel/process.h, kernel/klog.h, drivers/timer_server.h,
- * drivers/platform_bus.h); they are what the standalone ELF links
- * against instead.
+ * kernel/io.h, kernel/process.h, kernel/klog.h); they are what the
+ * standalone ELF links against instead.
  */
 
 #include "userlib.h"              /* user_syscall(), user_proc_ctrl, U_* */
 #include "kernel/io.h"            /* io_syscall_data + io_syscall_cmd */
 #include "arch_irq.h"             /* arch_running_ring3() */
 #include "kernel/klog.h"          /* klog_init/klog_write prototypes */
-#include "drivers/timer_server.h" /* timer_is_ready/timer_read_time_str */
-#include "drivers/platform_bus.h" /* struct driver */
+#include <stddef.h>               /* size_t */
 
 /*
  * Port I/O.  These mirror the kernel-side ioread8()/iowrite8()
@@ -105,17 +102,4 @@ int timer_read_time_str(char* buf, size_t size)
     (void)buf;
     (void)size;
     return -1;
-}
-
-int platform_driver_register(struct driver* drv)
-{
-    /* No user-mode platform bus yet: nothing to register into. */
-    (void)drv;
-    return 0;
-}
-
-int platform_driver_unregister(struct driver* drv)
-{
-    (void)drv;
-    return 0;
 }

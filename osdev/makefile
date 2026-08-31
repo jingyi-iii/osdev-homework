@@ -13,10 +13,15 @@ ASMOBJS  := $(patsubst %.S,   $(OBJS_DIR)%.S.o,   $(ASMSRCS))
 # ---- user-space programs (compiled to ELF, loaded as GRUB modules) ----
 USER_LD    := user/user.ld
 
-# portal_test.elf — standalone user-mode portal RPC test.  This is the only
-# user ELF the kernel loads (after a keypress confirmation in init_thread).
+# portal_test.elf — standalone user-mode portal RPC test.
 PORTAL_SRCS := user/portal_test.c user/userlib.c
 PORTAL_ELF  := $(OUT_DIR)portal_test.elf
+
+# driver-server ELFs — standalone ring-3 drivers (loaded as GRUB modules)
+TERMINAL_SRCS := user/server/display/terminal_server.c user/userlib.c user/server/user_service.c
+TERMINAL_ELF  := $(OUT_DIR)terminal_server.elf
+KB_SRCS       := user/server/input/kb_server.c user/userlib.c user/server/user_service.c
+KB_ELF        := $(OUT_DIR)kb_server.elf
 
 OBJS     := $(COBJS) $(CXXOBJS) $(ASMOBJS) $(OBJS_DIR)user/userheap.c.o
 
@@ -49,9 +54,11 @@ MEMORY_MAP := $(OUT_DIR)memory_map
 # The user ELFs are shipped as separate GRUB multiboot modules (see
 # config/grub.cfg), NOT embedded into the kernel image.  The ISO must
 # depend on them and copy them next to the kernel binary.
-$(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) $(PORTAL_ELF) | $(OUT_DIR) $(GRUB_DIR)
+$(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) $(PORTAL_ELF) $(TERMINAL_ELF) $(KB_ELF) | $(OUT_DIR) $(GRUB_DIR)
 	cp $(TARGET_BIN) $(OUT_DIR)iso/boot/myos.bin
 	cp $(PORTAL_ELF) $(OUT_DIR)iso/boot/
+	cp $(TERMINAL_ELF) $(OUT_DIR)iso/boot/
+	cp $(KB_ELF) $(OUT_DIR)iso/boot/
 	cp $(GRUBFILE) $(GRUB_DIR)
 	grub-mkrescue -o $(TARGET_ISO) $(OUT_DIR)iso
 
@@ -87,6 +94,12 @@ $(OBJS_DIR)user/userheap.c.o: user/userheap.c
 
 $(PORTAL_ELF): $(PORTAL_SRCS) $(USER_LD) | $(OUT_DIR)
 	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(PORTAL_SRCS) -o $@ -lgcc
+
+$(TERMINAL_ELF): $(TERMINAL_SRCS) $(USER_LD) | $(OUT_DIR)
+	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(TERMINAL_SRCS) -o $@ -lgcc
+
+$(KB_ELF): $(KB_SRCS) $(USER_LD) | $(OUT_DIR)
+	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(KB_SRCS) -o $@ -lgcc
 
 $(OUT_DIR) $(GRUB_DIR) $(OBJS_DIR):
 	@mkdir -p $@

@@ -5,7 +5,7 @@
  * Kernel terminal — ring-0 direct-to-VGA text-mode output.
  *
  * Decoupled from the user-mode terminal server
- * (drivers/display/terminal_server.c): kterm owns the VGA text buffer
+ * (user/server/display/terminal_server.c): kterm owns the VGA text buffer
  * (0xB8000) and the CRT controller ports (0x3D4/0x3D5) and drives them
  * with raw memory-mapped writes plus port I/O through the io layer
  * (kernel/io.c).  No terminal_device struct, no platform bus, no

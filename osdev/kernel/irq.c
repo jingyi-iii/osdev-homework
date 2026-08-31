@@ -583,9 +583,12 @@ static int irq_syscall_handler(void* context)
 
     switch (data->cmd) {
     case IRQ_SYSCALL_REQUEST:
-        /* The caller ran in user mode, so this is a user irq.  The flag was
-         * set by the public irq_request() entry and carried through the
-         * syscall data; forward it into the core implementation. */
+        /* The caller ran in user mode, so this is a user irq.  Derive the
+         * registering thread's tid here in kernel context: standalone user
+         * ELFs cannot know their own tid (or a kernel mailbox pointer), so
+         * the kernel fills it in for them. */
+        data->is_user_irq = 1;
+        data->tid = thread_get_tid();
         data->ret = irq_request_internal(&data->handle, data->name, data->major,
                                          data->minor, data->handler, data->param,
                                          data->is_user_irq, data->tid);

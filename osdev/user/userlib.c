@@ -60,3 +60,55 @@ void console_putstr(const char* s)
         user_yield();
     }
 }
+
+/* ---- IRQ ---- */
+
+void* user_irq_request(u32 major, u32 minor)
+{
+    user_irq_ctrl cfg = {0};
+
+    cfg.cmd   = U_IRQ_CTRL_REQUEST;
+    cfg.major = major;
+    cfg.minor = minor;
+    user_syscall(SYSCALL_IRQ, &cfg, sizeof(cfg));
+
+    return cfg.handle;
+}
+
+int user_irq_unmask(void* handle)
+{
+    user_irq_ctrl cfg = {0};
+
+    cfg.cmd    = U_IRQ_CTRL_UNMASK;
+    cfg.handle = handle;
+    user_syscall(SYSCALL_IRQ, &cfg, sizeof(cfg));
+
+    return cfg.ret;
+}
+
+/* ---- mailbox ---- */
+
+void* user_mail_listen(void)
+{
+    for (;;) {
+        user_mailbox_ctrl cfg = {0};
+
+        cfg.cmd = U_MAILBOX_CTRL_LISTEN;   /* mb == NULL: own mailbox */
+        user_syscall(SYSCALL_MAILBOX, &cfg, sizeof(cfg));
+
+        if (cfg.m)
+            return cfg.m;
+
+        /* No mail yet: yield so IRQ handlers get a chance to deliver. */
+        user_yield();
+    }
+}
+
+void user_mail_release(void* m)
+{
+    user_mailbox_ctrl cfg = {0};
+
+    cfg.cmd = U_MAILBOX_CTRL_RELEASE_MAIL;
+    cfg.m   = m;
+    user_syscall(SYSCALL_MAILBOX, &cfg, sizeof(cfg));
+}

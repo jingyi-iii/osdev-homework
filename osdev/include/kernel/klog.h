@@ -4,7 +4,7 @@
 /*
  * Kernel log — ring-0 direct-to-COM1 logger.
  *
- * Decoupled from the user-mode log server (drivers/serial/log_server.c):
+ * Decoupled from the user-mode log server (user/server/serial/log_server2.c):
  * klog owns the COM1 port and writes to it with raw port I/O (via the io
  * layer, kernel/io.c), so kernel logging needs no kernel data structure —
  * no log_device struct, no spinlock object.  A whole klog_write() is
@@ -13,7 +13,7 @@
  *
  * klog_* is ring-0 ONLY (it executes cli/sti, which #GPs at CPL3 with
  * IOPL=0).  Ring-3 log output goes through the user-mode log server path
- * in log_server.c instead.
+ * in log_server2.c instead.
  */
 
 void klog_init(void);        /* bring up COM1 (idempotent; also lazy) */

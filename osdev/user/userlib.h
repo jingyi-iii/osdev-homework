@@ -99,4 +99,70 @@ int user_portal_call(u32 portal_id, void* va, u32 size);
  * (PORTAL_ID_CONSOLE). */
 void console_putstr(const char* s);
 
+/*
+ * ---- IRQ syscall (SYSCALL_IRQ) ---------------------------------------
+ *
+ * Layout MUST mirror the kernel's irq_syscall_data (include/kernel/irq.h).
+ */
+enum {
+    U_IRQ_CTRL_REQUEST = 0,
+    U_IRQ_CTRL_RELEASE,
+    U_IRQ_CTRL_MASK,
+    U_IRQ_CTRL_UNMASK,
+};
+
+typedef struct user_irq_ctrl {
+    u8          cmd;
+    void*       handle;       /* out (request) / in (release, mask, unmask) */
+    const char* name;         /* request: may be NULL */
+    u32         major;
+    u32         minor;
+    void*       handler;      /* unused for user IRQs (mail delivery) */
+    void*       param;
+    int         is_user_irq;  /* kernel fills in */
+    int         tid;          /* kernel fills in */
+    int         ret;
+} user_irq_ctrl;
+
+/* Request a user IRQ on @major; the kernel ISR then delivers
+ * MAIL_TYPE_IRQ mails to the calling thread's mailbox.  Returns the
+ * opaque irq handle (NULL on failure). */
+void* user_irq_request(u32 major, u32 minor);
+int   user_irq_unmask(void* handle);
+
+/*
+ * ---- mailbox syscall (SYSCALL_MAILBOX) ---------------------------------
+ *
+ * Layout MUST mirror the kernel's mailbox_ctrl_config
+ * (include/ipc/mailbox.h).  Only the commands user programs need.
+ */
+enum {
+    U_MAILBOX_CTRL_LISTEN       = 1,   /* dequeue a mail (non-blocking) */
+    U_MAILBOX_CTRL_RELEASE_MAIL = 5,   /* free a received mail          */
+};
+
+typedef struct user_mailbox_ctrl {
+    u8   cmd;
+    void* m;          /* mail* — opaque (out on LISTEN / in on RELEASE) */
+    void* mb;         /* mailbox* — NULL = calling thread's own mailbox */
+    void* handler;
+    int  pid;
+    int  tid;
+    int  ret;
+} user_mailbox_ctrl;
+
+/* mailtype values (kernel include/ipc/mailbox.h) */
+#define USER_MAIL_TYPE_COMMON 0
+#define USER_MAIL_TYPE_IRQ    1
+
+/* Opaque mail view: only the leading type field is meaningful to users. */
+typedef struct user_mail {
+    int type;
+} user_mail;
+
+/* Block (yielding) until a mail arrives on the calling thread's own
+ * mailbox; returns the opaque mail*. */
+void* user_mail_listen(void);
+void  user_mail_release(void* m);
+
 #endif

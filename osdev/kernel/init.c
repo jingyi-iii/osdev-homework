@@ -7,10 +7,39 @@
 #include "lib/elf.h"
 #include "lib/string.h"
 
-extern void kb_server_init(void);
-extern void terminal_init(void);
-extern void log_server_init(void);
-extern void timer_server_init(void);
+/*
+ * Capability grants for the standalone driver-server ELFs (loaded from
+ * GRUB multiboot modules).  The old platform-device table is gone; each
+ * server gets exactly the resources its code touches through the io /
+ * irq / ipc syscall gates.
+ */
+static void grant_terminal_caps(pcb* proc)
+{
+    if (!proc)
+        return;
+
+    cap_io_port vga = { 0x3C0, 32 };   /* VGA 0x3C0-0x3DF (cursor, mode) */
+    int ipc_ok = 1;                     /* console portal                 */
+
+    cap_grant(proc, CAP_ACCESS_IO, &vga);
+    cap_grant(proc, CAP_IPC, &ipc_ok);
+}
+
+static void grant_kb_caps(pcb* proc)
+{
+    if (!proc)
+        return;
+
+    u32 irq_21 = 0x21;                  /* keyboard IRQ                  */
+    cap_io_port ps2  = { 0x60, 5 };     /* PS/2 data + status 0x60-0x64  */
+    cap_io_port com1 = { 0x3F8, 8 };    /* COM1: key diagnostics         */
+    int ipc_ok = 1;                     /* IRQ mail delivery             */
+
+    cap_grant(proc, CAP_OWN_IRQ, &irq_21);
+    cap_grant(proc, CAP_ACCESS_IO, &ps2);
+    cap_grant(proc, CAP_ACCESS_IO, &com1);
+    cap_grant(proc, CAP_IPC, &ipc_ok);
+}
 
 /*
  * Grant the top-level demo/test process everything its ring-3 code needs:
@@ -24,8 +53,8 @@ extern void timer_server_init(void);
  *   - CAP_IPC: the test suites use mailbox_* (mailbox_api_test) and
  *     shm_share/shm_unshare (shm_test).
  * Processes the demo spawns inherit a copy (cap_inherit_all in p_create),
- * so all test/game children keep working.  Driver servers get their own
- * grants from the platform device table.
+ * so all test/game children keep working.  Driver-server ELFs get their
+ * own grants from grant_terminal_caps/grant_kb_caps above.
  */
 static void grant_demo_caps(pcb* proc)
 {
@@ -50,6 +79,9 @@ static void grant_demo_caps(pcb* proc)
     cap_grant(proc, CAP_IPC, &ipc_ok);
 }
 
+/* Capability grant for a freshly loaded ELF process. */
+typedef void (*caps_grant_fn)(pcb* proc);
+
 /* ---- GRUB multiboot module helpers ---------------------------------- */
 
 /* Match a module's cmdline string (e.g. "/boot/hello.elf") against a
@@ -69,10 +101,11 @@ static int modname_is(const char* path, const char* name)
 
 /*
  * Find the GRUB module whose cmdline basename is @name and load it as a
- * user process via proc_load_from_elf().  Returns the pid, or 0 when the
- * module is missing (the system keeps booting without it).
+ * user process via proc_load_from_elf().  @grant is applied to the new
+ * process before it is unblocked (NULL = no grants).  Returns the pid,
+ * or 0 when the module is missing (the system keeps booting without it).
  */
-static i32 load_user_elf_by_name(const char* name)
+static i32 load_user_elf_by_name(const char* name, caps_grant_fn grant)
 {
     int n = mboot_module_count();
 
@@ -87,7 +120,8 @@ static i32 load_user_elf_by_name(const char* name)
 
         i32 pid = proc_load_from_elf(start, end, 0);
         if (pid > 0) {
-            grant_demo_caps(get_process_by_pid(pid));
+            if (grant)
+                grant(get_process_by_pid(pid));
             proc_unblock(pid);
         }
         return pid;
@@ -107,23 +141,24 @@ static i32 load_user_elf_by_name(const char* name)
 
 void init_thread(void)
 {
-    kb_server_init();
-    terminal_init();
-    kterm_init();
-    timer_server_init();
-    log_server_init();
-
-    /* ---- Boot: run the user-mode portal test directly (no keypress
-     * prompt).  The kernel's own output goes through kterm_* (pure port
-     * I/O on the VGA text buffer, decoupled from the user-mode terminal
-     * server).  terminal_init() above directly starts the ring-3 terminal
-     * server: it publishes the console portal (PORTAL_ID_CONSOLE) that
-     * portal_test.elf prints through.
+    /* ---- Boot: the kernel's own output goes through kterm_* (pure port
+     * I/O on the VGA text buffer).  Driver servers are standalone user
+     * ELFs (user/server/): load them as GRUB modules with their resource
+     * grants, then run the portal test.  Loading order matters: the
+     * terminal server must publish PORTAL_ID_CONSOLE before portal_test
+     * prints through it (processes run in creation order).
      * ---- */
     kterm_switch_to_text_mode();
     kterm_clear();
+
+    kterm_write("[launcher] starting terminal_server.elf\n");
+    load_user_elf_by_name("terminal_server.elf", grant_terminal_caps);
+
+    kterm_write("[launcher] starting kb_server.elf\n");
+    load_user_elf_by_name("kb_server.elf", grant_kb_caps);
+
     kterm_write("[launcher] running portal_test.elf\n");
-    load_user_elf_by_name("portal_test.elf");
+    load_user_elf_by_name("portal_test.elf", grant_demo_caps);
 
     proc_exit(proc_get_pid());
 }
