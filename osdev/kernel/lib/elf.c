@@ -22,7 +22,7 @@
 #include "mm/paging.h"
 #include "mm/vmm.h"
 #include "kernel/capability.h"
-#include "drivers/log_server.h"
+#include "kernel/log.h"
 
 int elf_validate(const elf32_ehdr* h, u32 image_size)
 {

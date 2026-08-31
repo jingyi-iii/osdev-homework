@@ -1,5 +1,5 @@
 #include "lib/module.h"
-#include "drivers/log_server.h"
+#include "kernel/log.h"
 #include "drivers/terminal_server.h"
 #include "kernel/process.h"
 #include "kernel/init.h"

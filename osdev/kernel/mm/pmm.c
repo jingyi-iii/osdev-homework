@@ -1,7 +1,7 @@
 #include "mm/pmm.h"
 #include "mm/paging.h"
 #include "lib/string.h"
-#include "drivers/log_server.h"
+#include "kernel/log.h"
 #include "sync/spinlock.h"
 
 /*

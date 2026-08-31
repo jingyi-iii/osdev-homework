@@ -1,6 +1,6 @@
 #include "sync/wait_queue.h"
 #include "kernel/process.h"
-#include "drivers/log_server.h"
+#include "kernel/log.h"
 
 int wait_queue_init(wait_queue *wq)
 {

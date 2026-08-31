@@ -1,6 +1,7 @@
 #include "sync/semaphore.h"
 #include "lib/module.h"
-#include "drivers/log_server.h"
+#include "mm/heap.h"
+#include "kernel/log.h"
 
 DECLARE_HEAD_NODE(semaphore_head);
 static spinlock* semaphore_lock = 0;

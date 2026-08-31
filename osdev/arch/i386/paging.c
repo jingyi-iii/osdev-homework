@@ -18,7 +18,7 @@
 #include "mm/pmm.h"
 #include "lib/string.h"
 #include "sync/spinlock.h"
-#include "drivers/log_server.h"
+#include "kernel/log.h"
 
 /* ------------------------------------------------------------------ */
 /* Extern: linker-defined PMM bitmap section                          */

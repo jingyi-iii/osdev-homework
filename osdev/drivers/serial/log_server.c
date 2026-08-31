@@ -1,4 +1,5 @@
 #include "drivers/log_server.h"
+#include "drivers/timer_server.h"
 #include "kernel/process.h"
 #include "kernel/io.h"
 #include "kernel/klog.h"
@@ -111,13 +112,8 @@ static struct driver log_server = {
     .stop  = log_server_stop,
 };
 
-/* Early kernel phase: bring up COM1 right away (via klog) so LOG() works
- * before the user-mode server is started (and before paging / scheduler /
- * heap). */
-void log_init(void)
-{
-    klog_init();
-}
+/* log_init() is provided by kernel/log.h (pure-IO klog init).  The LOG()
+ * macro no longer routes through this server. */
 
 /* Register the user-mode log server.  Called from init_thread() once the
  * scheduler is up (like kb_server_init / terminal_init). */

@@ -4,7 +4,7 @@
 #include "kernel/uapi.h"
 #include "lib/string.h"
 #include "lib/module.h"
-#include "drivers/log_server.h"
+#include "kernel/log.h"
 #include "mm/heap.h"
 #include "kernel/capability.h"
 #include "kernel/process.h"

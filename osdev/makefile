@@ -3,28 +3,22 @@ GRUB_DIR := $(OUT_DIR)iso/boot/grub
 OBJS_DIR := $(OUT_DIR)objs/
 INC_DIRS := -Iinclude -Iarch/i386
 
-ASMSRCS  := $(shell find . -type f -name '*.S' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*" -not -path "./user*")
-CSRCS    := $(shell find . -type f -name '*.c' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*" -not -path "./user*")
-CXXSRCS  := $(shell find . -type f -name '*.cpp' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*" -not -path "./user*")
+ASMSRCS  := $(shell find . -type f -name '*.S' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*" -not -path "./user*" -not -path "./demo*")
+CSRCS    := $(shell find . -type f -name '*.c' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*" -not -path "./user*" -not -path "./demo*")
+CXXSRCS  := $(shell find . -type f -name '*.cpp' -not -path "./$(OUT_DIR)*" -not -path "./tests*" -not -path "./tools*" -not -path "./bootloader*" -not -path "./user*" -not -path "./demo*")
 COBJS    := $(patsubst %.c,   $(OBJS_DIR)%.c.o,   $(CSRCS))
 CXXOBJS  := $(patsubst %.cpp, $(OBJS_DIR)%.cpp.o, $(CXXSRCS))
 ASMOBJS  := $(patsubst %.S,   $(OBJS_DIR)%.S.o,   $(ASMSRCS))
 
-# ---- user-space programs (compiled to ELF, embedded into the kernel) ----
-# user/server/** holds the standalone ring-3 server ELFs; keep them out of
-# the hello.elf source list so they are not linked into the demo program.
-USER_SRCS  := $(shell find user -type f -name '*.c' -not -name 'userheap.c' -not -path 'user/server/*')
-USER_EMBED := user/hello_embed.S
-USER_ELF   := $(OUT_DIR)hello.elf
+# ---- user-space programs (compiled to ELF, loaded as GRUB modules) ----
 USER_LD    := user/user.ld
 
-# log_server.elf — user-mode log server (user/server/serial/log_server2.c).
-# user_service.c is the shared user-mode service layer (io/thread syscalls
-# + ring-3 stubs); kernel/lib/string.c provides memset/snprintf/strlen.
-LOG_SRCS   := user/server/serial/log_server2.c user/server/user_service.c kernel/lib/string.c
-LOG_ELF    := $(OUT_DIR)log_server.elf
+# portal_test.elf — standalone user-mode portal RPC test.  This is the only
+# user ELF the kernel loads (after a keypress confirmation in init_thread).
+PORTAL_SRCS := user/portal_test.c user/userlib.c
+PORTAL_ELF  := $(OUT_DIR)portal_test.elf
 
-OBJS     := $(COBJS) $(CXXOBJS) $(ASMOBJS) $(OBJS_DIR)user/userheap.c.o $(OBJS_DIR)user_hello_embed.S.o
+OBJS     := $(COBJS) $(CXXOBJS) $(ASMOBJS) $(OBJS_DIR)user/userheap.c.o
 
 TARGET_BIN := $(OUT_DIR)myos.bin
 TARGET_ISO := $(OUT_DIR)myos.iso
@@ -52,8 +46,12 @@ USER_CFLAGS := -std=gnu99 -ffreestanding -fno-builtin -fno-pic -fno-pie -nostdli
 
 MEMORY_MAP := $(OUT_DIR)memory_map
 
-$(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) | $(OUT_DIR) $(GRUB_DIR)
+# The user ELFs are shipped as separate GRUB multiboot modules (see
+# config/grub.cfg), NOT embedded into the kernel image.  The ISO must
+# depend on them and copy them next to the kernel binary.
+$(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) $(PORTAL_ELF) | $(OUT_DIR) $(GRUB_DIR)
 	cp $(TARGET_BIN) $(OUT_DIR)iso/boot/myos.bin
+	cp $(PORTAL_ELF) $(OUT_DIR)iso/boot/
 	cp $(GRUBFILE) $(GRUB_DIR)
 	grub-mkrescue -o $(TARGET_ISO) $(OUT_DIR)iso
 
@@ -87,17 +85,8 @@ $(OBJS_DIR)user/userheap.c.o: user/userheap.c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -fno-builtin -c $< -o $@
 
-$(USER_ELF): $(USER_SRCS) $(USER_LD) | $(OUT_DIR)
-	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(USER_SRCS) -o $@ -lgcc
-
-$(LOG_ELF): $(LOG_SRCS) $(USER_LD) | $(OUT_DIR)
-	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(LOG_SRCS) -o $@ -lgcc
-
-# Explicit embedding: user/hello_embed.S .incbin's the ELF and defines
-# user_hello_elf_start/_end by name (no objcopy magic symbols).
-$(OBJS_DIR)user_hello_embed.S.o: $(USER_EMBED) $(USER_ELF) $(LOG_ELF)
-	@mkdir -p $(@D)
-	$(AS) $(ASFLAGS) $< -o $@
+$(PORTAL_ELF): $(PORTAL_SRCS) $(USER_LD) | $(OUT_DIR)
+	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(PORTAL_SRCS) -o $@ -lgcc
 
 $(OUT_DIR) $(GRUB_DIR) $(OBJS_DIR):
 	@mkdir -p $@
@@ -110,8 +99,9 @@ env:
 run: $(TARGET_ISO)
 	qemu-system-i386 -cdrom $(TARGET_ISO) -serial file:serial.log
 
-run_debug: $(TARGET_BIN)
-	qemu-system-i386 -s -S -kernel $(TARGET_BIN) -serial file:serial.log
+# QEMU -kernel cannot load GRUB multiboot modules, so debug from the ISO.
+run_debug: $(TARGET_ISO)
+	qemu-system-i386 -s -S -cdrom $(TARGET_ISO) -serial file:serial.log
 
 # --- Crash dump: extract EIPs from serial log and resolve to function names ---
 LOG ?= serial.log

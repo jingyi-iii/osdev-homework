@@ -4,7 +4,7 @@
 #include "arch_protm.h"
 #include "lib/module.h"
 #include "lib/string.h"
-#include "drivers/log_server.h"
+#include "kernel/log.h"
 #include "kernel/irq.h"
 #include "kernel/syscall.h"
 #include "kernel/uapi.h"
@@ -997,19 +997,25 @@ i32 proc_load_from_elf(u8* elf_start, u8* elf_end, void* param)
     }
 
     /*
-     * The image may live in user memory (CPL3 caller through the gate)
-     * or in the kernel's own .data (ring-0 caller with the embedded ELF).
-     * copy_from_user() validates the whole range against the CURRENT
-     * page table (CR3 = caller's while inside the gate) and copies it
-     * atomically into a kernel buffer, so elf_validate()/elf_load() never
-     * dereference an untrusted or unmapped pointer.  The embedded kernel
-     * image (low identity map, PTE_USER) passes the same range check.
+     * The image may live in user memory (CPL3 caller through the gate) or
+     * in kernel-owned memory (a ring-0 caller — e.g. the ELF embedded in
+     * the kernel image, or a GRUB multiboot module at 16 MB+, which the
+     * kernel maps PTE_KERNEL and copy_from_user() would reject as not
+     * user-accessible).  copy_from_user() validates the whole range
+     * against the CURRENT page table (CR3 = caller's while inside the
+     * gate) and copies it atomically into a kernel buffer, so
+     * elf_validate()/elf_load() never dereference an untrusted or
+     * unmapped pointer.  Kernel-privileged callers are trusted and copy
+     * directly with memcpy() instead.
      */
     u8* image = kmalloc(image_size);
     if (!image)
         return E_NOMEM;
 
-    if (copy_from_user(image, elf_start, image_size) != 0) {
+    pcb* caller = get_current_process();
+    if (caller && caller->priv == PROC_PRIV_KERNEL) {
+        memcpy(image, elf_start, image_size);
+    } else if (copy_from_user(image, elf_start, image_size) != 0) {
         LOG("user elf: image not readable");
         kfree(image);
         return E_FAULT;
