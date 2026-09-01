@@ -2,9 +2,9 @@
 #include "kernel/errno.h"
 #include "lib/string.h"
 #include "lib/module.h"
-#include "mm/paging.h"
 #include "sync/spinlock.h"
 #include "arch_irq.h"
+#include "arch_mem.h"
 #include "kernel/process.h"   /* pcb / get_current_process (user syscall registry) */
 #include "kernel/uapi.h"      /* SYSCALL_SYSCTL + user_sysctl_config */
 
@@ -12,10 +12,10 @@ static LIST_HEAD(syscall_header);
 static spinlock syscall_lock = { .state = LOCK_UNLOCKED };
 
 /*
- * Serializes user_range_ok() + the following memcpy() in the copy_*_user
- * helpers.  Held IRQ-safe, so no interrupt handler can preempt the holder
- * and change (or free) the page tables being validated on this single-CPU
- * kernel — closes the check-then-copy TOCTOU window.
+ * Serializes arch_validate_user_range() + the following memcpy() in the
+ * copy_*_user helpers.  Held IRQ-safe, so no interrupt handler can preempt
+ * the holder and change (or free) the page tables being validated on this
+ * single-CPU kernel — closes the check-then-copy TOCTOU window.
  */
 static spinlock copy_lock = { .state = LOCK_UNLOCKED };
 
@@ -209,58 +209,7 @@ static int call_user_handler(syscall_handler_fn fn, void* arg, u32 owner_cr3)
     return ret;
 }
 
-/*
- * Validate that [addr, addr+n) lies in user space and is mapped with the
- * required permissions in the CURRENT page table (the syscall runs in the
- * caller's address space, so CR3 is the caller's directory).  For writes
- * the pages must be writable as well.
- *
- * Note: the kernel is identity-mapped with the first 16 MB user-accessible
- * (see arch_clone_kernel_pde), so this cannot distinguish a user pointer
- * from one into that low kernel region — true isolation needs a proper
- * kernel/user remap, out of scope here.
- */
-static int user_range_ok(const void* user_addr, size_t n, int for_write)
-{
-    u32 addr = (u32)user_addr;
-    u32 cr3;
-
-    if (n == 0)
-        return 1;
-    if (addr + n < addr)              /* 32-bit overflow */
-        return 0;
-    if (addr >= USER_SPACE_TOP || addr + n > USER_SPACE_TOP)
-        return 0;                     /* outside user space */
-
-    cr3 = arch_get_cr3() & PAGE_MASK;
-
-    while (n > 0) {
-        u32 pde = *(volatile u32*)(cr3 + PD_INDEX(addr) * 4);
-        if (!(pde & PTE_PRESENT) || !(pde & PTE_USER) ||
-            (for_write && !(pde & PTE_RW)))
-            return 0;
-
-        if (pde & 0x80) {
-            /* 4MB page (PS bit): the whole region shares the PDE's
-             * permissions, there is no page table to walk. */
-            if (!(pde & PTE_USER) || (for_write && !(pde & PTE_RW)))
-                return 0;
-        } else {
-            u32 pt_base = pde & PAGE_MASK;
-            u32 pte = *(volatile u32*)(pt_base + PT_INDEX(addr) * 4);
-            if (!(pte & PTE_PRESENT) || !(pte & PTE_USER) ||
-                (for_write && !(pte & PTE_RW)))
-                return 0;
-        }
-
-        size_t remain = PAGE_SIZE - PAGE_OFFSET(addr);
-        if (remain > n)
-            remain = n;
-        addr += remain;
-        n -= remain;
-    }
-    return 1;
-}
+/* User-range validation (x86 PDE/PTE walk) lives in arch: arch_validate_user_range(). */
 
 int copy_from_user(void* dst, const void* user_src, size_t n)
 {
@@ -272,7 +221,7 @@ int copy_from_user(void* dst, const void* user_src, size_t n)
 
     /* Validate and copy atomically against interrupt handlers. */
     eflags = spinlock_lock_irqsave(&copy_lock);
-    ok = user_range_ok(user_src, n, 0);
+    ok = arch_validate_user_range(user_src, n, 0);
     if (ok)
         memcpy(dst, user_src, n);
     spinlock_unlock_irqrestore(&copy_lock, eflags);
@@ -290,7 +239,7 @@ int copy_to_user(void* user_dst, const void* src, size_t n)
 
     /* Validate and copy atomically against interrupt handlers. */
     eflags = spinlock_lock_irqsave(&copy_lock);
-    ok = user_range_ok(user_dst, n, 1);
+    ok = arch_validate_user_range(user_dst, n, 1);
     if (ok)
         memcpy(user_dst, src, n);
     spinlock_unlock_irqrestore(&copy_lock, eflags);

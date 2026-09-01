@@ -111,7 +111,6 @@ void vmm_destroy(vmm_control_block* vcb)
 
     spinlock_lock(vcb->lock);
     if (vcb->tree) {
-        rbnode *pos, *n;
         rbtree_for_each_safe(pos, n, vcb->tree) {
             vmm_region* r = rb_entry(pos, vmm_region, node);
             for (u32 i = 0; i < r->size / PAGE_SIZE; i++)

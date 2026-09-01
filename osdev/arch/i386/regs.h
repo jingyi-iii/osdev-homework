@@ -123,4 +123,28 @@ inline u8 arch_inb(u16 port)
     return value;
 }
 
+inline void arch_outw(u16 port, u16 val)
+{
+    __asm__ __volatile__("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
+inline u16 arch_inw(u16 port)
+{
+    unsigned short value = 0;
+    __asm__ __volatile__("inw %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
+inline void arch_outl(u16 port, u32 val)
+{
+    __asm__ __volatile__("outl %0, %1" : : "a"(val), "Nd"(port));
+}
+
+inline u32 arch_inl(u16 port)
+{
+    unsigned int value = 0;
+    __asm__ __volatile__("inl %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+
 #endif

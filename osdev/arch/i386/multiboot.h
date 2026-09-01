@@ -1,14 +1,13 @@
-#ifndef KERNEL_MULTIBOOT_H
-#define KERNEL_MULTIBOOT_H
+#ifndef ARCH_MULTIBOOT_H
+#define ARCH_MULTIBOOT_H
 
 #include "lib/types.h"
 
 /*
  * Physical address of the multiboot_info that GRUB passes in EBX on entry,
- * saved by arch/i386/boot.S before anything clobbers the registers.  After
- * the kernel identity-maps low memory (arch_paging_init), physical ==
- * virtual, so the info and the module list it points to can be read
- * directly from C.
+ * saved by boot.S before anything clobbers the registers.  After the
+ * kernel identity-maps low memory (arch_paging_init), physical == virtual,
+ * so the info and the module list it points to can be read directly from C.
  */
 extern u32 mboot_info;
 

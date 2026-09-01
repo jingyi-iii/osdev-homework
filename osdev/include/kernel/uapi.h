@@ -66,4 +66,17 @@ typedef struct user_log_config {
  */
 #define PORTAL_ID_CONSOLE   1
 
+/*
+ * Mail magic for KERNEL-PRODUCED notifications.
+ *
+ * The mailbox is a dumb transport: mail.magic is an opaque tag the kernel
+ * carries but never interprets.  Server-to-server messages define their own
+ * formats (and any magic they want) inside their payloads.  The one
+ * exception is the kernel's own IRQ notification (kernel/irq.c
+ * dispatch_user_mode_irq): its payload is empty, so the kernel tags the
+ * mail with MAIL_MAGIC_IRQ and the registering user thread checks it
+ * (user/userlib.c user_irq_wait).
+ */
+#define MAIL_MAGIC_IRQ      0x66666666
+
 #endif

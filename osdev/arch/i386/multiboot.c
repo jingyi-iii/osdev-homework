@@ -1,5 +1,5 @@
 /*
- * kernel/multiboot.c — minimal multiboot v1 info/module parser.
+ * arch/i386/multiboot.c — minimal multiboot v1 info/module parser.
  *
  * GRUB passes the physical address of a multiboot_info structure in EBX on
  * entry (saved by arch/i386/boot.S into mboot_info).  User programs are
@@ -19,7 +19,7 @@
  * mem_upper).
  */
 
-#include "kernel/multiboot.h"
+#include "multiboot.h"
 #include "kernel/errno.h"
 
 /* Multiboot v1 info field offsets (u32 words), per the spec. */

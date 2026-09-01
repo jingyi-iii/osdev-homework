@@ -5,6 +5,7 @@
 #include "kernel/init.h"
 #include "kernel/process.h"
 #include "lib/string.h"
+#include "arch_irq.h"    /* arch_crash_* */
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */
 #if defined(__linux__)
@@ -38,7 +39,10 @@ static void kernel_do_exitcalls(void)
     }
 }
 
-/* ---- crash command for testing exception handlers ---- */
+/* ---- crash command for testing exception handlers ----
+ * The x86 instructions that actually force each fault live in
+ * arch/i386/crash.c (arch_crash_*); this dispatcher is arch-independent.
+ */
 /* non-static so GCC always emits a frame pointer (required by ABI for
  * externally-callable functions, and terminal dispatches via fn pointer) */
 __attribute__((noinline))
@@ -51,23 +55,19 @@ void crash_cmd(const char *args)
 
     if (strcmp(args, "div0") == 0) {
         kterm_write_color("Triggering #DE (Divide Error)...\n", 0x0E);
-        volatile int zero = 0;
-        volatile int x = 1 / zero;
-        (void)x;
+        arch_crash_div0();
     } else if (strcmp(args, "ud") == 0) {
-        __asm__ volatile ("ud2");
         kterm_write_color("Triggering #UD (Invalid Opcode)...\n", 0x0E);
+        arch_crash_ud();
     } else if (strcmp(args, "pf") == 0) {
         kterm_write_color("Triggering #PF (Page Fault) via NULL deref...\n", 0x0E);
-        *(volatile int *)0xDEAD0000 = 0;
+        arch_crash_pf();
     } else if (strcmp(args, "gp") == 0) {
         kterm_write_color("Triggering #GP (General Protection Fault)...\n", 0x0E);
-        /* write to a non-writable segment — simplest: cli + hlt in ring3
-         * but we're in ring0, so use a bogus port access */
-        __asm__ volatile ("cli; hlt");
+        arch_crash_gp();
     } else if (strcmp(args, "bp") == 0) {
         kterm_write_color("Triggering #BP (Breakpoint)...\n", 0x0E);
-        __asm__ volatile ("int3");
+        arch_crash_bp();
     } else {
         kterm_write_color("crash: unknown type. Try: div0 ud pf gp bp\n", 0x0E);
     }

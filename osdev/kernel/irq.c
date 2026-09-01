@@ -186,7 +186,7 @@ static void dispatch_user_mode_irq(irq* p)
     if (!m)
         return;
 
-    m->type = MAIL_TYPE_IRQ;
+    m->magic = MAIL_MAGIC_IRQ;   /* shared ABI: user/userlib.c user_irq_wait */
     m->receiver_tid = p->tid;
 
     send_mail(t->mailbox, m);
@@ -617,7 +617,8 @@ static int irq_syscall_handler(void* context)
 
 void irq_syscall_init(void)
 {
-    irq_scall_handle = syscall_register(SYSCALL_IRQ, irq_syscall_handler, sizeof(irq_syscall_data));
+    irq_scall_handle = syscall_register(SYSCALL_IRQ,
+        irq_syscall_handler, sizeof(irq_syscall_data));
 }
 
 void irq_syscall_exit(void)

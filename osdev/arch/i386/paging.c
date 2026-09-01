@@ -362,9 +362,6 @@ void arch_map_4kb_range(void* cr3, u32 start_pa, u32 end_pa, u32 flags)
 /* ------------------------------------------------------------------ */
 void arch_paging_init(u32 total_memory, u32 reserved_end)
 {
-    u32 total_4mb_chunks;
-    u32 hi_pd_idx;
-    u32 i;
     (void)reserved_end;  /* currently unused — the paging pool sits below
                           * the PMM bitmap, so pmm_init() keeps it reserved */
 

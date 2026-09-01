@@ -17,10 +17,10 @@ typedef struct heapchunk {
 #define HEAP_HDR_SIZE   ((sizeof(heapchunk) + HEAP_ALIGN - 1) & ~(HEAP_ALIGN - 1))
 
 typedef struct heappool {
-    i8      pool[HEAP_TOTAL_SIZE];
-    u32    avail_size;
+    i8          pool[HEAP_TOTAL_SIZE];
+    u32         avail_size;
     spinlock*   lock_dev;
-    i8      init;
+    i8          init;
     list_node   head_node;
 } heappool;
 

@@ -2,6 +2,7 @@
 #include "kernel/syscall.h"
 #include "kernel/uapi.h"
 #include "arch_irq.h"
+#include "regs.h"        /* arch_inb/inw/inl, arch_outb/outw/outl */
 #include "lib/module.h"
 #include "lib/types.h"
 #include "kernel/process.h"
@@ -33,8 +34,8 @@ u8 ioread8(u16 port)
         return (u8)cfg.value;
     }
 
-    /* Kernel mode (CPL0). */
-    __asm__ volatile("inb %1, %0" : "=a"(data) : "dN"(port));
+    /* Kernel mode (CPL0): raw in instruction. */
+    data = arch_inb(port);
     return data;
 }
 
@@ -51,8 +52,8 @@ u16 ioread16(u16 port)
         return (u16)cfg.value;
     }
 
-    /* Kernel mode (CPL0). */
-    __asm__ volatile("inw %1, %0" : "=a"(data) : "dN"(port));
+    /* Kernel mode (CPL0): raw in instruction. */
+    data = arch_inw(port);
     return data;
 }
 
@@ -69,8 +70,8 @@ u32 ioread32(u16 port)
         return cfg.value;
     }
 
-    /* Kernel mode (CPL0). */
-    __asm__ volatile("inl %1, %0" : "=a"(data) : "dN"(port));
+    /* Kernel mode (CPL0): raw in instruction. */
+    data = arch_inl(port);
     return data;
 }
 
@@ -86,8 +87,8 @@ void iowrite8(u16 port, u8 value)
         return;
     }
 
-    /* Kernel mode (CPL0). */
-    __asm__ volatile("outb %0, %1" : : "a"(value), "dN"(port));
+    /* Kernel mode (CPL0): raw out instruction. */
+    arch_outb(port, value);
 }
 
 void iowrite16(u16 port, u16 value)
@@ -102,8 +103,8 @@ void iowrite16(u16 port, u16 value)
         return;
     }
 
-    /* Kernel mode (CPL0). */
-    __asm__ volatile("outw %0, %1" : : "a"(value), "dN"(port));
+    /* Kernel mode (CPL0): raw out instruction. */
+    arch_outw(port, value);
 }
 
 void iowrite32(u16 port, u32 value)
@@ -118,8 +119,8 @@ void iowrite32(u16 port, u32 value)
         return;
     }
 
-    /* Kernel mode (CPL0). */
-    __asm__ volatile("outl %0, %1" : : "a"(value), "dN"(port));
+    /* Kernel mode (CPL0): raw out instruction. */
+    arch_outl(port, value);
 }
 
 /*

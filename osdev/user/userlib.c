@@ -112,3 +112,27 @@ void user_mail_release(void* m)
     cfg.m   = m;
     user_syscall(SYSCALL_MAILBOX, &cfg, sizeof(cfg));
 }
+
+
+int user_irq_wait(void)
+{
+    for (;;) {
+        user_mailbox_ctrl cfg = {0};
+
+        cfg.cmd = U_MAILBOX_CTRL_LISTEN;   /* mb == NULL: own mailbox */
+        user_syscall(SYSCALL_MAILBOX, &cfg, sizeof(cfg));
+
+        if (cfg.m) {
+            /* Only the kernel's IRQ notification (MAIL_MAGIC_IRQ) counts;
+             * any other mail is released and we keep waiting. */
+            if (((user_mail*)cfg.m)->magic == MAIL_MAGIC_IRQ) {
+                user_mail_release(cfg.m);
+                return 0;
+            }
+            user_mail_release(cfg.m);
+        }
+
+        /* No mail yet: yield so IRQ handlers get a chance to deliver. */
+        user_yield();
+    }
+}

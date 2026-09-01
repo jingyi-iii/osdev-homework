@@ -125,7 +125,7 @@ typedef struct user_irq_ctrl {
 } user_irq_ctrl;
 
 /* Request a user IRQ on @major; the kernel ISR then delivers
- * MAIL_TYPE_IRQ mails to the calling thread's mailbox.  Returns the
+ * MAIL_MAGIC_IRQ mails to the calling thread's mailbox.  Returns the
  * opaque irq handle (NULL on failure). */
 void* user_irq_request(u32 major, u32 minor);
 int   user_irq_unmask(void* handle);
@@ -151,18 +151,17 @@ typedef struct user_mailbox_ctrl {
     int  ret;
 } user_mailbox_ctrl;
 
-/* mailtype values (kernel include/ipc/mailbox.h) */
-#define USER_MAIL_TYPE_COMMON 0
-#define USER_MAIL_TYPE_IRQ    1
-
-/* Opaque mail view: only the leading type field is meaningful to users. */
+/* Opaque mail view: only the leading magic field is meaningful to users —
+ * it mirrors mail.magic (include/ipc/mailbox.h), the kernel's opaque
+ * notification tag (e.g. MAIL_MAGIC_IRQ for kernel IRQ notifications). */
 typedef struct user_mail {
-    int type;
+    int magic;
 } user_mail;
 
 /* Block (yielding) until a mail arrives on the calling thread's own
  * mailbox; returns the opaque mail*. */
 void* user_mail_listen(void);
 void  user_mail_release(void* m);
+int user_irq_wait(void);
 
 #endif

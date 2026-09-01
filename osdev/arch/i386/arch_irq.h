@@ -64,4 +64,44 @@ static inline int arch_running_ring3(void)
     return (cs & 3) == 3;
 }
 
+/*
+ * IRQ-flag save/restore (x86 EFLAGS.IF).  arch_irq_save() masks interrupts
+ * when the caller runs at CPL0; at CPL3 (IOPL=0) cli would #GP, so it only
+ * records the flag state and the pair degrades to a no-op mask — the same
+ * behaviour the spinlock irq-save pair relies on.
+ */
+static inline u32 arch_irq_save(void)
+{
+    u32 eflags;
+    __asm__ __volatile__("pushfl; popl %0" : "=r"(eflags) : : "memory");
+    if (!arch_running_ring3())
+        __asm__ __volatile__("cli" ::: "memory");
+    return eflags;
+}
+
+static inline void arch_irq_restore(u32 eflags)
+{
+    __asm__ __volatile__("pushl %0; popfl" : : "r"(eflags) : "memory");
+}
+
+/*
+ * Return 1 while inside a syscall/IRQ gate (irq_reenter_cnt == 0),
+ * 0 otherwise.  Ring-0 code uses it to decide whether a context-switching
+ * call may run directly inside the current gate frame.
+ */
+static inline int arch_in_gate(void)
+{
+    return irq_reenter_cnt == 0;
+}
+
+/*
+ * Deliberately trigger x86 exceptions (diagnostic "crash" command,
+ * see kernel.c).  The actual faulting instructions live in arch/i386/crash.c.
+ */
+void arch_crash_div0(void);
+void arch_crash_ud(void);
+void arch_crash_pf(void);
+void arch_crash_gp(void);
+void arch_crash_bp(void);
+
 #endif

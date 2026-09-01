@@ -1,1051 +1,300 @@
-# 微内核（Microkernel）架构改造路线图
+# 微内核（Microkernel）架构改造路线图（重写版 · 2026-09）
 
-> 将当前宏内核（Monolithic Kernel）逐步改造为微内核架构的详细步骤指南。
+> 本文档基于对当前仓库代码的**完整重扫描**编写，取代旧版路线图。
+>
+> 旧版的 `platform_bus` / `DRIVER_CLASS_USER` / 顶层 `servers/` 目录方案，已被实际落地的
+> **「独立用户 ELF server + 固定 syscall ABI + portal RPC」** 架构取代。凡与此冲突的旧章节
+> （第 5 步的 bus-driver-device 改造等）一律不再适用，本文档按真实代码重新组织。
 
 ---
 
 ## 目录
 
-1. [总览](#总览)
-2. [当前状态速览](#当前状态速览)
-3. [第 0 步：修 Bug + 打地基](#第-0-步修-bug--打地基)
-4. [第 1 步：能力系统（Capability）](#第-1-步能力系统capability)
-5. [第 2 步：IPC 增强](#第-2-步ipc-增强)
-6. [第 3 步：内存映射原语](#第-3-步内存映射原语)
-7. [第 4 步：IRQ 转发到用户态](#第-4-步irq-转发到用户态)
-8. [第 5 步：搬移驱动到用户态](#第-5-步搬移驱动到用户态)
-9. [第 6 步：Demo 程序独立运行](#第-6-步demo-程序独立运行)
-10. [工作量估算](#工作量估算)
-11. [重要提醒](#重要提醒)
+1. [当前实际架构](#一当前实际架构)
+2. [逐模块现状核对](#二逐模块现状核对)
+3. [已知问题与坑（GOTCHA）](#三已知问题与坑gotcha)
+4. [向微内核演进的路线图](#四向微内核演进的路线图)
+5. [工作量估算](#五工作量估算)
+6. [重要提醒](#六重要提醒)
 
 ---
 
-## 当前状态速览
+## 一、当前实际架构
 
-> 截至 `kernel/syscall.c` 强化补丁落地后的最新扫描结果。
-
-| 步骤 | 状态 | 备注 |
-|------|------|------|
-| 第 0 步：修 Bug + 打地基 | 🚧 大部分完成 | `split_4mb_pde`、`list_for_each_safe`、异常 dump、拼写/日志 typo 已修复；`kmalloc` 对齐未处理；**低 16MB 内核区仍 user-accessible（需地址空间重映射才能根治）** |
-| 第 1 步：能力系统 | ✅ 已实现 | `capability.h/c`、PCB 能力列表、I/O / IRQ / mailbox / VMM / 进程创建的能力检查均已落地 |
-| 第 2 步：IPC 增强 | 🚧 部分实现 | wait queue / TCB 阻塞字段已有，但 `mail` 结构未按增强版改造，`mailbox_call` 未实现，`mailbox_listen` 仍是忙等 |
-| 第 3 步：内存映射原语 | 🚧 功能等价 | 已有 `vmm_map_memory`/`vmm_unmap_memory` 和 `shm_share`，但没有按路线图命名为 `sys_mem_map/unmap/share` |
-| 第 4 步：IRQ 转发 | 🚧 部分实现 | 用户态 IRQ 已通过 `MAIL_TYPE_IRQ` 转发到注册线程的 mailbox，但 `irqline` 尚未显式持有 `owner_mailbox` |
-| 第 5 步：搬移驱动 | 🚧 部分实现 | `DRIVER_CLASS_USER` 和 platform_bus 用户驱动流程已跑通；`struct driver` 尚无 `entry/pid/tid`，也无顶层 `servers/` 目录 |
-| 第 6 步：Demo 独立运行 | ⏳ 未开始 | demo 仍直接调用 driver 库函数；命名服务未实现 |
-| syscall.c 强化 | ✅ 已完成 | 零化 kbuf、min 拷贝、统一 E_FAULT、TOCTOU 锁、handle 溢出、arch_syscall 重入守卫 |
-
----
-
-## 总览
-
-### 架构对比
+### 1.1 架构图
 
 ```
-当前（宏内核）                              目标（微内核）
-┌──────────────────────────┐         ┌─────────────────┐
-│  Kernel Space            │         │  µKernel Space   │
-│  ┌────────────────────┐  │         │  ┌─────────────┐ │
-│  │ process / thread   │  │         │  │ scheduler   │ │
-│  │ VMM / PMM / heap   │  │         │  │ IPC (mailbox)│ │
-│  │ bus / driver model │  │         │  │ VMM / PMM    │ │
-│  │ IRQ / syscall      │  │         │  │ IRQ dispatch │ │
-│  │ mailbox (IPC)      │  │         │  │ capability   │ │
-│  │ demo games         │  │         │  └─────────────┘ │
-│  └────────────────────┘  │         └─────────────────┘
-└──────────────────────────┘         ┌─────────────────┐
-                                     │  User Servers    │
-                                     │  ┌─────────────┐ │
-                                     │  │ kb_server   │ │
-                                     │  │ vga_server  │ │
-                                     │  │ rtc_server  │ │
-                                     │  │ pci_server  │ │
-                                     │  └─────────────┘ │
-                                     │  ┌─────────────┐ │
-                                     │  │ airplane    │ │
-                                     │  │ snake       │ │
-                                     │  └─────────────┘ │
-                                     └─────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  µKernel（myos.bin，i686，单核）                              │
+│  ┌─────────────┐  ┌─────────────┐  ┌──────────────────────┐  │
+│  │ scheduler   │  │ VMM / PMM   │  │ syscall 分发 (int $100)│  │
+│  │ (PIT IRQ0)  │  │ rbtree VMM  │  │ 固定号 0..6（内核侧）   │  │
+│  ├─────────────┼──┼─────────────┼──┼──────────────────────┤  │
+│  │ capability  │  │ mailbox     │  │ portal (RPC)         │  │
+│  │ (信任根)     │  │ (哑传输)     │  │ shm (共享内存)        │  │
+│  │ IRQ 顶层分发 │  │ IRQ→mail 转发│  │ 用户 syscall 注册     │  │
+│  └─────────────┴──┴─────────────┴──┴──────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
+        │ GRUB multiboot modules（独立 ELF，各自地址空间）
+        ▼
+┌──────────────────────────────────────────────────────────────┐
+│  User Servers（user/server/，ring-3 ELF）                     │
+│  ┌────────────────────┐  ┌────────────────────────────────┐  │
+│  │ terminal_server.elf│  │ kb_server.elf                  │  │
+│  │ console portal 打印│  │ IRQ1 → mailbox → 读 scancode   │  │
+│  │ (PORTAL_ID_CONSOLE)│  │ → 写 COM1（诊断）               │  │
+│  ├────────────────────┤  ├────────────────────────────────┤  │
+│  │ portal_test.elf    │  │ (log_server2.c —— 未接线，死代码)│  │
+│  └────────────────────┘  └────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-### 核心原则
+### 1.2 固定 syscall ABI（`include/kernel/uapi.h`）
 
-**只有需要 CPU 特权级的代码留在内核，其他全部搬到用户态。**
+用户程序通过 `int $100` 进入内核：`ebx=号, ecx=config, edx=size, eax=返回`。号码是**固定 ABI**，
+独立链接的用户 ELF 无需链接内核符号即可调用。
 
-留在内核的组件：
+| 号 | 宏 | 内核 handler | 说明 |
+|----|-----|--------------|------|
+| 0 | `SYSCALL_PROC_THREAD` | `kernel/process.c` | 进程/线程控制（create / exit / yield / block / unblock） |
+| 1 | `SYSCALL_IO` | `kernel/io.c` | 端口 I/O；按 `CAP_ACCESS_IO` 端口范围检查 |
+| 2 | `SYSCALL_VMM` | `kernel/mm/vmm.c` | alloc / free / map / unmap 内存（ring-3 走 gate） |
+| 3 | `SYSCALL_IRQ` | `kernel/irq.c` | 请求 / 释放 / 掩码 IRQ |
+| 4 | `SYSCALL_MAILBOX` | `kernel/ipc/mailbox.c` | mailbox 收发（哑传输） |
+| 5 | `SYSCALL_PORTAL` | `kernel/ipc/portal.c` | portal 同步 RPC |
+| 6 | `SYSCALL_SYSCTL` | `kernel/syscall.c` | **用户态**注册/注销固定 syscall 号 |
+| 7 | `SYSCALL_LOG` | （设计给用户态 log server） | LOG；**当前 log server 未接线** |
 
-| 组件 | 留在内核的理由 |
-|------|---------------|
-| 线程调度器 | 需要操作 TSS、LDT、CR3 等特权寄存器 |
-| 物理内存管理（PMM） | 需要直接操作页表 |
-| 虚拟内存管理（VMM） | 需要操作 CR3、页目录/页表 |
-| IRQ 顶层分发 | 需要操作 IDT、PIC/APIC |
-| IPC 核心（mailbox） | 需要跨地址空间传输数据 |
-| 能力系统（capability） | 访问控制的信任根必须在内核 |
+**用户态 syscall 注册（`SYSCALL_SYSCTL`）**：ring-3 server 可认领一个固定号（如 `SYSCALL_LOG`），
+内核保存 handler 连同注册进程的页目录；`syscall_dispatch()` 先切换 CR3 到该进程再在 ring-0 执行
+handler，结束后切回调用者。log server 就是靠它在自己的地址空间里写 COM1。
 
-搬出内核的组件：
+### 1.3 启动流程（`kernel/init.c` 的 `init_thread`）
 
-| 组件 | 新位置 | 通信方式 |
-|------|--------|---------|
-| 键盘驱动 | `servers/kb_server` | IRQ → IPC 转发 |
-| 终端/VGA 驱动 | `servers/vga_server` | 共享 framebuffer + IPC 命令 |
-| RTC 驱动 | `servers/rtc_server` | IPC |
-| 平台总线/设备枚举 | `servers/pci_server` | IPC |
-| Demo 游戏 | `demo/`（独立进程） | 共享 framebuffer + IPC 输入 |
+```
+init_thread
+├─ kterm_switch_to_text_mode() / kterm_clear()          # 内核自带 VGA 文本输出
+├─ load_user_elf_by_name("terminal_server.elf", grant_terminal_caps)
+│     # VGA 端口 {0x3C0, 32} + CAP_IPC → 发布 PORTAL_ID_CONSOLE
+├─ load_user_elf_by_name("kb_server.elf", grant_kb_caps)
+│     # CAP_OWN_IRQ(0x21), PS/2 {0x60,5}, COM1 {0x3F8,8}, CAP_IPC
+├─ load_user_elf_by_name("portal_test.elf", grant_demo_caps)
+│     # VGA, COM1, PIT {0x40,4}, PPI {0x61,1}, CMOS {0x70,2}, CAP_IPC
+└─ proc_exit(proc_get_pid())
+```
+
+- server 以 **GRUB multiboot module** 形式加载（`config/grub.cfg`），按 cmdline basename 匹配。
+- **加载顺序即进程创建顺序**：terminal server 必须先发布 console portal，portal_test 才能打印。
+- `grant_demo_caps` 还通过 `cap_inherit_all` 让 demo 创建的子进程继承能力。
+
+### 1.4 组件清单总览
+
+| 类别 | 组件 | 位置 | 状态 |
+|------|------|------|------|
+| ✅ 已落地 | 能力系统 | `kernel/capability.c` + `include/kernel/capability.h` | 6 类 cap，全部 syscall gate 已接入 |
+| ✅ 已落地 | 固定 syscall ABI | `include/kernel/uapi.h` | 号 0..7 固定 |
+| ✅ 已落地 | 用户态 syscall 注册 | `kernel/syscall.c`（`syscall_register_user` + CR3 切换） | log server 的模式 |
+| ✅ 已落地 | portal 同步 RPC | `kernel/ipc/portal.c` + `SYSCALL_PORTAL` | console portal 在用 |
+| ✅ 已落地 | mailbox 哑传输 | `kernel/ipc/mailbox.c` + `SYSCALL_MAILBOX` | type 已不透明化（2026-09 重构） |
+| ✅ 已落地 | IRQ→mail 转发 | `kernel/irq.c` `dispatch_user_mode_irq` | `MAIL_TYPE_IRQ` 投到注册线程 mailbox |
+| ✅ 已落地 | VMM + cap 检查 | `kernel/mm/vmm.c` | map/unmap/alloc + `CAP_MAP_MEM` |
+| ✅ 已落地 | shm 共享内存 | `kernel/ipc/shm.c` | portal 的数据通道 |
+| ✅ 已落地 | 异常 dump | `arch/i386/irq.c` `exception_handler` | 寄存器/错误码/CR2/栈回溯 |
+| ✅ 已落地 | 地基修复 | paging / list / heap | `split_4mb_pde(pde*)`、`list_for_each_safe`、`kmalloc` 8 字节对齐 |
+| 🟡 半成品 | terminal server | `user/server/display/terminal_server.c` | 仅文本 console portal，**无图形模式** |
+| 🟡 半成品 | kb server | `user/server/input/kb_server.c` | 收 IRQ 读 scancode，**只写 COM1，不广播给任何人** |
+| ⚰️ 死代码 | `log_server2.c` | `user/server/serial/log_server2.c` | 未在 makefile / grub.cfg 中，未构建未加载 |
+| ⚰️ 死代码 | `driver.h` / `device.h` | `include/kernel/driver.h` / `device.h` | platform_bus 退役后的残留 |
+| ⚰️ 死代码 | `user/demo/*` | `user/demo/` | 仍 `#include "drivers/*.h"`（已不存在），未构建 |
+| ❌ 缺失 | 命名服务 | — | `sys_name_register` / `sys_name_lookup` 无 |
+| ❌ 缺失 | RTC server | — | 无 |
+| ❌ 缺失 | timer / sleep syscall | — | 用户态无 `sys_sleep_ms` |
+| ❌ 缺失 | mailbox 订阅/广播 | — | kb 事件无法到游戏 |
+| ❌ 缺失 | 地址空间根治 | — | 低 16MB 仍 user-accessible |
 
 ---
 
-## 第 0 步：修 Bug + 打地基
+## 二、逐模块现状核对
 
-> **在做架构改动前，先把现有问题修好，否则 bug 会随着复杂度增加而放大。**
->
-> 🚧 **当前状态**：`split_4mb_pde`、`list_for_each_safe`、异常处理器寄存器 dump、日志/拼写 typo 已修复；`kmalloc` 对齐保证尚未实现。另：因内核前 16MB 仍映射为 user-accessible，`copy_*_user` 目前无法区分用户指针与指向低端内核区的指针，需在后续地址空间重映射时一并解决。
+### 2.1 能力系统（第 1 步 ✅）
 
-### 0.1 修复 `split_4mb_pde` 的静态全局变量 bug
-
-**位置**：`arch/i386/paging.c`
-
-**问题**：`split_4mb_pde` 函数操作的是静态全局 `pdes` 数组，而不是传入的 `cr3` 参数。当在用户进程的私有页目录中拆分 4MB 大页时，会错误地修改内核的主页目录。
-
-**修复方向**：将 `split_4mb_pde` 改为接受 `uint32_t *pde_base` 参数，使用传入的页目录基址而非静态全局变量。
+`include/kernel/capability.h` / `kernel/capability.c`：
 
 ```c
-// 修复前（有问题）
-static void split_4mb_pde(uint32_t vaddr, uint32_t cr3) {
-    uint32_t *pde = &pdes[PDE_INDEX(vaddr)];  // BUG: 用的是静态全局 pdes
-    // ...
-}
-
-// 修复后
-static void split_4mb_pde(uint32_t vaddr, uint32_t *pde_base) {
-    uint32_t *pde = &pde_base[PDE_INDEX(vaddr)];  // 正确：用传入的页目录
-    // ...
-}
-```
-
-### 0.2 修复 unsafe list 遍历删除
-
-**位置**：`kernel/irq.c`（`irqline_release` 函数）
-
-**问题**：在 `list_for_each` 遍历中执行 `list_del`，这是经典的链表损坏模式。
-
-**修复方向**：在 `include/lib/list.h` 中添加 `list_for_each_safe` 宏，然后修正 `irqline_release`。
-
-```c
-// include/lib/list.h —— 新增宏
-#define list_for_each_safe(pos, n, head) \
-    for (pos = (head)->next, n = pos->next; pos != (head); \
-         pos = n, n = pos->next)
-```
-
-### 0.3 改善异常处理器
-
-**位置**：`arch/i386/irq.S`
-
-**问题**：`DECLARE_EXCEPTION` 宏生成的异常处理桩全部执行 `hlt`，没有寄存器 dump 或栈回溯信息，调试体验极差。
-
-**修复方向**：至少为常见异常（#PF, #GP, #UD 等）添加以下功能：
-
-- 保存并打印全部通用寄存器值
-- 打印错误码（error code）
-- 打印 `CR2`（页错误地址，针对 #PF）
-- 打印调用栈回溯（stack trace）
-- 打印当前进程/线程信息
-
-### 0.4 现有代码中值得清理的小问题
-
-| 问题 | 位置 | 优先级 | 状态 |
-|------|------|--------|------|
-| `init.h` 包含了不必要的重型头文件 | `include/kernel/init.h` | 低 | 🚧 `process.h`/`errno.h` 仍存在，但无明显无关膨胀 |
-| `arch_map_4kb_range` 日志信息写成了 `arch_map_4mb_range` | `arch/i386/paging.c` | 低 | ✅ 已修复 |
-| `mailhander` 拼写错误（应为 `mailhandler`） | `include/kernel/mailbox.h` | 低 | ✅ 已修复 |
-| `kmalloc` 无对齐保证 | `kernel/mm/heap.c` | 低 | ⏳ 未处理 |
-
----
-
-## 第 1 步：能力系统（Capability）
-
-> **这是最关键的基础设施。如果你先把驱动搬出内核但没有任何访问控制，任何用户进程都能直接操作硬件寄存器——比宏内核还不安全。**
->
-> ✅ **当前状态**：能力系统已完整实现。`include/kernel/capability.h` / `kernel/capability.c`、PCB 能力链表、`cap_check`/`grant`/`revoke` 均可用；I/O、IRQ、mailbox、VMM、进程/线程创建 syscall 都已接入能力检查。
-
-### 1.1 设计理念
-
-能力（Capability）是一个不可伪造的令牌，持有它意味着拥有执行某项特权操作的权限。微内核在进程创建时授予最小权限，进程只能做被明确允许的事情。
-
-### 1.2 定义能力类型
-
-创建新文件 `include/kernel/capability.h`：
-
-```c
-#ifndef _KERNEL_CAPABILITY_H_
-#define _KERNEL_CAPABILITY_H_
-
-#include <stdint.h>
-#include "lib/list.h"
-
 typedef enum {
-    CAP_OWN_IRQ,         // 拥有某个 IRQ 线
-    CAP_MAP_MEM,         // 映射某段物理内存
-    CAP_IO_PORT,         // 访问某个 I/O 端口范围
-    CAP_IPC_SEND,        // 向某个 mailbox 发送消息
-    CAP_IPC_RECV,        // 从某个 mailbox 接收消息
-    CAP_CREATE_KRNL_PROC,     // 创建新进程
-    CAP_CREATE_KRNL_THREAD,   // 创建新线程
-} cap_type_t;
-
-typedef struct capability {
-    list_node_t  node;          // 链入进程的能力列表
-    cap_type_t   type;
-    union {
-        // CAP_OWN_IRQ
-        uint8_t   irq;
-        // CAP_MAP_MEM
-        struct {
-            uint32_t phys_base;
-            uint32_t size;
-            uint32_t flags;     // MAP_READ | MAP_WRITE | MAP_IO
-        } mem;
-        // CAP_IO_PORT
-        struct {
-            uint16_t port_base;
-            uint16_t port_count;
-        } io;
-        // CAP_IPC_SEND / CAP_IPC_RECV
-        uint64_t  mailbox_id;
-    };
-} capability_t;
-
-// 能力检查函数
-int  cap_check(struct pcb *proc, cap_type_t type, const void *arg);
-int  cap_grant(struct pcb *proc, cap_type_t type, const void *arg);
-void cap_revoke(struct pcb *proc, cap_type_t type, const void *arg);
-void cap_revoke_all(struct pcb *proc);
-
-#endif
+    CAP_OWN_IRQ,          // 拥有某个 IRQ 线
+    CAP_MAP_MEM,          // 映射某段物理内存
+    CAP_ACCESS_IO,        // 访问某段 I/O 端口范围
+    CAP_IPC,              // 使用 mailbox/portal IPC
+    CAP_CREATE_KRNL_PROC,     // 创建内核特权进程
+    CAP_CREATE_KRNL_THREAD,   // 创建内核特权线程
+} cap_type;
 ```
 
-### 1.3 给进程附加能力列表
+- `cap_check` / `cap_grant` / `cap_revoke` / `cap_revoke_all` / `cap_inherit_all` 全部可用。
+- 已接入的检查点：`kernel/io.c`（端口范围）、`kernel/irq.c`（IRQ 归属）、`kernel/ipc/mailbox.c`
+  （CAP_IPC 门）、`kernel/mm/vmm.c`（`CAP_MAP_MEM`）、`kernel/process.c`（进程/线程创建）。
+- **微内核信任根已经就位**，后续新增 server 只需在 `init.c` 里加一个 grant 函数。
 
-修改 `include/kernel/process.h` 中的 PCB 结构：
+### 2.2 IPC：mailbox + portal（第 2 步部分完成）
 
-```c
-typedef struct pcb {
-    // ... 现有字段 ...
-    list_node_t   capabilities;   // 该进程拥有的所有 capability 链表
-    spinlock_t   *cap_lock;       // 保护 capability 列表的锁
-} pcb;
-```
+**mailbox（异步消息，哑传输）** — `include/ipc/mailbox.h` / `kernel/ipc/mailbox.c`：
+- `mail` 携带 `type`（2026-09 已从不透明 `u32`）+ 内联 `data[256]`。
+- 类型常量分层：
+  - 内核自有（`include/kernel/uapi.h`）：`MAIL_TYPE_COMMON = 0`、`MAIL_TYPE_IRQ = 1`
+  - 用户自有（`user/server/server_msgs.h`）：`MSG_KEY_EVENT` / `MSG_LOG_TEXT` / `MSG_TIMER_TICK`（0x1000+）
+  - **内核只搬运、从不解释 type**——新增应用消息类型零内核改动。
+- 投递：`send` 单播（按 receiver_tid）/ `MAIL_ANY_PID/TID` 全局克隆广播；`try_get_mail` 非阻塞取信。
+- 用户侧 `user_mail_listen()`（`user/userlib.c`）= `LISTEN` + `user_yield()` **忙等轮询**。
 
-### 1.4 能力检查层
+**portal（同步 RPC）** — `include/ipc/portal.h` / `kernel/ipc/portal.c`：
+- `portal_call(portal_id, va, size)`：内核 `shm_share` 客户端缓冲 → 入队 → 客户端阻塞在 per-request
+  semaphore → server `WAIT/GET_REQ/REPLY` 唤醒 → 返回 `int ret`。
+- terminal server 发布 `PORTAL_ID_CONSOLE`，`console_putstr()` 靠它打印。
+- **portal 已覆盖「同步 RPC」需求，`mailbox_call` 可以不实现**。
 
-所有涉及特权操作的 syscall 都需要加入能力检查：
+> 结论：mailbox 的**事件/广播**半环（订阅注册表、类型化事件、非阻塞轮询）仍缺；RPC 半环已由 portal 补齐。
 
-```c
-// kernel/process.c —— 示例：IRQ 注册的 syscall handler
-int sys_irq_register(uint8_t irq, irq_handler_t handler) {
-    struct pcb *proc = current_thread()->parent;
+### 2.3 IRQ 转发（第 4 步 ✅）
 
-    // 检查当前进程是否有 CAP_OWN_IRQ 能力
-    if (!cap_check(proc, CAP_OWN_IRQ, &irq))
-        return -EPERM;
+- 用户态：`user_irq_request(major, minor)` → `SYSCALL_IRQ` → 内核记录 `irq->owner`（注册线程 tcb）+ `tid`。
+- ISR：`dispatch_user_mode_irq()` 构造 `MAIL_TYPE_IRQ` mail，`send_mail` 到 `t->mailbox`，非阻塞。
+- `irqline` 没有路线图设想的 `owner_mailbox/owner_process` 字段——实际用 `irq->owner`（tcb 缓存）达成同一目的。
+- 内核线程化 IRQ（`irq_request_threaded` + semaphore）和同步 IRQ 保留在 `irqline_handler` 的分支里。
+- **IRQ0（PIT 调度时钟）留在内核**，正确。
 
-    return irqline_register(irq, handler);
-}
+### 2.4 内存映射 + shm（第 3 步 ✅ 功能等价）
 
-// 示例：内存映射的权限检查
-void* sys_mem_map(uint32_t phys_addr, size_t size, uint32_t flags) {
-    struct pcb *proc = current_thread()->parent;
+- `vmm_map_memory(proc, phys, size, flags)` / `vmm_unmap_memory`：页对齐、`CAP_MAP_MEM` 检查、
+  逐页 `arch_map_4kb`、失败回滚、ring-3 自动走 `SYSCALL_VMM` gate（特权 `invlpg` 在 ring-0 执行）。
+- `vmm_alloc_pages` / `vmm_free_pages` / `vmm_map_fixed`（ELF 装载用）/ `vmm_va_to_pa`。
+- `shm_share(pid, va, size, out)` / `shm_unshare`：portal 的数据通道。
+- 未按旧路线图改名 `sys_mem_map/unmap/share`——**没必要**，现有 API + syscall gate 已等价。
 
-    // 检查进程是否有对应物理内存范围的 CAP_MAP_MEM 能力
-    struct { uint32_t base; uint32_t size; uint32_t flags; } arg = {
-        .base = phys_addr, .size = size, .flags = flags
-    };
-    if (!cap_check(proc, CAP_MAP_MEM, &arg))
-        return (void*)-EPERM;
+### 2.5 用户态 server（第 5 步 ✅ 以实际方案落地）
 
-    return vmm_map_physical(proc, phys_addr, size, flags);
-}
-```
+实际方案**不是**旧路线图的 platform_bus + `user_driver_start`，而是：
 
-### 1.5 启动时授权
+| | 旧路线图 | 实际落地 |
+|---|---|---|
+| server 形式 | `servers/*.c` 编进内核，内核 spawn 线程 | 独立 ring-3 ELF，GRUB module 加载 |
+| 通信 | mailbox call + capability | 固定 syscall + portal RPC + mailbox |
+| 资源授予 | `user_driver_start` 按 device 资源授予 | `init.c` 按 server 手写 grant 函数 |
+| 驱动注册 | `platform_driver_register` | `SYSCALL_SYSCTL` 认领固定 syscall 号 |
 
-在 `kernel/init.c` 的 init 过程中，为关键服务进程授予必要的能力：
+- ✅ `terminal_server`：console portal 打印（直写 `0xB8000` + 端口 `0x3D4/0x3D5` 移光标）。
+- ✅ `kb_server`：IRQ1 → mailbox → 排空 8042 → 写 COM1 诊断。
+- ⚠️ 两者都还是「半服务」：terminal 没有图形/命令系统，kb 没有事件广播。
 
-```c
-void init_thread(void) {
-    // 创建键盘服务进程
-    pcb_t *kb_proc = p_create("kb_server", PRIORITY_HIGH);
-    cap_grant(kb_proc, CAP_IO_PORT, &(cap_io_t){.port_base = 0x60, .port_count = 8});
-    cap_grant(kb_proc, CAP_OWN_IRQ,  &(uint8_t){1});
+### 2.6 内核侧（调度 / VMM / 异常 / 日志）
 
-    // 创建 VGA 服务进程
-    pcb_t *vga_proc = p_create("vga_server", PRIORITY_HIGH);
-    cap_grant(vga_proc, CAP_MAP_MEM, &(cap_mem_t){
-        .phys_base = 0xA0000, .size = 0x10000, .flags = MAP_READ | MAP_WRITE
-    });
-    cap_grant(vga_proc, CAP_IO_PORT, &(cap_io_t){
-        .port_base = 0x3C0, .port_count = 0x20
-    });
+- 调度：单核，PIT IRQ0 tick，`schedule_from_isr`；进程/线程用全局链表 + wait queue。
+- 日志：`kernel/auxiliary/klog.c`（ring-0 直写 COM1）+ `kernel/auxiliary/kterm.c`（VGA 文本启动横幅）。
+  用户态 LOG 的设计通道是 `SYSCALL_LOG` → log server，**但 log server 未接线**。
+- 异常：`exception_handler` dump 全部寄存器 + 错误码 + CR2/PF 类型 + 栈回溯，然后 halt。
 
-    // 创建 RTC 服务进程
-    pcb_t *rtc_proc = p_create("rtc_server", PRIORITY_NORMAL);
-    cap_grant(rtc_proc, CAP_IO_PORT, &(cap_io_t){.port_base = 0x70, .port_count = 2});
-    cap_grant(rtc_proc, CAP_OWN_IRQ,  &(uint8_t){8});
+### 2.7 已知问题与坑（GOTCHA）
 
-    // 创建游戏进程
-    pcb_t *game_proc = p_create("airplane", PRIORITY_LOW);
-    // 游戏进程不直接拥有硬件能力，通过 VGA server 获取共享 framebuffer
-    // 通过 kb_server 获取键盘事件
-}
-```
+1. **低 16MB 内核区仍 user-accessible**：`arch_paging_init` 对前 16MB 身份映射用 `PTE_USER`，
+   `copy_*_user` 无法区分用户指针与指向低端内核区的指针。需地址空间重映射根治（见 P3）。
+2. **第一个任务之前禁止 `int $100`**：`irq.S` 的 `RESTORE_REGS_KEEP_EAX` 会解引用 `curr_task_ctx`（NULL）
+   → 栈损坏 → 重启循环。早期 boot 的 LOG 必须走 `klog_write` 直写。
+3. **用户态 syscall handler 必须关中断**：`call_user_handler` 要在 handler 周围 `cli`，否则 timer ISR
+   在 handler 中途切任务 → 恢复时 CR3 错误。
+4. **GRUB module 的 cmdline 尾 token 就是名字**：`module /boot/xxx.elf xxx.elf` 缺尾 token 则 cmdline 为空，
+   `modname_is` 匹配失败。
+5. **multiboot v1 位号容易数错**：`MODULES = (1<<3)`（不是 `1<<4`）。
+6. **模块落在 16MB 之外**：GRUB 把模块放内核镜像之后（~20MB），而 16MB..64MB 是 `PTE_KERNEL`，
+   `copy_from_user`（要求 `PTE_USER`）会拒绝 → `proc_load_from_elf` 对 `PROC_PRIV_KERNEL` 调用方直接 `memcpy`。
+7. **QEMU 调试**：`-monitor telnet:127.0.0.1:PORT,server,nowait` + `xp /Nwx ADDR` 查物理内存；
+   `-kernel` 无法加载 multiboot module，调试必须走 ISO（`make run_debug`）。
 
 ---
 
-## 第 2 步：IPC 增强
+## 三、向微内核演进的路线图
 
-> **当前 mailbox 偏向"通知"模式，微内核需要的是完整的进程间数据传输和同步 RPC。**
->
-> 🚧 **当前状态**：`include/sync/wait_queue.h` 与 `kernel/sync/wait_queue.c` 已实现，TCB 也包含 `waiting_on`/`wait_node` 字段。但 `mail` 结构仍是旧版（固定 `data[256]`、无 `msg_type`/`error_code`/`payload`/`reply_mailbox`），`mailbox_call` 未实现，`mailbox_listen` 仍通过 `thread_yield` 忙等。
+> 原则不变：**只有需要 CPU 特权级的代码留在内核**；把调度时钟留内核；共享内存优先；逐步迁移、每步可运行。
 
-### 2.1 增强 mail 为消息载体
+### P0 — 事件推送（mailbox 的「另一半」）⭐ 最高优先
 
-修改 `include/kernel/mailbox.h`，扩展 mail 结构：
+**目标**：让 server 能把类型化事件推给 N 个订阅者（键盘 → 游戏）。
 
-```c
-typedef struct mail {
-    uint64_t    id;
-    uint32_t    sender_pid;
-    uint32_t    sender_tid;
-    uint32_t    msg_type;         // 新增：消息类型（便于分发）
-    int32_t     error_code;       // 新增：响应错误码（0 = 成功）
+前置：✅ type 已不透明化（`uapi.h` + `server_msgs.h`）、✅ `send` 广播原语已在、✅ `CAP_IPC` 已接入。
 
-    // 数据传输
-    void       *payload;          // 指向数据缓冲区
-    size_t      payload_size;     // 数据大小
+| 子项 | 内容 | 位置 |
+|------|------|------|
+| 1. 订阅注册表 | 新增内核侧「事件订阅表」：`sys_subscribe(type, tid)` / `sys_unsubscribe`；或更简单——一个 well-known 广播 mailbox（如 `MAILBOX_ID_KB_EVENTS`）让游戏 `listen` 它 | `kernel/ipc/mailbox.c` + `uapi.h` |
+| 2. kb_server 广播 | 把 scancode → `MSG_KEY_EVENT` mail（`data[]={scancode, ascii}`）广播给订阅者，替代现在的「只写 COM1」 | `user/server/input/kb_server.c` |
+| 3. consumer 侧 | 游戏 `user_mail_listen` 非阻塞轮询 + 按 `type == MSG_KEY_EVENT` 过滤（轮询模式已就绪） | `user/userlib.c` |
+| 4.（可选）阻塞 listen | 用现成 wait_queue 把 `user_mail_listen` 从忙等改成真阻塞（可复用 semaphore 的 `wait_queue_sleep_locked` 模式） | `kernel/ipc/mailbox.c` |
 
-    // reply 通道（用于同步 RPC）
-    uint64_t    reply_mailbox;    // 回复到此 mailbox（0 = 无回复）
+> 不做：`mailbox_call`（portal 已覆盖同步 RPC）。
 
-    // 引用计数
-    atomic_t    ref_count;        // 改用原子类型
-    list_node_t node;
-} mail_t;
-```
+### P1 — Demo 独立运行 ⭐
 
-### 2.2 实现同步 RPC（call + reply）
+**目标**：`user/demo/` 从「引用不存在头文件的死代码」变成真正跑起来的独立进程。
 
-```c
-// include/kernel/mailbox.h —— 新增 API
-int mailbox_call(uint64_t target_mbox, mail_t *req, mail_t **resp, uint32_t timeout_ms);
-```
+| 子项 | 内容 | 位置 |
+|------|------|------|
+| 1. 图形服务 | terminal_server 目前是纯文本 console portal。新建/扩展出 **graphics server**（mode 0x13 帧缓冲） | `user/server/display/` |
+| 2. 共享 framebuffer | gfx server 通过 `shm_share` 把帧缓冲共享给游戏（一次性映射，不是每次画点发 IPC） | `kernel/ipc/shm.c` |
+| 3. 命名服务 | `sys_name_register(name, id)` / `sys_name_lookup(name)`（server 注册名 → portal/mailbox id） | `kernel/` + `uapi.h` |
+| 4. timer / sleep | 新增 `sys_sleep_ms`（PIT 留内核，`timer_delay_ms` 的 PIT 部分内核化，端口走 `SYSCALL_IO` 也行） | `kernel/` |
+| 5. kb 事件通道 | 依赖 P0 | — |
+| 6. demo 重写 | 去掉 `drivers/*.h`，改用 `userlib` + portal（console）+ mailbox（按键事件） | `user/demo/*` |
+| 7. 构建 | makefile 加 demo ELF target + grub.cfg 加载 | `makefile` / `config/grub.cfg` |
 
-```c
-// kernel/ipc/mailbox.c —— 实现
-int mailbox_call(uint64_t target_mbox, mail_t *req, mail_t **resp, uint32_t timeout_ms) {
-    // 1. 创建一个临时 reply mailbox（仅调用者可见）
-    uint64_t reply_mbox = mailbox_create(current_thread()->parent->pid, 0);
+### P2 — 服务补齐
 
-    // 2. 在请求中附加 reply mailbox id
-    req->reply_mailbox = reply_mbox;
+| 子项 | 内容 | 位置 |
+|------|------|------|
+| 1. log server 接线 | `log_server2.c` 已写好（SYSCALL_SYSCTL 认领 `SYSCALL_LOG`），但 makefile 无 ELF target、grub.cfg 未加载 → 补上即可 | `makefile` / `config/grub.cfg` |
+| 2. RTC server | 新建 `rtc_server`：`CAP_ACCESS_IO(0x70-0x71)`，提供时间查询（`SYSCALL_LOG` 同款 sysctl 模式或 portal） | `user/server/` |
+| 3. 清理死代码 | 删除或归档 `include/kernel/driver.h`、`include/kernel/device.h`；`user/demo/` 在新版跑通后替换 | — |
+| 4. 用户态驱动 API | 若 demo 需要 `gfx_*` / `kb_poll` / `timer_*`，在 `user/server/server_msgs.h` 旁建一份用户侧 API 头，替代已删的 `drivers/*.h` | `user/` |
 
-    // 3. 发送请求
-    int ret = send_mail(target_mbox, req);
-    if (ret != 0) {
-        mailbox_destroy(reply_mbox);
-        return ret;
-    }
+### P3 — 地址空间根治（第 0 步遗留）
 
-    // 4. 阻塞等待响应（使用 wait queue）
-    mail_t *reply = mailbox_listen(reply_mbox, timeout_ms);
+**问题**：前 16MB 身份映射带 `PTE_USER` → `copy_*_user` 无法区分用户指针与低端内核指针。
 
-    // 5. 清理并返回
-    mailbox_destroy(reply_mbox);
-    if (reply == NULL)
-        return -ETIMEDOUT;
+**方向**：
+1. 内核页表与用户页表分离：用户进程的页目录**不映射**低 16MB（或只映射必要部分）。
+2. 内核映射改为只对内核可见（去掉 `PTE_USER`）。
+3. 相应调整 `proc_load_from_elf` 的装载路径（现在靠低端身份映射 + `memcpy` 规避）。
 
-    *resp = reply;
-    return reply->error_code;
-}
-```
-
-### 2.3 用 wait queue 替代忙等待
-
-创建新文件 `include/kernel/wait.h`：
-
-```c
-#ifndef _KERNEL_WAIT_H_
-#define _KERNEL_WAIT_H_
-
-#include "lib/list.h"
-#include "sync/spinlock.h"
-
-typedef struct wait_queue {
-    list_node_t  waiters;     // 阻塞在此的线程链表
-    spinlock_t  *lock;
-} wait_queue_t;
-
-// 初始化 wait queue
-void wait_queue_init(wait_queue_t *wq);
-
-// 将当前线程放入等待队列并挂起
-void wait_queue_sleep(wait_queue_t *wq);
-
-// 唤醒等待队列中的一个线程
-void wait_queue_wake_one(wait_queue_t *wq);
-
-// 唤醒等待队列中的所有线程
-void wait_queue_wake_all(wait_queue_t *wq);
-
-#endif
-```
-
-配合修改 `include/kernel/process.h` 中的 TCB：
-
-```c
-typedef struct tcb {
-    // ... 现有字段 ...
-    wait_queue_t *waiting_on;   // 当前正在等待的队列（NULL = 不在等待）
-    list_node_t   wait_node;    // 链入 wait_queue 的节点
-} tcb;
-```
-
-### 2.4 改进 mailbox_listen
-
-```c
-// 用 wait queue 替换 thread_yield 忙等待
-mail_t* mailbox_listen(uint64_t mbox_id, uint32_t timeout_ms) {
-    mailbox_t *mbox = mailbox_find(mbox_id);
-    if (!mbox) return NULL;
-
-    mail_t *mail = NULL;
-    spinlock_lock(mbox->lock);
-
-    while (list_empty(&mbox->queue)) {
-        // 将当前线程放入等待队列
-        wait_queue_sleep(&mbox->wait_queue);
-        spinlock_unlock(mbox->lock);
-
-        // 主动让出 CPU
-        thread_yield();
-
-        // 被唤醒后重新获取锁
-        spinlock_lock(mbox->lock);
-
-        // 检查超时
-        if (timeout_expired()) {
-            spinlock_unlock(mbox->lock);
-            return NULL;
-        }
-    }
-
-    // 取出消息
-    mail = list_first_entry(&mbox->queue, mail_t, node);
-    list_del(&mail->node);
-    spinlock_unlock(mbox->lock);
-    return mail;
-}
-```
+> 这是**结构性改动**，牵一发动全身（syscall 的 kernel heap 低端映射、module 装载、portal 的 shm 共享都依赖低端映射）。
+> 建议放在 P0/P1 全部跑通、功能冻结后再动。
 
 ---
 
-## 第 3 步：内存映射原语
+## 四、工作量估算
 
-> **驱动在用户态后，需要能映射 MMIO 区域和 DMA 缓冲区。现有的 VMM 系统（红黑树管理虚拟区域）是很好的基础。**
->
-> 🚧 **当前状态**：功能等价接口已存在——`vmm_map_memory`/`vmm_unmap_memory`（`kernel/mm/vmm.c`）以及共享内存 `shm_share`/`shm_unshare`（`kernel/ipc/shm.c`），都通过 syscall 暴露给 ring-3。但尚未按本路线图重命名为 `sys_mem_map` / `sys_mem_unmap` / `sys_mem_share`。
-
-### 3.1 新增 syscall
-
-```c
-// 映射物理内存到当前进程的虚拟地址空间
-// 返回映射后的虚拟地址
-void* sys_mem_map(uint32_t phys_addr, size_t size, uint32_t flags);
-// flags 位定义：
-//   MAP_READ   (1 << 0)  —— 可读
-//   MAP_WRITE  (1 << 1)  —— 可写
-//   MAP_IO     (1 << 2)  —— MMIO 区域（禁用缓存）
-//   MAP_USER   (1 << 3)  —— 用户态可访问
-
-// 解除映射
-int sys_mem_unmap(void *vaddr, size_t size);
-```
-
-### 3.2 实现要点
-
-```c
-void* sys_mem_map(uint32_t phys_addr, size_t size, uint32_t flags) {
-    struct pcb *proc = current_thread()->parent;
-
-    // 1. 能力检查：进程必须持有对应物理地址范围的 CAP_MAP_MEM
-    cap_mem_t cap_mem = {.phys_base = phys_addr, .size = size, .flags = flags};
-    if (!cap_check(proc, CAP_MAP_MEM, &cap_mem))
-        return (void*)(intptr_t)(-EPERM);
-
-    // 2. 页对齐
-    uint32_t aligned_pa = ALIGN_DOWN(phys_addr, PAGE_SIZE);
-    uint32_t offset     = phys_addr - aligned_pa;
-    size_t   aligned_sz = ALIGN_UP(size + offset, PAGE_SIZE);
-
-    // 3. 在进程的 VMM 空间中分配虚拟地址区域
-    void *vaddr = vmm_alloc_region(proc, aligned_sz);
-    if (!vaddr)
-        return (void*)(intptr_t)(-ENOMEM);
-
-    // 4. 逐页建立映射
-    uint32_t pg_flags = PAGE_PRESENT | PAGE_RW;  // 内核有 RW 权限
-    if (flags & MAP_USER)  pg_flags |= PAGE_USER;
-    if (flags & MAP_IO)    pg_flags |= PAGE_PCD | PAGE_PWT;  // 禁用缓存
-
-    for (size_t i = 0; i < aligned_sz; i += PAGE_SIZE) {
-        arch_map_4kb((uint32_t)vaddr + i, aligned_pa + i, pg_flags, proc->pde);
-    }
-
-    // 5. 刷新 TLB
-    arch_tlb_flush();
-
-    // 6. 返回用户可用的虚拟地址（带偏移）
-    return (void*)((uint8_t*)vaddr + offset);
-}
-```
-
-### 3.3 共享内存支持（两个进程映射同一物理页）
-
-```c
-// 进程 A 将一段内存共享给进程 B
-int sys_mem_share(uint32_t target_pid, void *local_vaddr, size_t size) {
-    struct pcb *proc_a = current_thread()->parent;
-    struct pcb *proc_b = pcb_find(target_pid);
-    if (!proc_b) return -ESRCH;
-
-    // 1. 查找 local_vaddr 对应的物理地址
-    uint32_t phys_addr = vmm_virt_to_phys(proc_a, local_vaddr);
-    if (phys_addr == 0) return -EINVAL;
-
-    // 2. 为进程 B 创建新的虚拟映射到同一物理地址
-    void *remote_vaddr = vmm_alloc_region(proc_b, size);
-    for (size_t i = 0; i < size; i += PAGE_SIZE) {
-        arch_map_4kb((uint32_t)remote_vaddr + i, phys_addr + i,
-                     PAGE_PRESENT | PAGE_RW | PAGE_USER, proc_b->pde);
-    }
-
-    // 3. 授予进程 B 访问此内存的能力
-    cap_grant(proc_b, CAP_MAP_MEM, &(cap_mem_t){
-        .phys_base = phys_addr, .size = size,
-        .flags = MAP_READ | MAP_WRITE
-    });
-
-    return 0;
-}
-```
+| 阶段 | 内容 | 预计 | 难度 | 主要文件 |
+|------|------|------|------|---------|
+| P0 | 事件订阅 + kb 广播 | 2-3 天 | ⭐⭐⭐ | `kernel/ipc/mailbox.c`、`uapi.h`、`kb_server.c` |
+| P1 | graphics + 命名服务 + timer + demo | 5-8 天 | ⭐⭐⭐ | `user/server/display/`、`user/demo/*`、`makefile` |
+| P2 | log 接线 + RTC + 清理 | 1-2 天 | ⭐⭐ | `makefile`、`grub.cfg`、`user/server/` |
+| P3 | 地址空间重映射 | 2-3 天 | ⭐⭐⭐⭐ | `arch/i386/paging.c`、`kernel/mm/vmm.c`、`kernel/syscall.c` |
+| **总计** | | **2-3 周** | | |
 
 ---
 
-## 第 4 步：IRQ 转发到用户态
-
-> **当前 IRQ handler 在内核态直接执行驱动逻辑。微内核需要把硬件中断转化为 IPC 消息发给用户态驱动进程。**
->
-> 🚧 **当前状态**：用户态 IRQ 已经通过 `MAIL_TYPE_IRQ` 邮件转发到注册线程的 mailbox（见 `kernel/irq.c` 的 `dispatch_user_mode_irq`），内核 IRQ（如时钟）仍直接调用 handler。但 `irqline` 结构尚未显式持有 `owner_mailbox` / `owner_process` 字段。
-
-### 4.1 修改内核 IRQ handler 为消息转发
-
-```c
-// kernel/irq.c —— 新的 IRQ 分发逻辑
-typedef struct irqline {
-    // ... 现有字段 ...
-    uint64_t    owner_mailbox;    // 新增：拥有此 IRQ 的进程的 mailbox
-    struct pcb *owner_process;    // 新增：拥有此 IRQ 的进程
-} irqline_t;
-
-// 中断处理入口（内核态，ISR 上下文）
-static void irqline_dispatch(irqline_t *line) {
-    if (line->owner_mailbox == 0) {
-        // 没有用户态拥有者：内核内部处理（如调度 tick）
-        return;
-    }
-
-    // 构造 IRQ 通知消息
-    irq_notify_t notify = {
-        .irq_num     = line->irq_num,
-        .count       = atomic_fetch_add(&line->irq_count, 1),
-        .timestamp   = timer_get_ticks(),
-    };
-
-    // 创建 mail 并发送
-    mail_t *mail = mail_create(sizeof(irq_notify_t));
-    if (!mail) return;
-
-    memcpy(mail->payload, &notify, sizeof(irq_notify_t));
-    mail->msg_type = MSG_IRQ_NOTIFY;
-
-    // 非阻塞发送：如果 mailbox 满则丢弃（IRQ 上下文中不能阻塞）
-    mailbox_try_send(line->owner_mailbox, mail);
-}
-```
-
-### 4.2 用户态驱动等待 IRQ
-
-```c
-// servers/kb_server.c —— 用户态键盘驱动的主循环
-void kb_server_main(void) {
-    // 1. 创建自己的 mailbox
-    uint64_t my_mbox = sys_mailbox_create(MAILBOX_FLAG_IRQ);
-
-    // 2. 向内核注册 IRQ1 的所有权
-    sys_irq_register(1, my_mbox);
-
-    KLOG("kb_server: ready, listening on IRQ 1\n");
-
-    // 3. 主事件循环
-    while (1) {
-        mail_t *msg = sys_mailbox_listen(my_mbox, 0);  // 永久阻塞等待
-
-        if (msg->msg_type == MSG_IRQ_NOTIFY) {
-            // 收到 IRQ 通知：读取 PS/2 数据端口
-            uint8_t scancode = sys_inb(0x60);
-
-            // 处理扫描码，构造键盘事件
-            key_event_t event = process_scancode(scancode);
-            if (event.valid) {
-                // 转发给关注键盘事件的进程
-                mail_t *key_mail = mail_create(sizeof(key_event_t));
-                memcpy(key_mail->payload, &event, sizeof(key_event_t));
-                key_mail->msg_type = MSG_KEY_EVENT;
-                sys_mailbox_broadcast(KB_EVENT_MAILBOX, key_mail);
-            }
-        }
-
-        mail_release(msg);
-    }
-}
-```
-
-### 4.3 保留在内核的中断
-
-| IRQ | 用途 | 为什么留在内核 |
-|-----|------|---------------|
-| IRQ0 | PIT 调度时钟 | 线程调度需要内核态执行 |
-| IRQ2 | 级联 | PIC 硬件要求 |
-
----
-
-## 第 5 步：搬移驱动到用户态
-
-> **基础设施齐全后，逐个将驱动从内核空间迁移到用户态服务进程。**
->
-> 🚧 **当前状态**：`include/kernel/driver.h` 已定义 `DRIVER_CLASS_KERNEL` / `DRIVER_CLASS_USER`，`drivers/platform/platform_bus.c` 已按 class 分支拉起用户态 server 并授予 capability。但 `struct driver` 目前使用 `start`/`stop` 而非路线图里的 `entry/pid/tid`，也没有独立的顶层 `servers/` 目录（server 源码仍在 `drivers/*_server.c`）。
-
-### 5.0 复用 bus-driver-device 架构（推荐做法）
-
-> **核心思路：bus-driver-device 模型解决的是"绑定 + 生命周期"（probe/remove），
-> 而不是"驱动代码跑在哪"。** 内核驱动与用户态驱动的差别只在 `probe` 的实现：
-> 内核驱动直接调 `drv->probe(dev)`；用户态驱动则"拉起一个 ring3 的 server 线程 +
-> 把 device 的资源翻译成 capability 授予它"，真正的硬件初始化（`irq_request`、
-> `mailbox_listen`、`sys_inb`）由那个 server 在用户态自己完成。
->
-> 设备侧**完全不用改**：`platform_devices_init()` 照旧注册 device，`platform_bus` 的
-> `match` 照旧按 type 匹配。只需要给 `struct driver` 加几个字段 + `bus.c` 里分支一下。
-
-#### 5.0.1 扩展 `struct driver`（`include/kernel/driver.h`）
-
-```c
-enum drv_class {
-    DRV_CLASS_KERNEL = 0,   /* probe/remove 是内核函数指针（现状） */
-    DRV_CLASS_USER   = 1,   /* probe 时拉起用户态 server 线程      */
-};
-
-struct driver {
-    const char *type;
-    list_node drv_node;
-    void* ops;
-
-    int           class;      /* DRV_CLASS_KERNEL / DRV_CLASS_USER */
-    task_entry_t  entry;      /* user driver 的 ring3 入口          */
-    int32_t       pid;        /* probe 后记录的 server 进程 pid     */
-    int32_t       tid;        /* 对应线程 tid                      */
-
-    int (*probe)(struct device *dev);   /* kernel driver 用 */
-    int (*remove)(struct device *dev);
-};
-```
-
-#### 5.0.2 `kernel/bus.c` 按 driver class 分支
-
-```c
-static int try_bind_and_probe(struct bus *bus, struct driver *drv, struct device *dev)
-{
-    if (!drv || !dev)
-        return E_INVAL;
-    if (dev->driver != NULL)
-        return E_BUSY;
-    if (!driver_matches(bus, drv, dev))
-        return E_DRV_NOTFOUND;
-
-    dev->driver = drv;
-
-    int ret;
-    if (drv->class == DRV_CLASS_USER)
-        ret = user_driver_start(bus, drv, dev);   /* 拉起 server + 授能力 */
-    else if (!drv->probe)
-        ret = E_DRV_PROBE;
-    else
-        ret = drv->probe(dev);
-
-    if (ret != 0)
-        dev->driver = NULL;
-    return ret;
-}
-
-static int unbind_driver_from_device(struct driver *drv, struct device *dev)
-{
-    if (!drv || !dev || dev->driver != drv)
-        return E_INVAL;
-
-    if (drv->class == DRV_CLASS_USER)
-        user_driver_stop(drv);          /* thread_exit + cap_revoke_all */
-    else if (drv->remove)
-        drv->remove(dev);
-
-    dev->driver = NULL;
-    return 0;
-}
-```
-
-#### 5.0.3 `user_driver_start`：把设备资源翻译成能力
-
-```c
-static int user_driver_start(struct bus *bus, struct driver *drv, struct device *dev)
-{
-    /* 1. 拉起 ring3 server（入口是 drv->entry） */
-    int32_t pid = proc_create(PROC_PRIV_USER, drv->entry, 0);
-    if (pid < 0)
-        return E_DRV_PROBE;
-
-    pcb* proc = get_process_by_pid(pid);
-    if (!proc) {
-        proc_exit(pid);
-        return E_DRV_PROBE;
-    }
-
-    /* 2. 按设备资源逐条授予能力（platform_device 的 dev 是首成员，可直接强转） */
-    struct platform_device* pdev = to_platform_device(dev);
-    for (int i = 0; i < pdev->num_res; i++) {
-        struct platform_resource* res = &pdev->resources[i];
-        switch (res->type) {
-        case PLAT_RES_IRQ:
-            cap_grant(proc, CAP_OWN_IRQ, &res->irq.major);
-            break;
-        case PLAT_RES_IO:
-            cap_grant(proc, CAP_ACCESS_IO, &(cap_io_port){
-                .base = res->io.base, .count = res->io.size });
-            break;
-        case PLAT_RES_MEM:
-            cap_grant(proc, CAP_MAP_MEM, &(cap_mem){
-                .base = res->mem.addr, .size = res->mem.size,
-                .flags = MAP_READ | MAP_WRITE });
-            break;
-        }
-    }
-
-    /* 3. 记录 pid/tid，便于 remove 时回收
-     *    （tid = 进程主线程；目前 proc_create 不直接返回，可遍历 pcb->tcbs
-     *      或给 proc_create 加个 out 参数返回主线程 tid） */
-    drv->pid = pid;
-    drv->tid = /* 主线程 tid */;
-
-    return 0;   /* 绑定成功：真正的硬件初始化由 server 在 ring3 自己完成 */
-}
-
-static void user_driver_stop(struct driver *drv)
-{
-    if (drv->tid > 0)
-        thread_exit(drv->tid);
-    if (drv->pid > 0) {
-        pcb* proc = get_process_by_pid(drv->pid);
-        if (proc)
-            cap_revoke_all(proc);
-    }
-    drv->pid = drv->tid = -1;
-}
-```
-
-#### 5.0.4 注册一个用户态驱动（以 kb_server 为例）
-
-```c
-static struct driver kb_user_driver = {
-    .type   = "keyboard",       /* 与 platform 设备表里的 type 一致 */
-    .class  = DRV_CLASS_USER,
-    .entry  = kb_server_main,   /* ring3 入口 */
-};
-
-int kb_user_driver_init(void)
-{
-    return platform_driver_register(&kb_user_driver);
-}
-```
-
-`kb_server_main()`（用户态）相对现有 `drivers/test/kb_server.c` 的改动：
-
-| 现在（宏内核写法） | 微内核写法 |
-|---|---|
-| `arch_inb(0x60)` 直接读端口 | `sys_inb(0x60)`（走 syscall / platform_bus ops） |
-| 全局 `static struct kb_device kb_device` | 删掉内核全局态，状态放 server 自己的内存 |
-| `kb_register_callback2` 直接操作内核链表 | 变成 IPC 请求 → kb server 的 mailbox 处理 |
-| `KLOG(...)` | 通过 log server / 共享 buffer |
-
-**不变的部分**：IRQ → mailbox 的投递链路（`irq_request` → `mailbox_listen`）完全复用，
-这正是第 4 步已经做好的转发机制。
-
-#### 5.0.5 与前面步骤的衔接
-
-- 依赖第 1 步的 **capability**（`cap_grant` / `cap_revoke_all`）和第 4 步的 **IRQ→mailbox 转发**。
-- 依赖 `proc_create(PROC_PRIV_USER, entry, 0)` 能拉起独立地址空间的用户进程（第 6 步的 demo 也用同一机制）。
-- 粒度可自由选择：一个 server 进程可以挂多个 device（`drv->entry` 内部自己 `irq_request`
-  多个 IRQ），也可以一个 device 一个进程。
-- 若不想让内核"拉起"进程，也可以反过来：server 启动后通过新 syscall
-  `sys_driver_register(type, mailbox_id)` 把自己注册为某 type 的 user driver，
-  `try_bind_and_probe` 找到已注册的 server 时只做绑定 + 授能力、不 spawn 进程。
-### 5.1 目录结构调整
-
-```
-servers/                   # 新建：用户态服务进程
-├── kb_server.c            # 键盘服务
-├── vga_server.c           # VGA/终端服务
-├── rtc_server.c           # RTC 时间服务
-├── pci_server.c           # PCI 总线枚举（可选，当前无 PCI 设备）
-└── makefile               # servers 的构建规则
-```
-
-### 5.2 键盘服务（kb_server）
-
-| 属性 | 说明 |
-|------|------|
-| 需要的能力 | `CAP_IO_PORT(0x60-0x64)`, `CAP_OWN_IRQ(1)` |
-| 提供的接口 | 键盘事件订阅/取消订阅 |
-| 使用的 mailbox | `kb_irq_mbox`（收 IRQ），`kb_event_mbox`（广播按键） |
-
-关键设计决策：
-- 键盘服务**不直接**写 VGA 显存（与现有代码不同）。它只广播按键事件。
-- 任何进程可以订阅按键事件，实现解耦。
-
-### 5.3 VGA/终端服务（vga_server）
-
-| 属性 | 说明 |
-|------|------|
-| 需要的能力 | `CAP_MAP_MEM(0xA0000-0xAFFFF)`, `CAP_IO_PORT(0x3C0-0x3DA)` |
-| 提供的接口 | 字符输出、模式切换、framebuffer 获取、命令注册 |
-| 使用的 mailbox | `vga_cmd_mbox`（收命令） |
-
-关键设计决策：
-- VGA framebuffer 通过**共享内存**提供给游戏进程，而非每次 `putchar` 都发 IPC。
-- 终端命令系统（`terminal_register_command`）保留在 VGA server 中。
-
-```c
-// servers/vga_server.c —— 核心结构
-void vga_server_main(void) {
-    // 1. 映射 VGA 显存到自己的地址空间
-    uint8_t *fb = (uint8_t*)sys_mem_map(0xA0000, 0x10000,
-                                         MAP_READ | MAP_WRITE | MAP_IO);
-
-    // 2. 初始化 VGA 硬件为文本模式
-    vga_set_text_mode();
-
-    // 3. 服务循环
-    while (1) {
-        mail_t *req = sys_mailbox_listen(VGA_CMD_MAILBOX, 0);
-
-        switch (req->msg_type) {
-        case VGA_CMD_SET_MODE:
-            handle_set_mode(req);
-            break;
-        case VGA_CMD_PUTCHAR:
-            handle_putchar(req, fb);
-            break;
-        case VGA_CMD_SCROLL:
-            handle_scroll(fb);
-            break;
-        case VGA_CMD_GET_FB:
-            // 将 framebuffer 共享给请求者
-            handle_share_fb(req);
-            break;
-        case VGA_CMD_REGISTER_CMD:
-            handle_register_command(req);  // 注册自定义终端命令
-            break;
-        }
-
-        // 回复调用者
-        sys_mailbox_send(req->reply_mailbox, response);
-    }
-}
-```
-
-### 5.4 RTC 时间服务（rtc_server）
-
-| 属性 | 说明 |
-|------|------|
-| 需要的能力 | `CAP_IO_PORT(0x70-0x71)`, `CAP_OWN_IRQ(8)`（可选，周期性更新） |
-| 提供的接口 | 时间查询、延迟请求 |
-| 使用的 mailbox | `rtc_req_mbox`（收请求） |
-
-**注意**：RTC 只提供**时间查询**。`timer_delay_ms` 的 PIT 部分留在内核（因为需要 I/O 端口操作），通过 syscall 提供：
-
-```c
-// syscall: 用户态可调用的延迟
-int sys_sleep_ms(uint32_t ms);
-```
-
-### 5.5 命名服务（可选）
-
-为了解耦服务发现，可以添加一个简单的命名服务：
-
-```c
-// 注册服务名 → mailbox ID 映射
-int sys_name_register(const char *name, uint64_t mailbox_id);
-
-// 查询服务
-uint64_t sys_name_lookup(const char *name);
-```
-
----
-
-## 第 6 步：Demo 程序独立运行
-
-> **将 airplane 和 snake 从直接调用内核 API 改为通过 IPC 与用户态服务通信。**
->
-> ⏳ **当前状态**：尚未开始。`demo/airplane.c`、`demo/snake.c`、`demo/games_entry.c` 仍直接调用 `graphics_server` / `kb_server` / `timer_server` 库函数并调用 `proc_create` 创建子进程；命名服务 `sys_name_register` / `sys_name_lookup` 未实现。
-
-### 6.1 改造 airplane
-
-```c
-// demo/airplane.c —— 微内核版本
-
-// 全局句柄（启动时通过命名服务获取）
-static uint8_t *framebuffer = NULL;
-static uint64_t vga_mbox = 0;
-static uint64_t kb_event_mbox = 0;
-
-void airplane_main(void) {
-    // 1. 查找服务
-    vga_mbox       = sys_name_lookup("vga");
-    kb_event_mbox  = sys_name_lookup("keyboard_events");
-
-    // 2. 获取共享 framebuffer
-    framebuffer = (uint8_t*)sys_get_shared_fb(vga_mbox);
-
-    // 3. 设置 graphics 模式（通过 VGA server）
-    vga_cmd_t cmd = {.type = VGA_CMD_SET_MODE, .mode = 0x13};
-    sys_mailbox_call(vga_mbox, &cmd, NULL, 500);
-
-    // 4. 游戏主循环
-    while (1) {
-        // 非阻塞检查键盘输入
-        mail_t *key = sys_mailbox_try_recv(kb_event_mbox);
-        if (key) {
-            handle_input(key);
-            mail_release(key);
-        }
-
-        update_game_state();
-        render_frame(framebuffer);
-        sys_sleep_ms(16);  // ~60 FPS
-    }
-}
-```
-
-### 6.2 改造 snake
-
-与 airplane 相同的模式：
-1. 通过命名服务获取 VGA 和键盘服务句柄
-2. 获取共享 framebuffer
-3. 主循环：轮询键盘事件 → 更新游戏状态 → 渲染
-
-### 6.3 构建系统调整
-
-```makefile
-# makefile 新增
-SERVERS_DIR := servers
-SERVERS_SRC := $(wildcard $(SERVERS_DIR)/*.c)
-SERVERS_OBJ := $(SERVERS_SRC:$(SERVERS_DIR)/%.c=$(OBJS_DIR)/server_%.o)
-
-DEMO_DIR    := demo
-DEMO_SRC    := $(wildcard $(DEMO_DIR)/*.c)
-DEMO_OBJ    := $(DEMO_SRC:$(DEMO_DIR)/%.c=$(OBJS_DIR)/demo_%.o)
-
-# servers 和 demo 编译为用户态代码
-# （编译选项中去掉内核相关的 include，链接时标记为用户态 ELF）
-$(OBJS_DIR)/server_%.o: $(SERVERS_DIR)/%.c
-	$(CC) $(CFLAGS) -D__USER_MODE__ -c $< -o $@
-
-$(OBJS_DIR)/demo_%.o: $(DEMO_DIR)/%.c
-	$(CC) $(CFLAGS) -D__USER_MODE__ -c $< -o $@
-```
-
----
-
-## 工作量估算
-
-| 步骤 | 内容 | 状态 | 预计剩余时间 | 难度 | 新增/修改文件数 |
-|------|------|------|-------------|------|---------------|
-| 0 | 修现有 bug | 🚧 | ~0.5 天 | ⭐ | ~1 个文件（`heap.c` 对齐） |
-| 1 | 能力系统 | ✅ | 0 | ⭐⭐⭐ | 已落地 |
-| 2 | IPC 增强 | 🚧 | 3-5 天 | ⭐⭐⭐ | ~3 个新文件 + 2 个修改 |
-| 3 | 内存映射原语 | 🚧 | 1-2 天 | ⭐⭐ | 重命名/封装即可（功能已存在） |
-| 4 | IRQ 转发 | 🚧 | 1-2 天 | ⭐⭐⭐ | `irqline` 结构 + owner 字段 |
-| 5 | 搬移驱动 | 🚧 | 3-5 天 | ⭐⭐ | 新增 `servers/` 目录 + `struct driver` 字段调整 |
-| 6 | demo 独立运行 | ⏳ | 3-4 天 | ⭐⭐ | ~2 个修改 + 命名服务 |
-| **总计** | | | **2-4 周** | | **~15 个文件** |
-
----
-
-## 重要提醒
+## 五、重要提醒
 
 ### 1. 微内核的本质是用 IPC 开销换隔离性
-
-你现有的 mailbox 设计已经有一个很好的基础，但要注意：
-
-- **不要追求纯微内核**：把调度时钟留内核。把高频路径优化好。
-- **共享内存是你的朋友**：VGA framebuffer 不要每次 `putchar` 都发 IPC——map 一次，共享访问。
-- **批量处理**：可能的话，将多个操作合并为一次 IPC 调用。
+- **不要追求纯微内核**：调度时钟（IRQ0）留内核；高频路径（按键轮询）别走 portal。
+- **共享内存优先**：帧缓冲一次 `shm_share`，不要每次画点发 IPC。
+- **批量处理**：能合并成一次 IPC 的操作合并。
 
 ### 2. 先 benchmark，再优化
-
-改造前，先写一个简单的 IPC ping-pong 延迟测试：
-
-```c
-// 测试：从线程 A 发消息到线程 B，测 round-trip 延迟
-void ipc_latency_test(void) {
-    uint64_t start = timer_get_ticks();
-    for (int i = 0; i < 10000; i++) {
-        mailbox_call(target_mbox, req, &resp, 100);
-    }
-    uint64_t end = timer_get_ticks();
-    KLOG("IPC round-trip: %d us\n", (end - start) / 10);
-}
-```
-
-确保 RPC 延迟在**百微秒级以内**再继续后续步骤。
+写一个 IPC ping-pong 延迟测试（portal 或 mailbox 往返），确认延迟在**百微秒级以内**再继续。
 
 ### 3. 逐步迁移，保持可运行
-
-每一步完成后都应该有一个**可以启动并演示的版本**：
-
-- ✅ 第 0 步后：现有功能正常，关键 bug 已修复（仅剩 `kmalloc` 对齐）
-- ✅ 第 1 步后：能力系统就绪；当前所有用户 server 在创建时已被授予所需能力
-- 🚧 第 2 步后：新 IPC API 可用，旧 API 暂存（wait queue 已就绪，`mailbox_call` 待实现）
-- 🚧 第 3 步后：内存映射 syscall 可用（`vmm_map_memory`/`shm_share` 已可用）
-- 🚧 第 4 步后：可以手动测试 IRQ 转发（邮件转发已工作，`irqline` owner 字段待补齐）
-- 🚧 第 5 步后：键盘/VGA/RTC 在用户态运行（已按 `DRIVER_CLASS_USER` 跑在用户态，目录结构待整理）
-- ⏳ 第 6 步后：airplane/snake 作为独立进程运行
+每一步完成都应有一个可启动、可演示的版本：
+- ✅ 现在：内核 + terminal/kb/portal 三个 server 可启动，console 可打印，键盘有 COM1 诊断
+- P0 后：键盘事件能广播、游戏能收到
+- P1 后：airplane/snake 作为独立进程在共享帧缓冲上运行
+- P2 后：LOG 走用户态 log server、RTC 可查时间
+- P3 后：用户地址空间与内核低端隔离，`copy_*_user` 语义干净
 
 **永远不要一次性改完所有东西再测试。**
-
-### 4. 最终目标架构
-
-完成改造后，系统将达到类似 **MINIX 3 / seL4** 的架构风格：
-
-- 内核只保留调度、内存管理、IPC、IRQ 分发
-- 所有设备驱动在用户态隔离运行
-- 驱动崩溃不影响内核和其他服务
-- 新驱动可以动态启动和重启
-
-这是一个完整的、有教育意义的第二项目阶段。

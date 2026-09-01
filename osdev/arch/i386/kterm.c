@@ -1,5 +1,5 @@
 /*
- * kernel/kterm.c — ring-0 direct-to-VGA text-mode terminal.
+ * arch/i386/kterm.c — ring-0 direct-to-VGA text-mode terminal (x86 driver).
  *
  * The kernel's own screen output path, fully decoupled from the user-mode
  * terminal server: no terminal_device struct, no platform bus, no

@@ -37,7 +37,7 @@ int tss_init(void)
     return 0;
 }
 
-static inline void ldt_reload(arch_task_context* context)
+static inline void ldt_reload(volatile arch_task_context* context)
 {
     if (!context)
         return;

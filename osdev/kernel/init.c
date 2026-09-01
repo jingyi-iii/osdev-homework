@@ -1,7 +1,7 @@
 #include "kernel/init.h"
 #include "kernel/process.h"
 #include "kernel/capability.h"
-#include "kernel/multiboot.h"
+#include "multiboot.h"
 #include "kernel/log.h"
 #include "kernel/kterm.h"
 #include "lib/elf.h"

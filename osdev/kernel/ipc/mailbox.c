@@ -204,6 +204,7 @@ int send(mail* m)
                  */
                 mail* clone = alloc_mail();
                 if (clone) {
+                    clone->magic = m->magic;   /* keep the notification tag */
                     memcpy(clone->data, m->data, sizeof(m->data));
                     clone->data_size = m->data_size;
                     clone->sender_pid = m->sender_pid;
@@ -292,28 +293,21 @@ static int unregister_handler(mailbox* mb, mail_handler handler)
 }
 
 /*
- * Mailbox syscall layer
+ * Shared mailbox logic — the single place that maps a MAILBOX_CTRL_*
+ * command to the kernel implementation.  It runs in two ways:
+ *   - directly, from the public wrappers when mb_run_direct() (ring 0
+ *     inside a gate), and
+ *   - inside the syscall gate via mailbox_syscall_isr() (ring-3 callers).
+ *
+ * There is deliberately NO capability check here: kernel/ISR callers run
+ * against whatever process happens to be scheduled and must not be
+ * subjected to the ring-3 CAP_IPC gate.  mailbox_syscall_isr() applies
+ * that check on the trap path only.
  */
-static int mailbox_syscall_isr(void* data)
+static int mailbox_exec(mailbox_ctrl_config* config)
 {
-    mailbox_ctrl_config* config = (mailbox_ctrl_config*)data;
     if (!config)
         return -E_INVAL;
-
-    /*
-     * CAP_IPC gate: a user (CPL3) process may only use the mailbox IPC
-     * service if it holds a CAP_IPC grant.  Kernel processes / drivers are
-     * trusted and skip the check.  The handler runs in the caller's
-     * context, so get_current_process() is the process behind the syscall.
-     */
-    pcb* proc = get_current_process();
-    if (proc && proc->priv != PROC_PRIV_KERNEL) {
-        int ipc_ok = 1;
-        if (cap_check(proc, CAP_IPC, &ipc_ok) != 0) {
-            config->ret = -E_PERM;
-            return config->ret;
-        }
-    }
 
     switch (config->cmd) {
     case MAILBOX_CTRL_SEND:
@@ -368,11 +362,40 @@ static int mailbox_syscall_isr(void* data)
     return config->ret;
 }
 
+/*
+ * Mailbox syscall gate (SYSCALL_MAILBOX).  Ring-3 entry only: applies the
+ * CAP_IPC check, then defers to the shared mailbox_exec().
+ */
+static int mailbox_syscall_isr(void* data)
+{
+    mailbox_ctrl_config* config = (mailbox_ctrl_config*)data;
+    if (!config)
+        return -E_INVAL;
+
+    /*
+     * CAP_IPC gate: a user (CPL3) process may only use the mailbox IPC
+     * service if it holds a CAP_IPC grant.  Kernel processes / drivers are
+     * trusted and skip the check.  The handler runs in the caller's
+     * context, so get_current_process() is the process behind the syscall.
+     */
+    pcb* proc = get_current_process();
+    if (proc && proc->priv != PROC_PRIV_KERNEL) {
+        int ipc_ok = 1;
+        if (cap_check(proc, CAP_IPC, &ipc_ok) != 0) {
+            config->ret = -E_PERM;
+            return config->ret;
+        }
+    }
+
+    return mailbox_exec(config);
+}
+
 static i32 mailbox_scall_handle = -1;
 
 void mailbox_syscall_init(void)
 {
-    mailbox_scall_handle = syscall_register(SYSCALL_MAILBOX, mailbox_syscall_isr, sizeof(mailbox_ctrl_config));
+    mailbox_scall_handle = syscall_register(SYSCALL_MAILBOX,
+        mailbox_syscall_isr, sizeof(mailbox_ctrl_config));
 }
 
 void mailbox_syscall_exit(void)
@@ -389,14 +412,11 @@ void mailbox_syscall_exit(void)
  */
 static inline int mb_run_direct(void)
 {
-    return !arch_running_ring3() && irq_reenter_cnt == 0;
+    return !arch_running_ring3() && arch_in_gate();
 }
 
 mail* mailbox_alloc_mail(void)
 {
-    if (mb_run_direct())
-        return alloc_mail();
-
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_ALLOC_MAIL;
 
@@ -407,58 +427,54 @@ mail* mailbox_alloc_mail(void)
 
 void mailbox_release_mail(mail* m)
 {
-    if (mb_run_direct()) {
-        release_mail(m);
-        return;
-    }
-
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_RELEASE_MAIL;
     config.m = m;
 
-    arch_syscall(mailbox_scall_handle, &config, sizeof(config));
+    if (mb_run_direct())
+        mailbox_exec(&config);
+    else
+        arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 }
 
 mailbox* mailbox_alloc(int owner_pid, int owner_tid)
 {
-    if (mb_run_direct())
-        return alloc_mailbox(owner_pid, owner_tid);
-
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_ALLOC;
     config.pid = owner_pid;
     config.tid = owner_tid;
 
-    arch_syscall(mailbox_scall_handle, &config, sizeof(config));
+    if (mb_run_direct())
+        mailbox_exec(&config);
+    else
+        arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 
     return config.mb;
 }
 
 void mailbox_release(mailbox* mb)
 {
-    if (mb_run_direct()) {
-        release_mailbox(mb);
-        return;
-    }
-
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_RELEASE;
     config.mb = mb;
 
-    arch_syscall(mailbox_scall_handle, &config, sizeof(config));
+    if (mb_run_direct())
+        mailbox_exec(&config);
+    else
+        arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 }
 
 
 int mailbox_send(mail* m)
 {
-    if (mb_run_direct())
-        return send(m);
-
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_SEND;
     config.m = m;
 
-    arch_syscall(mailbox_scall_handle, &config, sizeof(config));
+    if (mb_run_direct())
+        mailbox_exec(&config);
+    else
+        arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 
     return config.ret;
 }
@@ -466,58 +482,54 @@ int mailbox_send(mail* m)
 mail* mailbox_listen(mailbox* mb)
 {
     for ( ;; ) {
-        if (mb_run_direct()) {
-            mail* m = try_get_mail(mb);
-            if (m)
-                return m;
-            /* No mail yet: yield HERE in kernel context (direct, safe
-             * inside the gate), so other threads and IRQ handlers run. */
-            thread_yield();
-            continue;
-        }
-
         mailbox_ctrl_config config = {0};
         config.cmd = MAILBOX_CTRL_LISTEN;
         config.mb = mb;
 
-        arch_syscall(mailbox_scall_handle, &config, sizeof(config));
+        /* Non-blocking LISTEN (try_get_mail): run the shared exec directly
+         * inside a gate, otherwise through the syscall. */
+        if (mb_run_direct())
+            mailbox_exec(&config);
+        else
+            arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 
         if (config.m)
             return config.m;
 
-        /* No mail yet: yield HERE in user mode (a fresh, non-nested
-         * syscall), so the scheduler and the interrupt handlers that will
-         * queue the mail (e.g. the keyboard ISR) actually get to run. */
+        /* No mail yet: yield so the scheduler and the interrupt handlers
+         * that will queue the mail (e.g. the keyboard ISR) actually get to
+         * run — inside the gate this is a direct context switch, in user
+         * mode a fresh, non-nested syscall. */
         thread_yield();
     }
 }
 
 int mailbox_register_handler(mailbox* mb, mail_handler handler)
 {
-    if (mb_run_direct())
-        return register_handler(mb, handler);
-
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_REGISTER_HANDLER;
     config.mb = mb;
     config.handler = handler;
 
-    arch_syscall(mailbox_scall_handle, &config, sizeof(config));
+    if (mb_run_direct())
+        mailbox_exec(&config);
+    else
+        arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 
     return config.ret;
 }
 
 int mailbox_unregister_handler(mailbox* mb, mail_handler handler)
 {
-    if (mb_run_direct())
-        return unregister_handler(mb, handler);
-
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_UNREGISTER_HANDLER;
     config.mb = mb;
     config.handler = handler;
 
-    arch_syscall(mailbox_scall_handle, &config, sizeof(config));
+    if (mb_run_direct())
+        mailbox_exec(&config);
+    else
+        arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 
     return config.ret;
 }

@@ -3,7 +3,7 @@
  * (standalone user ELF).
  *
  * Registers keyboard IRQ 0x21 as a USER irq through SYSCALL_IRQ: on every
- * keypress the kernel ISR drops a MAIL_TYPE_IRQ mail into this thread's
+ * keypress the kernel ISR drops a MAIL_MAGIC_IRQ mail into this thread's
  * mailbox (see kernel/irq.c dispatch_user_mode_irq).  The main loop
  * listens on its own mailbox (SYSCALL_MAILBOX with mb == NULL), drains the
  * 8042 output buffer, translates scancode-set-1 codes with a compact table
@@ -70,28 +70,22 @@ void _start(void)
         user_irq_unmask(irq);
 
     for (;;) {
-        void* m = user_mail_listen();
-        if (!m)
-            continue;
+        user_irq_wait();
 
-        if (((user_mail*)m)->type == USER_MAIL_TYPE_IRQ) {
-            /* Drain the 8042 output buffer (bounded) so a burst of
-             * scancodes under one IRQ cannot desynchronize anything. */
-            int drained = 0;
-            while (drained < 8) {
-                u8 status = ioread8(KB_STATUS_PORT);
-                if (!(status & 0x01))
-                    break;
-                u8 scancode = ioread8(KB_DATA_PORT);
-                if (scancode < sizeof(scancode_ascii)) {
-                    char key = scancode_ascii[scancode];
-                    if (key)
-                        kb_log_key(key);
-                }
-                drained++;
+        /* Drain the 8042 output buffer (bounded) so a burst of
+            * scancodes under one IRQ cannot desynchronize anything. */
+        int drained = 0;
+        while (drained < 8) {
+            u8 status = ioread8(KB_STATUS_PORT);
+            if (!(status & 0x01))
+                break;
+            u8 scancode = ioread8(KB_DATA_PORT);
+            if (scancode < sizeof(scancode_ascii)) {
+                char key = scancode_ascii[scancode];
+                if (key)
+                    kb_log_key(key);
             }
+            drained++;
         }
-
-        user_mail_release(m);
     }
 }

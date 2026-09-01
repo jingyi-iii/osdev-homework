@@ -10,13 +10,8 @@
 #define MAIL_ANY_PID    (-0xab)
 #define MAIL_ANY_TID    (-0xcd)
 
-typedef enum mailtype {
-    MAIL_TYPE_COMMON = 0,
-    MAIL_TYPE_IRQ,
-} mailtype;
-
 typedef struct mail {
-    mailtype type;
+    u32 magic;
     int sender_pid;
     int sender_tid;
     int receiver_pid;

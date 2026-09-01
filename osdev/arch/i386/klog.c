@@ -1,5 +1,5 @@
 /*
- * kernel/klog.c — ring-0 direct-to-COM1 logger.
+ * arch/i386/klog.c — ring-0 direct-to-COM1 logger (x86 UART driver).
  *
  * The kernel's own serial log path, fully decoupled from the user-mode
  * log server: no log_device struct, no kernel spinlock.  klog talks
