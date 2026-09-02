@@ -7,8 +7,9 @@
 #include "sync/spinlock.h"
 #include "kernel/process.h"
 
-#define MAIL_ANY_PID    (-0xab)
-#define MAIL_ANY_TID    (-0xcd)
+#define MAIL_ANY_PID            (-0xab)
+#define MAIL_ANY_TID            (-0xcd)
+#define MAX_SUBSCRIPTION_COUNT  (16)
 
 typedef struct mail {
     u32 magic;
@@ -41,6 +42,7 @@ typedef struct mailhandler {
 typedef struct mailbox {
     int owner_pid;
     int owner_tid;
+    u32 subscriptions[MAX_SUBSCRIPTION_COUNT];
     spinlock* sp_lock;
     list_node mails;
     list_node handlers;
@@ -55,15 +57,18 @@ enum mailbox_ctrl_cmd {
     MAILBOX_CTRL_RELEASE_MAIL,
     MAILBOX_CTRL_ALLOC,
     MAILBOX_CTRL_RELEASE,
+    MAILBOX_CTRL_SUBSCRIBE_MAIL,
+    MAILBOX_CTRL_UNSUBSCRIBE_MAIL,
 };
 
 typedef struct mailbox_ctrl_config {
-    u8     cmd;
+    u8          cmd;
     mail*       m;          /* in: mail to send / out: received mail from listen / alloc_mail */
     mailbox*    mb;         /* in: target mailbox / out: allocated mailbox */
     mail_handler handler;   /* in: handler function */
     int         pid;        /* in: owner pid for mailbox_alloc */
     int         tid;        /* in: owner tid for mailbox_alloc */
+    u32         magic;      /* in: magic for subscription */
     int         ret;        /* out: return value */
 } mailbox_ctrl_config;
 
@@ -82,5 +87,7 @@ int         mailbox_send                (mail* m);
 mail*       mailbox_listen              (mailbox* mb);
 int         mailbox_register_handler    (mailbox* mb, mail_handler handler);
 int         mailbox_unregister_handler  (mailbox* mb, mail_handler handler);
+int         mailbox_subscribe_mail      (mailbox* mb, u32 magic);
+int         mailbox_unsubscribe_mail    (mailbox* mb, u32 magic);
 
 #endif

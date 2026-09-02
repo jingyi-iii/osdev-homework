@@ -11,13 +11,19 @@
  * cursor is moved through the io syscall gate (ports 0x3D4/0x3D5, inside
  * the {0x3C0, 32} port grant given by the kernel at load time).
  *
- * Single-threaded: the portal loop is the only VGA writer after boot, so
- * no lock is needed.
+ * Two threads share the VGA text buffer:
+ *   - main thread: console-portal print loop;
+ *   - key thread:  subscribes to the keyboard server's MSG_KEY_EVENT
+ *                  broadcasts and echoes printable keys to the screen.
+ * Both take a small user spinlock around every character write / cursor
+ * move, since they share the row/col state.
  */
 
-#include "userlib.h"          /* user_syscall / portal ABI               */
+#include "userlib.h"          /* user_syscall / portal + mailbox ABI     */
 #include "kernel/uapi.h"      /* PORTAL_ID_CONSOLE                       */
 #include "kernel/io.h"        /* ioread8/iowrite8 (provided by user_service.c) */
+#include "user/uspinlock.h"   /* user-mode spinlock (same-process threads) */
+#include "../server_msgs.h"   /* MSG_KEY_EVENT + key_event payload       */
 #include <stddef.h>
 
 #define VGA_WIDTH      80
@@ -31,6 +37,9 @@
 
 static size_t term_row = 0;
 static size_t term_col = 0;
+
+/* Serialises VGA writes between the portal thread and the key thread. */
+static uspinlock g_vga_lock = USPINLOCK_INIT;
 
 static void term_cursor_update(void)
 {
@@ -49,6 +58,8 @@ static void term_sync_cursor_from_hw(void)
     int hi, lo;
     u16 pos;
 
+    uspin_lock(&g_vga_lock);
+
     iowrite8(VGA_CRT_ADDR, 0x0E);
     hi = ioread8(VGA_CRT_DATA);
     iowrite8(VGA_CRT_ADDR, 0x0F);
@@ -57,10 +68,14 @@ static void term_sync_cursor_from_hw(void)
     pos = (u16)((hi << 8) | lo);
     term_row = pos / VGA_WIDTH;
     term_col = pos % VGA_WIDTH;
+
+    uspin_unlock(&g_vga_lock);
 }
 
 static void term_putc(char c)
 {
+    uspin_lock(&g_vga_lock);
+
     if (c == '\n') {
         term_col = 0;
         if (++term_row >= VGA_HEIGHT)
@@ -76,6 +91,8 @@ static void term_putc(char c)
     }
 
     term_cursor_update();
+
+    uspin_unlock(&g_vga_lock);
 }
 
 static void term_print(const u8* s, u32 len)
@@ -84,9 +101,49 @@ static void term_print(const u8* s, u32 len)
         term_putc((char)s[i]);
 }
 
+/*
+ * Key-listener thread: subscribes this thread's OWN mailbox to the
+ * keyboard server's MSG_KEY_EVENT broadcasts and echoes printable keys
+ * to the screen.  Runs concurrently with the portal loop; VGA writes go
+ * through the shared uspinlock in term_putc().
+ */
+static void term_key_thread(void)
+{
+    if (user_mail_subscribe(MSG_KEY_EVENT) != 0) {
+        /* No CAP_IPC or no mailbox — nothing to listen on. */
+        for (;;)
+            user_yield();
+    }
+
+    for (;;) {
+        user_mail* m = user_mail_listen();   /* yield until a mail arrives */
+        if (m && m->magic == MSG_KEY_EVENT) {
+            key_event ev;
+
+            for (size_t i = 0; i < sizeof(ev); i++)
+                ((u8*)&ev)[i] = ((const u8*)m->data)[i];
+            if (ev.pressed && ev.ascii)
+                term_putc(ev.ascii);
+        }
+        if (m)
+            user_mail_release(m);
+    }
+}
+
 void _start(void)
 {
     user_portal_ctrl cfg = {0};
+
+    /* Spawn a sibling USER thread that echoes keyboard events while this
+     * thread keeps serving the console portal (threads of one process
+     * share the address space; the kernel gives it its own user stack). */
+    user_proc_ctrl tc = {0};
+    tc.cmd   = U_THREAD_CTRL_CREATE;
+    tc.priv  = 1;                              /* TASK_PRIV_USER */
+    tc.entry = (void*)(uptr)term_key_thread;
+    user_syscall(SYSCALL_PROC_THREAD, &tc, sizeof(tc));
+    tc.cmd = U_THREAD_CTRL_UNBLOCK;            /* tc.tid filled by CREATE */
+    user_syscall(SYSCALL_PROC_THREAD, &tc, sizeof(tc));
 
     /* Publish the fixed console portal (id == PORTAL_ID_CONSOLE) so
      * separately-linked user ELFs can print through it. */

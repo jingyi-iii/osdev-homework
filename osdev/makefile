@@ -23,6 +23,16 @@ TERMINAL_ELF  := $(OUT_DIR)terminal_server.elf
 KB_SRCS       := user/server/input/kb_server.c user/userlib.c user/server/user_service.c
 KB_ELF        := $(OUT_DIR)kb_server.elf
 
+# log_server2.elf — user-mode LOG server (claims SYSCALL_LOG via SYSCALL_SYSCTL).
+# user_service.c supplies the ring-aware ioread8/iowrite8 its ring-0 syscall
+# handler uses (direct in/out at ring 0) plus the ring-3 stubs.
+LOG_SRCS := user/server/serial/log_server2.c user/userlib.c user/server/user_service.c
+LOG_ELF  := $(OUT_DIR)log_server2.elf
+
+# hello.elf — first user ELF demo (console portal + SYSCALL_LOG via userlib).
+HELLO_SRCS := user/hello.c user/userlib.c
+HELLO_ELF  := $(OUT_DIR)hello.elf
+
 OBJS     := $(COBJS) $(CXXOBJS) $(ASMOBJS) $(OBJS_DIR)user/userheap.c.o
 
 TARGET_BIN := $(OUT_DIR)myos.bin
@@ -54,11 +64,13 @@ MEMORY_MAP := $(OUT_DIR)memory_map
 # The user ELFs are shipped as separate GRUB multiboot modules (see
 # config/grub.cfg), NOT embedded into the kernel image.  The ISO must
 # depend on them and copy them next to the kernel binary.
-$(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) $(PORTAL_ELF) $(TERMINAL_ELF) $(KB_ELF) | $(OUT_DIR) $(GRUB_DIR)
+$(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) $(PORTAL_ELF) $(TERMINAL_ELF) $(KB_ELF) $(LOG_ELF) $(HELLO_ELF) | $(OUT_DIR) $(GRUB_DIR)
 	cp $(TARGET_BIN) $(OUT_DIR)iso/boot/myos.bin
 	cp $(PORTAL_ELF) $(OUT_DIR)iso/boot/
 	cp $(TERMINAL_ELF) $(OUT_DIR)iso/boot/
 	cp $(KB_ELF) $(OUT_DIR)iso/boot/
+	cp $(LOG_ELF) $(OUT_DIR)iso/boot/
+	cp $(HELLO_ELF) $(OUT_DIR)iso/boot/
 	cp $(GRUBFILE) $(GRUB_DIR)
 	grub-mkrescue -o $(TARGET_ISO) $(OUT_DIR)iso
 
@@ -100,6 +112,12 @@ $(TERMINAL_ELF): $(TERMINAL_SRCS) $(USER_LD) | $(OUT_DIR)
 
 $(KB_ELF): $(KB_SRCS) $(USER_LD) | $(OUT_DIR)
 	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(KB_SRCS) -o $@ -lgcc
+
+$(LOG_ELF): $(LOG_SRCS) $(USER_LD) | $(OUT_DIR)
+	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(LOG_SRCS) -o $@ -lgcc
+
+$(HELLO_ELF): $(HELLO_SRCS) $(USER_LD) | $(OUT_DIR)
+	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(HELLO_SRCS) -o $@ -lgcc
 
 $(OUT_DIR) $(GRUB_DIR) $(OBJS_DIR):
 	@mkdir -p $@

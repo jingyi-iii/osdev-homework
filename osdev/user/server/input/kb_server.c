@@ -7,15 +7,16 @@
  * mailbox (see kernel/irq.c dispatch_user_mode_irq).  The main loop
  * listens on its own mailbox (SYSCALL_MAILBOX with mb == NULL), drains the
  * 8042 output buffer, translates scancode-set-1 codes with a compact table
- * and writes the resulting key to COM1 for diagnostics.
- *
- * Cross-process key delivery (the old kb_register_callback API for games)
- * needs a kernel-side listener registry and is not implemented here yet.
+ * and broadcasts every raw scancode as a MSG_KEY_EVENT mail (mailbox
+ * broadcast).  Any thread subscribed to MSG_KEY_EVENT — e.g. the terminal
+ * server or a game — receives a copy; the printable press also goes to
+ * COM1 for diagnostics.
  */
 
 #include "userlib.h"          /* user_syscall / IRQ + mailbox helpers */
 #include "kernel/uapi.h"
 #include "kernel/io.h"        /* ioread8/iowrite8 (user_service.c) */
+#include "../server_msgs.h"   /* MSG_KEY_EVENT + key_event payload */
 #include <stddef.h>
 
 #define KB_IRQ_NO        0x21
@@ -63,6 +64,34 @@ static void kb_log_key(char key)
     kb_putc('\n');
 }
 
+/*
+ * Broadcast one key event to every thread subscribed to MSG_KEY_EVENT.
+ * The kernel send() takes ownership of the mail (cloning it per
+ * subscriber), so the caller must NOT release it.
+ */
+static void kb_broadcast_key(u8 scancode)
+{
+    key_event ev;
+
+    ev.scancode = scancode;
+    ev.pressed  = (scancode & 0x80) == 0;   /* set-1: bit 7 = release */
+    ev.ascii    = (ev.pressed && scancode < sizeof(scancode_ascii))
+                      ? scancode_ascii[scancode] : 0;
+
+    user_mail* m = user_mail_alloc();
+    if (!m)
+        return;
+
+    m->magic          = MSG_KEY_EVENT;
+    m->receiver_pid   = USER_MAIL_ANY_PID;   /* broadcast */
+    m->receiver_tid   = USER_MAIL_ANY_TID;
+    m->data_size      = sizeof(ev);
+    for (size_t i = 0; i < sizeof(ev); i++)
+        ((u8*)m->data)[i] = ((const u8*)&ev)[i];
+
+    user_mail_send(m);
+}
+
 void _start(void)
 {
     void* irq = user_irq_request(KB_IRQ_NO, 0);
@@ -73,14 +102,20 @@ void _start(void)
         user_irq_wait();
 
         /* Drain the 8042 output buffer (bounded) so a burst of
-            * scancodes under one IRQ cannot desynchronize anything. */
+         * scancodes under one IRQ cannot desynchronize anything. */
         int drained = 0;
         while (drained < 8) {
             u8 status = ioread8(KB_STATUS_PORT);
             if (!(status & 0x01))
                 break;
+
             u8 scancode = ioread8(KB_DATA_PORT);
-            if (scancode < sizeof(scancode_ascii)) {
+
+            /* Push to every MSG_KEY_EVENT subscriber (mailbox broadcast). */
+            kb_broadcast_key(scancode);
+
+            /* COM1 diagnostics for printable presses (optional). */
+            if (!(scancode & 0x80) && scancode < sizeof(scancode_ascii)) {
                 char key = scancode_ascii[scancode];
                 if (key)
                     kb_log_key(key);

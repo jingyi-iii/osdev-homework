@@ -61,6 +61,7 @@ mailbox* alloc_mailbox(int owner_pid, int owner_tid)
 
     mb->owner_pid = owner_pid;
     mb->owner_tid = owner_tid;
+    memset(mb->subscriptions, 0, sizeof(mb->subscriptions));
     list_init(&mb->mails);
     list_init(&mb->handlers);
 
@@ -136,12 +137,12 @@ int send(mail* m)
 
     if (m->receiver_pid == MAIL_ANY_PID || m->receiver_tid == MAIL_ANY_TID) {
         /*
-         * Broadcast: deliver to all threads that have a mailbox.
+         * Broadcast: deliver only to mailboxes subscribed to m->magic.
          * ref_count tracks how many deliveries are outstanding:
-         *   - one per handler-having mailbox (consumed by send_mail)
+         *   - one per subscribed handler-having mailbox (consumed by send_mail)
          *   - one for the sender (consumed by release_mail at end)
          * Handlers run synchronously and must NOT call release_mail().
-         * For threads without handlers, a clone is queued instead.
+         * For subscribed threads without handlers, a clone is queued instead.
          */
         int handler_recipients = 0;
         int has_any_mailbox = 0;
@@ -149,9 +150,11 @@ int send(mail* m)
         u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
         /*
-         * First pass: count only threads whose mailboxes have handlers.
-         * Threads without handlers receive clones, which are independent
-         * and do not affect the original mail's ref_count.
+         * First pass: count only mailboxes that are subscribed to this
+         * mail's magic AND have a handler.  Unsubscribed mailboxes are
+         * skipped in the second pass; handler-less mailboxes receive
+         * clones, which are independent and do not affect the original
+         * mail's ref_count.
          */
         list_for_each(node, &thread_head) {
             tcb* t = list_entry(node, tcb, this_node);
@@ -161,8 +164,16 @@ int send(mail* m)
             has_any_mailbox = 1;
 
             u32 eflags = spinlock_lock_irqsave(t->mailbox->sp_lock);
-            if (!list_empty(&t->mailbox->handlers))
-                handler_recipients++;
+            /* magic 0 is never a valid subscription (SUBSCRIBE rejects it),
+             * so it must not match an empty subscription slot (0 == 0). */
+            if (m->magic != 0 && !list_empty(&t->mailbox->handlers)) {
+                for (int i = 0; i < MAX_SUBSCRIPTION_COUNT; i++) {
+                    if (t->mailbox->subscriptions[i] == m->magic) {
+                        handler_recipients++;
+                        break;
+                    }
+                }
+            }
             spinlock_unlock_irqrestore(t->mailbox->sp_lock, eflags);
         }
 
@@ -174,8 +185,9 @@ int send(mail* m)
 
         /*
          * ref_count accounts for:
-         *   - one reference per handler-having mailbox (consumed by
-         *     send_mail's internal release_mail after handlers return)
+         *   - one reference per subscribed handler-having mailbox
+         *     (consumed by send_mail's internal release_mail after
+         *     handlers return)
          *   - one extra reference for the sender (consumed by release_mail below)
          */
         m->ref_count = handler_recipients + 1;
@@ -186,10 +198,24 @@ int send(mail* m)
             if (!t || !t->mailbox)
                 continue;
 
-            int has_handler;
+            int has_handler = 0;
+            int has_subscribed = 0;
             u32 eflags = spinlock_lock_irqsave(t->mailbox->sp_lock);
             has_handler = !list_empty(&t->mailbox->handlers);
+            /* magic 0 is never a valid subscription, so it must not match
+             * an empty subscription slot (0 == 0). */
+            if (m->magic != 0) {
+                for (int i = 0; i < MAX_SUBSCRIPTION_COUNT; i++) {
+                    if (t->mailbox->subscriptions[i] == m->magic) {
+                        has_subscribed = 1;
+                        break;
+                    }
+                }
+            }
             spinlock_unlock_irqrestore(t->mailbox->sp_lock, eflags);
+
+            if (!has_subscribed)
+                continue;
 
             if (has_handler) {
                 /* send_mail() calls handlers then release_mail(m) */
@@ -353,6 +379,60 @@ static int mailbox_exec(mailbox_ctrl_config* config)
     case MAILBOX_CTRL_RELEASE:
         release_mailbox(config->mb);
         config->ret = 0;
+        break;
+    case MAILBOX_CTRL_SUBSCRIBE_MAIL:
+        /* mb == NULL means the calling thread's own mailbox (same rule as
+         * LISTEN): ring-3 programs cannot know their mailbox's kernel
+         * pointer, so the handler resolves it here. */
+        if (!config->mb) {
+            tcb* t = thread_get_by_tid(thread_get_tid());
+            config->mb = t ? t->mailbox : 0;
+        }
+        if (!config->mb || config->magic == 0) {
+            config->ret = -EINVAL;
+            break;
+        }
+        u32 eflags = spinlock_lock_irqsave(config->mb->sp_lock);
+        for (int i = 0; i < MAX_SUBSCRIPTION_COUNT; i++) {
+            if (config->mb->subscriptions[i] == config->magic) {
+                spinlock_unlock_irqrestore(config->mb->sp_lock, eflags);
+                config->ret = 0;   /* already subscribed */
+                return config->ret;
+            }
+        }
+
+        for (int i = 0; i < MAX_SUBSCRIPTION_COUNT; i++) {
+            if (config->mb->subscriptions[i] == 0) {
+                config->mb->subscriptions[i] = config->magic;
+                config->ret = 0;
+                spinlock_unlock_irqrestore(config->mb->sp_lock, eflags);
+                return config->ret;
+            }
+        }
+        spinlock_unlock_irqrestore(config->mb->sp_lock, eflags);
+        config->ret = -ENOMEM;
+        break;
+    case MAILBOX_CTRL_UNSUBSCRIBE_MAIL:
+        /* mb == NULL: own mailbox, same as SUBSCRIBE / LISTEN. */
+        if (!config->mb) {
+            tcb* t = thread_get_by_tid(thread_get_tid());
+            config->mb = t ? t->mailbox : 0;
+        }
+        if (!config->mb || config->magic == 0) {
+            config->ret = -EINVAL;
+            break;
+        }
+        u32 eflags2 = spinlock_lock_irqsave(config->mb->sp_lock);
+        for (int i = 0; i < MAX_SUBSCRIPTION_COUNT; i++) {
+            if (config->mb->subscriptions[i] == config->magic) {
+                config->mb->subscriptions[i] = 0;
+                config->ret = 0;
+                spinlock_unlock_irqrestore(config->mb->sp_lock, eflags2);
+                return config->ret;
+            }
+        }
+        spinlock_unlock_irqrestore(config->mb->sp_lock, eflags2);
+        config->ret = -EINVAL;
         break;
     default:
         config->ret = -EINVAL;
@@ -533,3 +613,34 @@ int mailbox_unregister_handler(mailbox* mb, mail_handler handler)
 
     return config.ret;
 }
+
+int mailbox_subscribe_mail(mailbox* mb, u32 magic)
+{
+    mailbox_ctrl_config config = {0};
+    config.cmd = MAILBOX_CTRL_SUBSCRIBE_MAIL;
+    config.mb = mb;
+    config.magic = magic;
+
+    if (mb_run_direct())
+        mailbox_exec(&config);
+    else
+        arch_syscall(mailbox_scall_handle, &config, sizeof(config));
+
+    return config.ret;
+}
+
+int mailbox_unsubscribe_mail(mailbox* mb, u32 magic)
+{
+    mailbox_ctrl_config config = {0};
+    config.cmd = MAILBOX_CTRL_UNSUBSCRIBE_MAIL;
+    config.mb = mb;
+    config.magic = magic;
+
+    if (mb_run_direct())
+        mailbox_exec(&config);
+    else
+        arch_syscall(mailbox_scall_handle, &config, sizeof(config));
+
+    return config.ret;
+}
+

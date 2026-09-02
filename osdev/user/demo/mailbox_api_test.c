@@ -25,6 +25,11 @@
 
 extern volatile int test_finished_flag;
 
+/* Magic carried by the Test 7 broadcast.  magic 0 is never a valid
+ * subscription (the kernel rejects it), so broadcasts must carry a
+ * real magic value to be delivered. */
+#define TEST_BROADCAST_MAGIC 0xB7A7
+
 /* ------------------------------------------------------------------ *
  *  Shared state for handler verification                              *
  * ------------------------------------------------------------------ */
@@ -485,6 +490,23 @@ void mailbox_api_test_main(void)
         mailbox_register_handler(host1->mailbox, handler_one);
         mailbox_register_handler(host2->mailbox, handler_two);
 
+        /* magic 0 is not a valid subscription: a broadcast with magic 0
+         * must not be delivered to any handler. */
+        mail* m0 = mailbox_alloc_mail();
+        if (!m0) { term_fail("alloc_mail"); goto skip_test7; }
+        m0->receiver_pid = MAIL_ANY_PID;
+        m0->receiver_tid = MAIL_ANY_TID;
+        mailbox_send(m0);
+
+        if (g_h1_called == 0 && g_h2_called == 0)
+            term_pass("broadcast magic 0: no handler called");
+        else
+            term_fail("broadcast magic 0: handler called without subscription");
+
+        /* Subscribe both hosts, then broadcast carrying that magic. */
+        mailbox_subscribe_mail(host1->mailbox, TEST_BROADCAST_MAGIC);
+        mailbox_subscribe_mail(host2->mailbox, TEST_BROADCAST_MAGIC);
+
         /* Send a broadcast mail */
         mail* m = mailbox_alloc_mail();
         if (!m) { term_fail("alloc_mail"); goto skip_test7; }
@@ -496,6 +518,7 @@ void mailbox_api_test_main(void)
         m->sender_tid   = thread_get_tid();
         m->receiver_pid = MAIL_ANY_PID;
         m->receiver_tid = MAIL_ANY_TID;
+        m->magic        = TEST_BROADCAST_MAGIC;
         mailbox_send(m);
 
         /* Both handlers should have been called */
@@ -508,6 +531,8 @@ void mailbox_api_test_main(void)
         }
 
         /* Clean up */
+        mailbox_unsubscribe_mail(host1->mailbox, TEST_BROADCAST_MAGIC);
+        mailbox_unsubscribe_mail(host2->mailbox, TEST_BROADCAST_MAGIC);
         mailbox_unregister_handler(host1->mailbox, handler_one);
         mailbox_unregister_handler(host2->mailbox, handler_two);
         thread_exit(host1_tid);

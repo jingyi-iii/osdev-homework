@@ -61,6 +61,39 @@ void console_putstr(const char* s)
     }
 }
 
+/* ---- LOG (user-mode log server, SYSCALL_LOG) ---- */
+
+void user_log_write(const char* s, u32 len)
+{
+    user_log_config cfg = {0};
+
+    if (!s || len == 0)
+        return;
+    if (len > sizeof(cfg.data))
+        len = sizeof(cfg.data);
+    cfg.size = len;
+    for (u32 i = 0; i < len; i++)
+        cfg.data[i] = s[i];
+
+    /* SYSCALL_LOG exists only once log_server2.elf has claimed it. */
+    for (int tries = 0; tries < 10000; tries++) {
+        if (user_syscall(SYSCALL_LOG, &cfg, sizeof(cfg)) == 0)
+            return;
+        user_yield();
+    }
+}
+
+void user_log_str(const char* s)
+{
+    u32 len = 0;
+
+    if (!s)
+        return;
+    while (s[len])
+        len++;
+    user_log_write(s, len);   /* truncates to the inline data[] size */
+}
+
 /* ---- IRQ ---- */
 
 void* user_irq_request(u32 major, u32 minor)
@@ -111,6 +144,49 @@ void user_mail_release(void* m)
     cfg.cmd = U_MAILBOX_CTRL_RELEASE_MAIL;
     cfg.m   = m;
     user_syscall(SYSCALL_MAILBOX, &cfg, sizeof(cfg));
+}
+
+void* user_mail_alloc(void)
+{
+    user_mailbox_ctrl cfg = {0};
+
+    cfg.cmd = U_MAILBOX_CTRL_ALLOC_MAIL;
+    user_syscall(SYSCALL_MAILBOX, &cfg, sizeof(cfg));
+
+    return cfg.m;
+}
+
+int user_mail_send(void* m)
+{
+    user_mailbox_ctrl cfg = {0};
+
+    cfg.cmd = U_MAILBOX_CTRL_SEND;
+    cfg.m   = m;
+    user_syscall(SYSCALL_MAILBOX, &cfg, sizeof(cfg));
+
+    return cfg.ret;
+}
+
+int user_mail_subscribe(u32 magic)
+{
+    user_mailbox_ctrl cfg = {0};
+
+    cfg.cmd   = U_MAILBOX_CTRL_SUBSCRIBE_MAIL;
+    cfg.magic = magic;      /* mb == NULL: own mailbox */
+    user_syscall(SYSCALL_MAILBOX, &cfg, sizeof(cfg));
+
+    return cfg.ret;
+}
+
+int user_mail_unsubscribe(u32 magic)
+{
+    user_mailbox_ctrl cfg = {0};
+
+    cfg.cmd   = U_MAILBOX_CTRL_UNSUBSCRIBE_MAIL;
+    cfg.magic = magic;      /* mb == NULL: own mailbox */
+    user_syscall(SYSCALL_MAILBOX, &cfg, sizeof(cfg));
+
+    return cfg.ret;
 }
 
 

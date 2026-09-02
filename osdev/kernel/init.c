@@ -79,6 +79,18 @@ static void grant_demo_caps(pcb* proc)
     cap_grant(proc, CAP_IPC, &ipc_ok);
 }
 
+/* hello.elf — first user ELF demo.  It prints via the console portal
+ * (portal_call shares the caller's buffer with shm_share, which is behind
+ * the CAP_IPC gate) and LOGs via SYSCALL_LOG (no caps needed). */
+static void grant_hello_caps(pcb* proc)
+{
+    if (!proc)
+        return;
+
+    int ipc_ok = 1;
+    cap_grant(proc, CAP_IPC, &ipc_ok);
+}
+
 /* Capability grant for a freshly loaded ELF process. */
 typedef void (*caps_grant_fn)(pcb* proc);
 
@@ -157,8 +169,19 @@ void init_thread(void)
     kterm_write("[launcher] starting kb_server.elf\n");
     load_user_elf_by_name("kb_server.elf", grant_kb_caps);
 
+    /* User-mode LOG server: claims SYSCALL_LOG via SYSCALL_SYSCTL, so any
+     * process's SYSCALL_LOG trap reaches its ring-0 handler (running with
+     * the log server's page tables).  No grants: registration only needs a
+     * USER process; the handler writes COM1 via direct port I/O at ring 0. */
+    kterm_write("[launcher] starting log_server2.elf\n");
+    load_user_elf_by_name("log_server2.elf", 0);
+
     kterm_write("[launcher] running portal_test.elf\n");
     load_user_elf_by_name("portal_test.elf", grant_demo_caps);
+
+    /* hello.elf — first user ELF demo: console portal + SYSCALL_LOG. */
+    kterm_write("[launcher] running hello.elf\n");
+    load_user_elf_by_name("hello.elf", grant_hello_caps);
 
     proc_exit(proc_get_pid());
 }

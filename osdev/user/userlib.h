@@ -100,6 +100,16 @@ int user_portal_call(u32 portal_id, void* va, u32 size);
 void console_putstr(const char* s);
 
 /*
+ * Log through the user-mode log server (SYSCALL_LOG, claimed by
+ * log_server2.elf via SYSCALL_SYSCTL).  Until the server registers, the
+ * kernel returns E_NOTFOUND, so both retry briefly (same pattern as
+ * console_putstr).  user_log_write takes raw bytes (binary-safe),
+ * user_log_str logs a NUL-terminated string.
+ */
+void user_log_write(const char* s, u32 len);
+void user_log_str(const char* s);
+
+/*
  * ---- IRQ syscall (SYSCALL_IRQ) ---------------------------------------
  *
  * Layout MUST mirror the kernel's irq_syscall_data (include/kernel/irq.h).
@@ -134,34 +144,71 @@ int   user_irq_unmask(void* handle);
  * ---- mailbox syscall (SYSCALL_MAILBOX) ---------------------------------
  *
  * Layout MUST mirror the kernel's mailbox_ctrl_config
- * (include/ipc/mailbox.h).  Only the commands user programs need.
+ * (include/ipc/mailbox.h) and its command enum in layout and values.
+ * Command values are the kernel's MAILBOX_CTRL_* numbers.
  */
 enum {
-    U_MAILBOX_CTRL_LISTEN       = 1,   /* dequeue a mail (non-blocking) */
-    U_MAILBOX_CTRL_RELEASE_MAIL = 5,   /* free a received mail          */
+    U_MAILBOX_CTRL_SEND             = 0,  /* send a mail (uni / broadcast)  */
+    U_MAILBOX_CTRL_LISTEN           = 1,  /* dequeue a mail (non-blocking)  */
+    U_MAILBOX_CTRL_ALLOC_MAIL       = 4,  /* allocate a mail for sending    */
+    U_MAILBOX_CTRL_RELEASE_MAIL     = 5,  /* free a received mail           */
+    U_MAILBOX_CTRL_SUBSCRIBE_MAIL   = 8,  /* subscribe own mailbox to magic */
+    U_MAILBOX_CTRL_UNSUBSCRIBE_MAIL = 9,  /* unsubscribe own mailbox        */
 };
+
+/* Broadcast receiver wildcards — MUST mirror MAIL_ANY_PID / MAIL_ANY_TID
+ * (include/ipc/mailbox.h).  Set user_mail.receiver_* to these to broadcast. */
+#define USER_MAIL_ANY_PID   (-0xab)
+#define USER_MAIL_ANY_TID   (-0xcd)
 
 typedef struct user_mailbox_ctrl {
     u8   cmd;
-    void* m;          /* mail* — opaque (out on LISTEN / in on RELEASE) */
-    void* mb;         /* mailbox* — NULL = calling thread's own mailbox */
-    void* handler;
-    int  pid;
-    int  tid;
-    int  ret;
+    void* m;          /* mail* — out (ALLOC/LISTEN) / in (SEND/RELEASE)    */
+    void* mb;         /* mailbox* — NULL = calling thread's own mailbox    */
+    void* handler;    /* unused by user programs (kernel-only handlers)    */
+    int  pid;         /* unused by user programs                           */
+    int  tid;         /* unused by user programs                           */
+    u32  magic;       /* in: SUBSCRIBE / UNSUBSCRIBE magic                 */
+    int  ret;         /* out: 0 / negative errno                           */
 } user_mailbox_ctrl;
 
-/* Opaque mail view: only the leading magic field is meaningful to users —
- * it mirrors mail.magic (include/ipc/mailbox.h), the kernel's opaque
- * notification tag (e.g. MAIL_MAGIC_IRQ for kernel IRQ notifications). */
+/*
+ * Mail view — mirrors the LEADING fields of the kernel's mail
+ * (include/ipc/mailbox.h); the remaining fields are kernel-internal.
+ * The kernel mail object lives in the low identity-mapped kernel heap, so
+ * the view is directly readable AND writable from user mode:
+ *   - outbound: fill magic / receiver_* / data / data_size, user_mail_send
+ *   - inbound:  read magic / sender_* / data / data_size, user_mail_release
+ * magic is the opaque notification tag (e.g. MAIL_MAGIC_IRQ, or a
+ * user-defined event magic such as MSG_KEY_EVENT).
+ */
 typedef struct user_mail {
-    int magic;
+    u32  magic;
+    int  sender_pid;
+    int  sender_tid;
+    int  receiver_pid;
+    int  receiver_tid;
+    char data[256];
+    u32  data_size;   /* mirrors kernel's size_t (u32 on i686) */
 } user_mail;
 
 /* Block (yielding) until a mail arrives on the calling thread's own
- * mailbox; returns the opaque mail*. */
+ * mailbox; returns the opaque mail* (view as user_mail*). */
 void* user_mail_listen(void);
 void  user_mail_release(void* m);
+
+/* Allocate a mail for sending (view as user_mail* and fill it in). */
+void* user_mail_alloc(void);
+
+/* Send a mail: addressed (receiver_* set) or broadcast to every mailbox
+ * subscribed to m->magic (receiver_* = USER_MAIL_ANY_PID/TID). */
+int   user_mail_send(void* m);
+
+/* Subscribe / unsubscribe the calling thread's OWN mailbox to a magic so
+ * that broadcasts carrying that magic are delivered to it. */
+int   user_mail_subscribe(u32 magic);
+int   user_mail_unsubscribe(u32 magic);
+
 int user_irq_wait(void);
 
 #endif
