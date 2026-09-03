@@ -28,47 +28,28 @@ i32 syscall_register(i32 num, syscall_handler_fn fn, size_t max_param_size)
     if (!sc)
         return E_NOMEM;
 
+    memset(sc, 0, sizeof(syscall));
     sc->handle = num;
     sc->fn = fn;
     sc->max_param_size = max_param_size;
-    sc->owner_cr3 = 0;      /* kernel handler: runs in the caller's context */
-    list_init(&sc->this_node);
 
-    spinlock_lock(&syscall_lock);
-    list_for_each(node, &syscall_header) {
-        syscall* ex = list_entry(node, syscall, this_node);
-        if (ex->handle == num) {
-            spinlock_unlock(&syscall_lock);
-            kfree(sc);
-            return E_EXISTS;
-        }
-    }
-    list_add(&sc->this_node, &syscall_header);
-    spinlock_unlock(&syscall_lock);
+    /*
+     * Decide whose page tables the handler runs under (owner_cr3):
+     *   - kernel callers (module init, gate handlers for kernel services)
+     *     register handlers that run in the CALLER's context: owner_cr3 = 0;
+     *   - a ring-3 process registering a user syscall does so through the
+     *     SYSCALL_SYSCTL gate: sysctl_syscall_isr() runs at ring 0 but on
+     *     behalf of the calling USER process, so the handler must be
+     *     invoked under THAT process's page directory (its code and
+     *     globals live in its own address space).
+     * arch_running_ring3() cannot be used here — this function is always
+     * reached from ring 0 (module init or a gate handler).  Detect the
+     * user origin from the current process's privilege instead, exactly
+     * like irq.c / portal.c do inside their exec handlers.
+     */
+    pcb* proc = get_current_process();
+    sc->owner_cr3 = (proc && proc->priv != PROC_PRIV_KERNEL) ? proc->vcb.cr3 : 0;
 
-    return num;
-}
-
-/*
- * Register a handler whose code lives in the CALLING user process's
- * address space (a "user syscall", e.g. the log server's SYSCALL_LOG).
- * @owner_cr3 is the registering process's page directory, so
- * syscall_dispatch() can switch to it before running the handler.
- */
-i32 syscall_register_user(i32 num, syscall_handler_fn fn, size_t max_param_size,
-                          u32 owner_cr3)
-{
-    if (!fn || num < 0 || !owner_cr3)
-        return E_INVAL;
-
-    syscall* sc = kmalloc(sizeof(syscall));
-    if (!sc)
-        return E_NOMEM;
-
-    sc->handle = num;
-    sc->fn = fn;
-    sc->max_param_size = max_param_size;
-    sc->owner_cr3 = owner_cr3;
     list_init(&sc->this_node);
 
     spinlock_lock(&syscall_lock);
@@ -116,7 +97,19 @@ int syscall_unregister(i32 handle)
  * itself (and the kernel heap) sit in the low identity map that every
  * directory shares, so the switch is safe from inside the gate.
  */
-static int call_user_handler(syscall_handler_fn fn, void* arg, u32 owner_cr3);
+static int call_user_handler(syscall_handler_fn fn, void* arg, u32 owner_cr3)
+{
+    u32 cur_cr3 = arch_get_cr3();
+    int switched = (owner_cr3 && owner_cr3 != cur_cr3);
+
+    if (switched)
+        arch_load_cr3(owner_cr3);
+    int ret = fn(arg);
+    if (switched)
+        arch_load_cr3(cur_cr3);
+
+    return ret;
+}
 
 int syscall_dispatch(u32 handle, void* arg, size_t size)
 {
@@ -186,31 +179,6 @@ int syscall_dispatch(u32 handle, void* arg, size_t size)
     return ret;
 }
 
-/*
- * Invoke a syscall handler, switching to the handler's page directory if it
- * is a user-registered handler (owner_cr3 != 0).  The handler lives in the
- * registering process's address space (e.g. the log server ELF at
- * 0xA0000000), which is not mapped in the caller's directory; switching CR3
- * makes its code and globals reachable while it runs at ring 0.  The kernel
- * itself (and the kernel heap) sit in the low identity map that every
- * directory shares, so the switch is safe from inside the gate.
- */
-static int call_user_handler(syscall_handler_fn fn, void* arg, u32 owner_cr3)
-{
-    u32 cur_cr3 = arch_get_cr3();
-    int switched = (owner_cr3 && owner_cr3 != cur_cr3);
-
-    if (switched)
-        arch_load_cr3(owner_cr3);
-    int ret = fn(arg);
-    if (switched)
-        arch_load_cr3(cur_cr3);
-
-    return ret;
-}
-
-/* User-range validation (x86 PDE/PTE walk) lives in arch: arch_validate_user_range(). */
-
 int copy_from_user(void* dst, const void* user_src, size_t n)
 {
     u32 eflags;
@@ -272,8 +240,9 @@ static int sysctl_syscall_isr(void* data)
             cfg->ret = E_INVAL;
             return E_INVAL;
         }
-        cfg->ret = syscall_register_user(cfg->num, cfg->fn, cfg->max_param_size,
-                                         proc->vcb.cr3);
+        /* syscall_register() derives owner_cr3 from the current (user)
+         * process itself — no need to pass it here. */
+        cfg->ret = syscall_register(cfg->num, cfg->fn, cfg->max_param_size);
         break;
     }
     case U_SYSCTL_UNREGISTER:
@@ -295,7 +264,7 @@ void syscall_init(void)
 
     /* User syscall registry: lets ring-3 servers (log server ELF, ...)
      * claim fixed syscall numbers with handlers in their own address
-     * space (see syscall_register_user / call_user_handler). */
+     * space (see syscall_register / call_user_handler). */
     syscall_register(SYSCALL_SYSCTL, sysctl_syscall_isr,
                      sizeof(user_sysctl_config));
 }

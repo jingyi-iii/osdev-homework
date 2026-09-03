@@ -15,10 +15,7 @@
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/terminal_server.h"
-#include "drivers/timer_server.h"
-#include "drivers/log_server.h"
-#include "kernel/process.h"
+#include "demo_common.h"
 #include "lib/string.h"
 
 /*
@@ -135,7 +132,7 @@ void thread_api_test_main(void)
         check_flush();
         terminal_write("\n");
         terminal_write("[TEST 3] thread_create() — spawning helper...\n");
-        helper_tid = thread_create(TASK_PRIV_KERNEL, helper_thread_entry, 0);
+        helper_tid = thread_create(TASK_PRIV_USER, helper_thread_entry, 0);
         if (helper_tid >= 0) {
             thread_unblock(helper_tid);
             term_write_int("[TEST 3] Helper TID = ", helper_tid);
@@ -217,5 +214,5 @@ void thread_api_test_main(void)
     terminal_write("Returning to menu in 5 seconds...\n");
     timer_delay_ms(5000);
     test_finished_flag = 1;
-    proc_exit(proc_get_pid());
+    thread_exit(thread_get_tid());
 }

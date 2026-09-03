@@ -25,6 +25,21 @@ static irqline* irqlines[IDT_ENTRIES] = {0};
  */
 volatile int irq_defer_unmask = 0;
 
+static inline int irq_run_direct(void)
+{
+    /*
+     * The int $100 gate may only be entered when the exit path has a task
+     * context to restore to: arch_syscall_entry's restore loads ESP from
+     * *curr_task_ctx UNCONDITIONALLY.  Before the scheduler is up
+     * (thread_get_tid() == -1, e.g. proc_env_init's boot-time timer irq),
+     * curr_task_ctx is NULL and the gate exit would read the IVT at
+     * address 0 (0xF000FF53) and triple-fault.  Run irq_exec directly
+     * instead in that case — same as a ring-0 call inside a gate.
+     */
+    return !arch_running_ring3() && (arch_in_gate() || thread_get_tid() < 0);
+}
+
+
 static int irqline_alloc(u32 major, irqline **out)
 {
     if (!out)
@@ -385,51 +400,9 @@ static int irq_request_internal(irq **out, const char* name, u32 major,
     return 0;
 }
 
-
-int irq_request(irq **out, const char* name, u32 major, u32 minor,
+int irq_request_threaded_internal(irq **out, const char* name, u32 major, u32 minor,
                     irq_handler_fn cb, void* cb_param)
 {
-    /* User mode (CPL3): go through the syscall gate (major 100). */
-    if (arch_running_ring3()) {
-        irq_syscall_data data = {0};
-        data.cmd         = IRQ_SYSCALL_REQUEST;
-        data.name        = name;
-        data.major       = major;
-        data.minor       = minor;
-        data.handler     = cb;
-        data.param       = cb_param;
-        data.is_user_irq = 1;
-        data.tid         = thread_get_tid();
-        arch_syscall(irq_scall_handle, &data, sizeof(data));
-        if (out)
-            *out = data.handle;
-        return data.ret;
-    }
-
-    /* Kernel mode (CPL0): synchronous kernel irq (legacy). */
-    return irq_request_internal(out, name, major, minor, cb, cb_param, 0, 0);
-}
-
-int irq_request_threaded(irq **out, const char* name, u32 major, u32 minor,
-                    irq_handler_fn cb, void* cb_param)
-{
-    /* User mode (CPL3): not supported yet. */
-    if (arch_running_ring3()) {
-        irq_syscall_data data = {0};
-        data.cmd         = IRQ_SYSCALL_REQUEST_THREADED;
-        data.name        = name;
-        data.major       = major;
-        data.minor       = minor;
-        data.handler     = cb;
-        data.param       = cb_param;
-        data.is_user_irq = 1;
-        data.tid         = thread_get_tid();
-        arch_syscall(irq_scall_handle, &data, sizeof(data));
-        if (out)
-            *out = data.handle;
-        return data.ret;
-    }
-
     int ret = irq_request_internal(out, name, major, minor, cb, cb_param, 0, 0);
     if (ret || !out || !*out)
         return ret;
@@ -464,19 +437,10 @@ int irq_request_threaded(irq **out, const char* name, u32 major, u32 minor,
     return 0;
 }
 
-void irq_release(irq *p)
+void irq_release_internal(irq *p)
 {
     if (!p)
         return;
-
-    /* User mode (CPL3): go through the syscall gate (major 100). */
-    if (arch_running_ring3()) {
-        irq_syscall_data data = {0};
-        data.cmd    = IRQ_SYSCALL_RELEASE;
-        data.handle = p;
-        arch_syscall(irq_scall_handle, &data, sizeof(data));
-        return;
-    }
 
     if (p->major >= IDT_ENTRIES)
         return;
@@ -511,21 +475,9 @@ void irq_release(irq *p)
     irq_free(p);
 }
 
-int irq_mask(struct irq* p)
+int irq_mask_internal(struct irq* p)
 {
-    if (!p)
-        return E_INVAL;
-
-    /* User mode (CPL3): go through the syscall gate (major 100). */
-    if (arch_running_ring3()) {
-        irq_syscall_data data = {0};
-        data.cmd    = IRQ_SYSCALL_MASK;
-        data.handle = p;
-        arch_syscall(irq_scall_handle, &data, sizeof(data));
-        return data.ret;
-    }
-
-    if (p->major >= IDT_ENTRIES)
+    if (!p || p->major >= IDT_ENTRIES)
         return E_INVAL;
 
     spinlock_lock(p->sp_lock);
@@ -538,21 +490,9 @@ int irq_mask(struct irq* p)
     return 0;
 }
 
-int irq_unmask(struct irq* p)
+int irq_unmask_internal(struct irq* p)
 {
-    if (!p)
-        return E_INVAL;
-
-    /* User mode (CPL3): go through the syscall gate (major 100). */
-    if (arch_running_ring3()) {
-        irq_syscall_data data = {0};
-        data.cmd    = IRQ_SYSCALL_UNMASK;
-        data.handle = p;
-        arch_syscall(irq_scall_handle, &data, sizeof(data));
-        return data.ret;
-    }
-
-    if (p->major >= IDT_ENTRIES)
+    if (!p || p->major >= IDT_ENTRIES)
         return E_INVAL;
 
     spinlock_lock(p->sp_lock);
@@ -575,55 +515,185 @@ int irq_unmask(struct irq* p)
  * kernel implementations still apply to the calling process.
  * ============================================================================
  */
-static int irq_syscall_handler(void* context)
+static int irq_exec(irq_ctrl_config* cfg)
 {
-    irq_syscall_data* data = (irq_syscall_data*)context;
-    if (!data)
+    if (!cfg)
         return -E_INVAL;
 
-    switch (data->cmd) {
+    switch (cfg->cmd) {
     case IRQ_SYSCALL_REQUEST:
-        /* The caller ran in user mode, so this is a user irq.  Derive the
-         * registering thread's tid here in kernel context: standalone user
-         * ELFs cannot know their own tid (or a kernel mailbox pointer), so
-         * the kernel fills it in for them. */
-        data->is_user_irq = 1;
-        data->tid = thread_get_tid();
-        data->ret = irq_request_internal(&data->handle, data->name, data->major,
-                                         data->minor, data->handler, data->param,
-                                         data->is_user_irq, data->tid);
+        /* The kernel decides the delivery mode from the caller's privilege —
+         * never from the untrusted config.  User processes get a user irq
+         * (tid is derived here in kernel context: ring-3 ELFs cannot know
+         * their own tid, and the gate runs in the caller's thread).  Kernel
+         * callers — including boot-time setup such as the scheduler timer
+         * in process.c, which may have no current process at all — keep a
+         * synchronous kernel irq: is_user_irq = 0, tid unused. */
+        {
+            pcb* proc = get_current_process();
+            cfg->is_user_irq = (proc && proc->priv != PROC_PRIV_KERNEL) ? 1 : 0;
+            cfg->tid = cfg->is_user_irq ? thread_get_tid() : 0;
+        }
+        cfg->ret = irq_request_internal(&cfg->handle, cfg->name, cfg->major,
+                                        cfg->minor, cfg->handler, cfg->param,
+                                        cfg->is_user_irq, cfg->tid);
         break;
     case IRQ_SYSCALL_REQUEST_THREADED:
-        data->ret = irq_request_threaded(&data->handle, data->name, data->major,
-                                         data->minor, data->handler, data->param);
+        cfg->ret = irq_request_threaded_internal(&cfg->handle, cfg->name, cfg->major,
+                                                 cfg->minor, cfg->handler, cfg->param);
         break;
     case IRQ_SYSCALL_RELEASE:
-        irq_release(data->handle);
-        data->ret = 0;
+        irq_release_internal(cfg->handle);
+        cfg->ret = 0;
         break;
     case IRQ_SYSCALL_MASK:
-        data->ret = irq_mask(data->handle);
+        cfg->ret = irq_mask_internal(cfg->handle);
         break;
     case IRQ_SYSCALL_UNMASK:
-        data->ret = irq_unmask(data->handle);
+        cfg->ret = irq_unmask_internal(cfg->handle);
         break;
     default:
-        data->ret = -E_INVAL;
+        cfg->ret = -E_INVAL;
         break;
     }
 
-    return data->ret;
+    return cfg->ret;
+}
+
+static int irq_syscall_isr(void* context)
+{
+    irq_ctrl_config* cfg = (irq_ctrl_config*)context;
+    if (!cfg)
+        return E_INVAL;
+
+    /*
+     * CAP_OWN_IRQ gate: only commands that acquire a new IRQ line are
+     * gated, because only they carry the target line in cfg->major.
+     * RELEASE / MASK / UNMASK operate on a handle the caller already owns
+     * and leave cfg->major at 0 — checking it would wrongly reject every
+     * valid unmask/mask (e.g. kb_server holds IRQ 1, not 0).  Kernel
+     * callers (PROC_PRIV_KERNEL, or no current process yet) are trusted
+     * and skip the gate.
+     */
+    if (cfg->cmd == IRQ_SYSCALL_REQUEST ||
+        cfg->cmd == IRQ_SYSCALL_REQUEST_THREADED) {
+        pcb* proc = get_current_process();
+        if (proc && proc->priv != PROC_PRIV_KERNEL) {
+            if (cap_check(proc, CAP_OWN_IRQ, &cfg->major) != 0) {
+                LOG("no irq permission for pid %d", proc->pid);
+                /* Wrappers read cfg->ret, not the gate's return value. */
+                cfg->ret = E_PERM;
+                return cfg->ret;
+            }
+        }
+    }
+
+    return irq_exec(cfg);
 }
 
 void irq_syscall_init(void)
 {
     irq_scall_handle = syscall_register(SYSCALL_IRQ,
-        irq_syscall_handler, sizeof(irq_syscall_data));
+        irq_syscall_isr, sizeof(irq_ctrl_config));
 }
 
 void irq_syscall_exit(void)
 {
     syscall_unregister(irq_scall_handle);
+}
+
+int irq_request(irq **out, const char* name, u32 major, u32 minor,
+                    irq_handler_fn cb, void* cb_param)
+{
+    irq_ctrl_config data = {0};
+    data.cmd         = IRQ_SYSCALL_REQUEST;
+    data.name        = name;
+    data.major       = major;
+    data.minor       = minor;
+    data.handler     = cb;
+    data.param       = cb_param;
+    /* is_user_irq / tid are kernel-filled (irq_exec derives them from the
+     * caller's privilege); ring-3 code must not supply or call for them. */
+
+    if (irq_run_direct())
+        irq_exec(&data);
+    else
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
+
+    if (out)
+        *out = data.handle;
+
+    return data.ret;
+}
+
+int irq_request_threaded(irq **out, const char* name, u32 major, u32 minor,
+                    irq_handler_fn cb, void* cb_param)
+{
+    irq_ctrl_config data = {0};
+    data.cmd         = IRQ_SYSCALL_REQUEST_THREADED;
+    data.name        = name;
+    data.major       = major;
+    data.minor       = minor;
+    data.handler     = cb;
+    data.param       = cb_param;
+
+    if (irq_run_direct())
+        irq_exec(&data);
+    else
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
+
+    if (out)
+        *out = data.handle;
+
+    return data.ret;
+}
+
+void irq_release(irq *p)
+{
+    if (!p)
+        return;
+
+    irq_ctrl_config data = {0};
+    data.cmd    = IRQ_SYSCALL_RELEASE;
+    data.handle = p;
+
+    if (irq_run_direct())
+        irq_exec(&data);
+    else
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
+}
+
+int irq_mask(struct irq* p)
+{
+    if (!p)
+        return E_INVAL;
+
+    irq_ctrl_config data = {0};
+    data.cmd    = IRQ_SYSCALL_MASK;
+    data.handle = p;
+
+    if (irq_run_direct())
+        irq_exec(&data);
+    else
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
+
+    return data.ret;
+}
+
+int irq_unmask(struct irq* p)
+{
+    if (!p)
+        return E_INVAL;
+
+    irq_ctrl_config data = {0};
+    data.cmd    = IRQ_SYSCALL_UNMASK;
+    data.handle = p;
+    if (irq_run_direct())
+        irq_exec(&data);
+    else
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
+
+    return data.ret;
 }
 
 module_init(irq_syscall_init);

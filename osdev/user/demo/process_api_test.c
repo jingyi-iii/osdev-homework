@@ -20,10 +20,7 @@
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/terminal_server.h"
-#include "drivers/timer_server.h"
-#include "drivers/log_server.h"
-#include "kernel/process.h"
+#include "demo_common.h"
 #include "lib/string.h"
 
 /*
@@ -34,10 +31,12 @@
 extern volatile int test_finished_flag;
 
 /*
- * Shared between parent and child process (same address space).
- * The child writes its PID here; the parent reads it for block/unblock tests.
+ * NOTE: the old KERNEL-mode version spawned a child PROCESS and shared
+ * globals (g_child_pid) with it, because kernel processes shared one
+ * address space.  A user ELF's child processes get their own page
+ * directory, so cross-process globals and child entry points in the
+ * caller's address space do not work — those tests are skipped here.
  */
-static volatile int g_child_pid = -1;
 
 /* ------------------------------------------------------------------ *
  *  Helper: write an integer to the terminal                           *
@@ -78,32 +77,6 @@ static void check_flush(void)
 }
 
 /* ================================================================== *
- *  Child Process Entry Point                                          *
- * ================================================================== */
-static void child_proc_main(void)
-{
-    g_child_pid = proc_get_pid();
-
-    terminal_write("[CHILD] Started.  My PID = ");
-    term_write_int("", g_child_pid);
-
-    /*
-     * Do several iterations of work, yielding each time.
-     * When the parent calls proc_block on us, we will stop being
-     * scheduled.  After proc_unblock, we resume right where we
-     * left off (inside thread_yield or the for loop).
-     */
-    for (int i = 0; i < 6; i++) {
-        terminal_write("[CHILD] iteration ");
-        term_write_int("", i);
-        thread_yield();
-    }
-
-    terminal_write("[CHILD] Work complete, exiting my process.\n");
-    proc_exit(g_child_pid);
-}
-
-/* ================================================================== *
  *  Main Test Thread (process_api_test_main)                            *
  * ================================================================== */
 void process_api_test_main(void)
@@ -134,71 +107,29 @@ void process_api_test_main(void)
     {
         check_flush();
         terminal_write("\n");
-        terminal_write("[TEST 2] proc_create() — spawning child process...\n");
-        {
-            int child_pid = proc_create(PROC_PRIV_USER, child_proc_main, 0);
-            if (child_pid >= 0)
-                proc_unblock(child_pid);
-        }
-
-        /* Wait for the child to run and write its PID */
-        while (g_child_pid == -1) {
-            thread_yield();
-        }
-        term_write_int("[TEST 2] Child PID = ", g_child_pid);
-        term_pass("proc_create");
-        timer_delay_ms(1000);
-    }
-
-    /* Let the child run a couple of iterations so we can see its output */
-    check_flush();
-    terminal_write("[MAIN] Yielding to let child run a bit...\n");
-    for (int i = 0; i < 3; i++) {
-        thread_yield();
+        terminal_write("[SKIP] proc_create() — a user ELF's child processes get\n");
+        terminal_write("       their own address space, so the old shared-global\n");
+        terminal_write("       child handshake (kernel-mode test) cannot run here.\n");
+        timer_delay_ms(1200);
     }
 
     /* -------------------------------------------------------------- *
-     *  Test 3 — proc_block                                           *
+     *  Test 3 — proc_block (skipped in user mode)                    *
      * -------------------------------------------------------------- */
     {
         check_flush();
         terminal_write("\n");
-        int cpid = g_child_pid;
-        terminal_write("[TEST 3] proc_block() — blocking child process...\n");
-        proc_block(cpid);
-        term_pass("proc_block (returned)");
-
-        /*
-         * Yield several times — the child should NOT print any more
-         * "[CHILD] iteration" messages while blocked.
-         */
-        terminal_write("[TEST 3] Yielding: child should stay silent...\n");
-        for (int i = 0; i < 4; i++) {
-            if (i == 2) check_flush();
-            terminal_write("[MAIN] yield (child blocked)\n");
-            thread_yield();
-        }
+        terminal_write("[SKIP] proc_block() — needs a child process (see above).\n");
         timer_delay_ms(1000);
     }
 
     /* -------------------------------------------------------------- *
-     *  Test 4 — proc_unblock                                         *
+     *  Test 4 — proc_unblock (skipped in user mode)                  *
      * -------------------------------------------------------------- */
     {
         check_flush();
         terminal_write("\n");
-        int cpid = g_child_pid;
-        terminal_write("[TEST 4] proc_unblock() — unblocking child...\n");
-        proc_unblock(cpid);
-        term_pass("proc_unblock (returned)");
-
-        /* Yield so the child can resume its iterations */
-        terminal_write("[TEST 4] Yielding: child should resume...\n");
-        for (int i = 0; i < 8; i++) {
-            if (i == 4) check_flush();
-            terminal_write("[MAIN] yield\n");
-            thread_yield();
-        }
+        terminal_write("[SKIP] proc_unblock() — needs a child process (see above).\n");
         timer_delay_ms(1000);
     }
 
@@ -209,5 +140,5 @@ void process_api_test_main(void)
     terminal_write("Returning to menu in 5 seconds...\n");
     timer_delay_ms(5000);
     test_finished_flag = 1;
-    proc_exit(my_pid);
+    thread_exit(thread_get_tid());
 }

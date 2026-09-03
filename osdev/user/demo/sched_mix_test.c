@@ -13,10 +13,7 @@
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/terminal_server.h"
-#include "drivers/timer_server.h"
-#include "drivers/log_server.h"
-#include "kernel/process.h"
+#include "demo_common.h"
 #include "lib/string.h"
 
 /*
@@ -199,7 +196,7 @@ void sched_mix_test_main(void)
 
         /* Create 2 kernel-mode threads */
         for (int i = 0; i < 2; i++) {
-            int tid = thread_create(TASK_PRIV_KERNEL, mix_helper_entry, 0);
+            int tid = thread_create(TASK_PRIV_USER, mix_helper_entry, 0);
             if (tid >= 0) {
                 g_helper_tids[g_num_helpers] = tid;
                 g_num_helpers++;
@@ -420,5 +417,5 @@ void sched_mix_test_main(void)
     terminal_write("Returning to menu in 5 seconds...\n");
     timer_delay_ms(5000);
     test_finished_flag = 1;
-    proc_exit(proc_get_pid());
+    thread_exit(thread_get_tid());
 }

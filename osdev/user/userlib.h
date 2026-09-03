@@ -22,9 +22,12 @@ enum {
     U_THREAD_CTRL_BLOCK,
     U_THREAD_CTRL_UNBLOCK,
     U_PROC_CTRL_CREATE,
+    U_PROC_CTRL_LOAD_FROM_ELF,  /* kernel-only slot — value must stay in sync */
     U_PROC_CTRL_EXIT,
     U_PROC_CTRL_BLOCK,
     U_PROC_CTRL_UNBLOCK,
+    U_PROC_CTRL_GET_PID,
+    U_THREAD_CTRL_GET_TID,
 };
 
 /*
@@ -39,6 +42,8 @@ typedef struct user_proc_ctrl {
     i32  tid;
     i32  priv;
     void* entry;
+    void* elf_start;   /* kernel-only fields — keep layout in sync */
+    void* elf_end;
     void* param;
 } user_proc_ctrl;
 
@@ -63,6 +68,105 @@ static inline void user_yield(void)
     user_proc_ctrl cfg = {0};
     cfg.cmd = U_THREAD_CTRL_YIELD;
     user_syscall(SYSCALL_PROC_THREAD, &cfg, sizeof(cfg));
+}
+
+/* Thread control (TASK_PRIV_USER = 1, TASK_PRIV_KERNEL = 0 — kernel-priv
+ * threads additionally require CAP_CREATE_KRNL_THREAD, enforced in the
+ * gate).  create() returns the new TID (>= 0) or a negative errno; the
+ * thread is born TS_PENDING, so unblock() it to let it run. */
+static inline i32 user_thread_create(i32 priv, void* entry, void* param)
+{
+    user_proc_ctrl cfg = {0};
+    cfg.cmd   = U_THREAD_CTRL_CREATE;
+    cfg.priv  = priv;
+    cfg.entry = entry;
+    cfg.param = param;
+    user_syscall(SYSCALL_PROC_THREAD, &cfg, sizeof(cfg));
+    return cfg.tid;
+}
+
+static inline void user_thread_exit(i32 tid)
+{
+    user_proc_ctrl cfg = {0};
+    cfg.cmd = U_THREAD_CTRL_DELETE;
+    cfg.tid = tid;
+    user_syscall(SYSCALL_PROC_THREAD, &cfg, sizeof(cfg));
+}
+
+static inline void user_thread_block(i32 tid)
+{
+    user_proc_ctrl cfg = {0};
+    cfg.cmd = U_THREAD_CTRL_BLOCK;
+    cfg.tid = tid;
+    user_syscall(SYSCALL_PROC_THREAD, &cfg, sizeof(cfg));
+}
+
+static inline void user_thread_unblock(i32 tid)
+{
+    user_proc_ctrl cfg = {0};
+    cfg.cmd = U_THREAD_CTRL_UNBLOCK;
+    cfg.tid = tid;
+    user_syscall(SYSCALL_PROC_THREAD, &cfg, sizeof(cfg));
+}
+
+static inline i32 user_thread_get_tid(void)
+{
+    user_proc_ctrl cfg = {0};
+    cfg.cmd = U_THREAD_CTRL_GET_TID;
+    user_syscall(SYSCALL_PROC_THREAD, &cfg, sizeof(cfg));
+    return cfg.tid;
+}
+
+/* Process control.  create() returns the new PID (>= 0) or a negative
+ * errno; the process is born TS_PENDING, so unblock() it to let it run. */
+static inline i32 user_proc_create(i32 priv, void* entry, void* param)
+{
+    user_proc_ctrl cfg = {0};
+    cfg.cmd   = U_PROC_CTRL_CREATE;
+    cfg.priv  = priv;
+    cfg.entry = entry;
+    cfg.param = param;
+    user_syscall(SYSCALL_PROC_THREAD, &cfg, sizeof(cfg));
+    return cfg.pid;
+}
+
+static inline void user_proc_exit(i32 pid)
+{
+    user_proc_ctrl cfg = {0};
+    cfg.cmd = U_PROC_CTRL_EXIT;
+    cfg.pid = pid;
+    user_syscall(SYSCALL_PROC_THREAD, &cfg, sizeof(cfg));
+}
+
+static inline void user_proc_block(i32 pid)
+{
+    user_proc_ctrl cfg = {0};
+    cfg.cmd = U_PROC_CTRL_BLOCK;
+    cfg.pid = pid;
+    user_syscall(SYSCALL_PROC_THREAD, &cfg, sizeof(cfg));
+}
+
+static inline void user_proc_unblock(i32 pid)
+{
+    user_proc_ctrl cfg = {0};
+    cfg.cmd = U_PROC_CTRL_UNBLOCK;
+    cfg.pid = pid;
+    user_syscall(SYSCALL_PROC_THREAD, &cfg, sizeof(cfg));
+}
+
+static inline i32 user_proc_get_pid(void)
+{
+    user_proc_ctrl cfg = {0};
+    cfg.cmd = U_PROC_CTRL_GET_PID;
+    user_syscall(SYSCALL_PROC_THREAD, &cfg, sizeof(cfg));
+    return cfg.pid;
+}
+
+/* Coarse yield-based delay (no timer syscall in the user ABI). */
+static inline void user_delay_ms(u32 ms)
+{
+    for (u32 i = 0; i < ms * 50; i++)
+        user_yield();
 }
 
 /*
@@ -112,7 +216,7 @@ void user_log_str(const char* s);
 /*
  * ---- IRQ syscall (SYSCALL_IRQ) ---------------------------------------
  *
- * Layout MUST mirror the kernel's irq_syscall_data (include/kernel/irq.h).
+ * Layout MUST mirror the kernel's irq_ctrl_config (include/kernel/irq.h).
  */
 enum {
     U_IRQ_CTRL_REQUEST = 0,

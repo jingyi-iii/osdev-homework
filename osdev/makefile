@@ -33,6 +33,23 @@ LOG_ELF  := $(OUT_DIR)log_server2.elf
 HELLO_SRCS := user/hello.c user/userlib.c
 HELLO_ELF  := $(OUT_DIR)hello.elf
 
+# process_test.elf — keyboard-driven text-mode test menu.  The ported demo
+# suites run as threads of this process; kernel/lib/{rbtree,string,spinlock}
+# and user/userheap are linked in so the suites keep their kernel-era code.
+PROCESS_TEST_SRCS := user/demo/process_test_entry.c \
+	user/demo/demo_common.c \
+	user/demo/thread_api_test.c \
+	user/demo/process_api_test.c \
+	user/demo/sched_mix_test.c \
+	user/demo/rbtree_test.c \
+	user/demo/demo_kmalloc.c \
+	kernel/lib/rbtree.c \
+	kernel/lib/string.c \
+	kernel/sync/spinlock.c \
+	user/userheap.c \
+	user/userlib.c
+PROCESS_TEST_ELF := $(OUT_DIR)process_test.elf
+
 OBJS     := $(COBJS) $(CXXOBJS) $(ASMOBJS) $(OBJS_DIR)user/userheap.c.o
 
 TARGET_BIN := $(OUT_DIR)myos.bin
@@ -64,13 +81,14 @@ MEMORY_MAP := $(OUT_DIR)memory_map
 # The user ELFs are shipped as separate GRUB multiboot modules (see
 # config/grub.cfg), NOT embedded into the kernel image.  The ISO must
 # depend on them and copy them next to the kernel binary.
-$(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) $(PORTAL_ELF) $(TERMINAL_ELF) $(KB_ELF) $(LOG_ELF) $(HELLO_ELF) | $(OUT_DIR) $(GRUB_DIR)
+$(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) $(PORTAL_ELF) $(TERMINAL_ELF) $(KB_ELF) $(LOG_ELF) $(HELLO_ELF) $(PROCESS_TEST_ELF) | $(OUT_DIR) $(GRUB_DIR)
 	cp $(TARGET_BIN) $(OUT_DIR)iso/boot/myos.bin
 	cp $(PORTAL_ELF) $(OUT_DIR)iso/boot/
 	cp $(TERMINAL_ELF) $(OUT_DIR)iso/boot/
 	cp $(KB_ELF) $(OUT_DIR)iso/boot/
 	cp $(LOG_ELF) $(OUT_DIR)iso/boot/
 	cp $(HELLO_ELF) $(OUT_DIR)iso/boot/
+	cp $(PROCESS_TEST_ELF) $(OUT_DIR)iso/boot/
 	cp $(GRUBFILE) $(GRUB_DIR)
 	grub-mkrescue -o $(TARGET_ISO) $(OUT_DIR)iso
 
@@ -118,6 +136,9 @@ $(LOG_ELF): $(LOG_SRCS) $(USER_LD) | $(OUT_DIR)
 
 $(HELLO_ELF): $(HELLO_SRCS) $(USER_LD) | $(OUT_DIR)
 	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(HELLO_SRCS) -o $@ -lgcc
+
+$(PROCESS_TEST_ELF): $(PROCESS_TEST_SRCS) $(USER_LD) | $(OUT_DIR)
+	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(PROCESS_TEST_SRCS) -o $@ -lgcc
 
 $(OUT_DIR) $(GRUB_DIR) $(OBJS_DIR):
 	@mkdir -p $@

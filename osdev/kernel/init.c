@@ -183,5 +183,10 @@ void init_thread(void)
     kterm_write("[launcher] running hello.elf\n");
     load_user_elf_by_name("hello.elf", grant_hello_caps);
 
+    /* process_test.elf — keyboard-driven demo test menu (runs the ported
+     * demo suites as threads; needs CAP_IPC for the console portal). */
+    kterm_write("[launcher] running process_test.elf\n");
+    load_user_elf_by_name("process_test.elf", grant_demo_caps);
+
     proc_exit(proc_get_pid());
 }

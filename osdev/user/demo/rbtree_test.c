@@ -12,9 +12,7 @@
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/terminal_server.h"
-#include "drivers/timer_server.h"
-#include "kernel/process.h"
+#include "demo_common.h"
 #include "lib/rbtree.h"
 #include "lib/string.h"
 
@@ -343,5 +341,5 @@ void rbtree_test_main(void)
     terminal_write("Returning to menu in 3 seconds...\n");
     timer_delay_ms(3000);
     test_finished_flag = 1;
-    proc_exit(proc_get_pid());
+    thread_exit(thread_get_tid());
 }

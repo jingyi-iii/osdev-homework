@@ -1,69 +1,64 @@
 /*******************************************************************************
  *                                                                             *
- *    Process Test Entry — Text-Mode Menu for Process API Test Suites          *
+ *    Process Test Entry — user-mode ELF test menu (keyboard-driven)           *
  *                                                                             *
- *    Uses terminal_server (VGA text mode 0x03) instead of graphics_server.    *
- *    Provides a keyboard-driven menu to launch thread-level or process-level  *
- *    API tests.  The test processes use terminal_write to report results      *
- *    so developers can observe whether the process.c interfaces behave        *
- *    correctly.                                                               *
+ *    Runs as a standalone ring-3 ELF.  Prints through the console portal      *
+ *    (terminal_server) and reads key presses from the kb_server's             *
+ *    MSG_KEY_EVENT mailbox broadcast.  Test suites run as THREADS of this     *
+ *    process, so they share this process's address space (globals such as     *
+ *    test_finished_flag work) and their output reaches the same console.      *
  *                                                                             *
  *******************************************************************************/
 
-#include "drivers/terminal_server.h"
-#include "drivers/kb_server.h"
-#include "kernel/process.h"
+#include "demo_common.h"
+#include "../server/server_msgs.h"
 
 /* Test entry points (defined in demo/) */
 extern void thread_api_test_main(void);
 extern void process_api_test_main(void);
-extern void mailbox_api_test_main(void);
 extern void rbtree_test_main(void);
 extern void sched_mix_test_main(void);
-extern void shm_test_main(void);
-extern void shm_stress_main(void);
-extern void portal_api_test_main(void);
 
-/* Menu state: 0 = waiting, 1 = thread tests, 2 = process tests, 3 = mailbox tests, 4 = rbtree tests, 5 = mixed scheduling tests, 6 = run all */
-static volatile int menu_choice = 0;
-
-/* Privilege selection state: 0 = waiting, 1 = KERNEL, 2 = USER */
-static volatile int priv_choice = 0;
-
-/*
- * Set by a test process before it calls proc_exit.
- * The entry polls this to bring the menu back.
- * volatile prevents the compiler from caching the value in a register.
- * All kernel processes share the same address space, so this works
- * across process boundaries.
- */
+/* Set by a test suite just before it exits; the menu polls it. */
 volatile int test_finished_flag = 0;
 
-static void menu_kb_handler(const char* data, size_t size)
-{
-    (void)size;
-    if (!data) return;
+/* Menu state: 0 = waiting, 1..9 = selected suite */
+static volatile int menu_choice = 0;
 
-    char key = data[0];
-    if (key == '1') menu_choice = 1;
-    if (key == '2') menu_choice = 2;
-    if (key == '3') menu_choice = 3;
-    if (key == '4') menu_choice = 4;
-    if (key == '5') menu_choice = 5;
-    if (key == '6') menu_choice = 6;
-    if (key == '7') menu_choice = 7;
-    if (key == '8') menu_choice = 8;
-    if (key == '9') menu_choice = 9;
-    if (key == 'k' || key == 'K') priv_choice = 1;
-    if (key == 'u' || key == 'U') priv_choice = 2;
+/* ------------------------------------------------------------------ *
+ *  Key listener: kb_server broadcasts MSG_KEY_EVENT mails to every    *
+ *  subscribed mailbox; digits '1'..'9' select the test suite.         *
+ * ------------------------------------------------------------------ */
+static void key_listener_thread(void)
+{
+    if (user_mail_subscribe(MSG_KEY_EVENT) != 0) {
+        /* No CAP_IPC or no mailbox — nothing to listen on. */
+        for (;;)
+            user_yield();
+    }
+
+    for (;;) {
+        user_mail* m = (user_mail*)user_mail_listen();
+        if (m && m->magic == MSG_KEY_EVENT) {
+            key_event ev;
+            for (u32 i = 0; i < sizeof(ev); i++)
+                ((u8*)&ev)[i] = ((const u8*)m->data)[i];
+
+            if (ev.pressed && ev.ascii >= '1' && ev.ascii <= '9')
+                menu_choice = ev.ascii - '0';
+        }
+        if (m)
+            user_mail_release(m);
+    }
 }
 
 /* ------------------------------------------------------------------ *
- *  Draw the text-mode menu using terminal_write                      *
+ *  Draw the text-mode menu                                            *
  * ------------------------------------------------------------------ */
 static void draw_menu(void)
 {
-    terminal_switch_to_text_mode();
+    /* Redraw on a clean screen so stale suite output never mixes with
+     * the menu text. */
     terminal_flush(0);
 
     terminal_write("========================================\n");
@@ -72,143 +67,115 @@ static void draw_menu(void)
     terminal_write("\n");
     terminal_write("  [1] Thread API Test Suite\n");
     terminal_write("  [2] Process API Test Suite\n");
-    terminal_write("  [3] Mailbox API Test Suite\n");
+    terminal_write("  [3] Mailbox API Test Suite            (not yet ported)\n");
     terminal_write("  [4] Red-Black Tree Test Suite\n");
     terminal_write("  [5] Mixed Scheduling Test Suite\n");
     terminal_write("  [6] Run All Test Suites\n");
-    terminal_write("  [7] SHM Test Suite\n");
-    terminal_write("  [8] SHM Stress Test\n");
-    terminal_write("  [9] Portal RPC Test Suite\n");
+    terminal_write("  [7] SHM Test Suite                    (not yet ported)\n");
+    terminal_write("  [8] SHM Stress Test                   (not yet ported)\n");
+    terminal_write("  [9] Portal RPC Test Suite             (not yet ported)\n");
     terminal_write("\n");
     terminal_write("  Press 1, 2, 3, 4, 5, 6, 7, 8 or 9 to select\n");
 }
 
-/* ------------------------------------------------------------------ *
- *  Ask the user to pick KERNEL or USER privilege for a test run      *
- * ------------------------------------------------------------------ */
-static proc_priv menu_ask_priv(const char* name)
+static void note_not_ported(const char* name)
 {
-    priv_choice = 0;
-    terminal_write("\n  Run '");
+    terminal_write("\n*** ");
     terminal_write(name);
-    terminal_write("' as [K]ernel or [U]ser? (k/u) ");
-
-    /* menu_kb_handler is still registered here and catches 'k'/'u' */
-    while (priv_choice == 0) {
-        thread_yield();
-    }
-
-    return (proc_priv)(priv_choice - 1);
+    terminal_write(" still uses kernel-only APIs (mailbox handlers / shm /\n");
+    terminal_write("    kernel portal internals) — not yet ported to the user ELF. ***\n");
+    timer_delay_ms(2000);
 }
 
 /* ------------------------------------------------------------------ *
- *  Launch one test suite as a new process and wait for it to finish  *
+ *  Launch one test suite as a THREAD of this process and wait for it  *
  * ------------------------------------------------------------------ */
-static void run_test_suite(const char* name, task_entry_t entry, proc_priv priv)
+static void run_test_suite(const char* name, task_entry_t entry)
 {
     terminal_write("\n--- Launching ");
     terminal_write(name);
-    terminal_write(priv == PROC_PRIV_USER ? " (USER) ---\n\n" : " (KERNEL) ---\n\n");
+    terminal_write(" (USER) ---\n\n");
 
     test_finished_flag = 0;
-    {
-        int pid = proc_create(priv, entry, 0);
-        if (pid >= 0)
-            proc_unblock(pid);
-    }
+    int tid = user_thread_create(TASK_PRIV_USER, (void*)entry, 0);
+    if (tid >= 0)
+        user_thread_unblock(tid);
 
-    /* Wait for the test process to finish.  The test process sets
-     * test_finished_flag just before calling proc_exit on itself. */
-    while (!test_finished_flag) {
-        thread_yield();
-    }
+    /* Wait for the suite to finish: it sets test_finished_flag just
+     * before deleting itself. */
+    while (!test_finished_flag)
+        user_yield();
 
     terminal_write("\n*** ");
     terminal_write(name);
     terminal_write(" finished. ***\n");
+    timer_delay_ms(800);
 }
 
 /* ------------------------------------------------------------------ *
- *  Run every test suite once, in order                               *
+ *  Run every ported suite once, in order                              *
  * ------------------------------------------------------------------ */
-static void run_all_test_suites(proc_priv priv)
+static void run_all_test_suites(void)
 {
     terminal_write("\n========== RUNNING ALL TEST SUITES ==========\n\n");
 
-    run_test_suite("Thread API Test Suite",      thread_api_test_main, priv);
-    run_test_suite("Process API Test Suite",     process_api_test_main, priv);
-    run_test_suite("Mailbox API Test Suite",     mailbox_api_test_main, priv);
-    run_test_suite("Red-Black Tree Test Suite",  rbtree_test_main, priv);
-    run_test_suite("Mixed Scheduling Test Suite", sched_mix_test_main, priv);
-    /* SHM tests handshake via globals — all processes share the address space */
-    run_test_suite("SHM Test Suite", shm_test_main, PROC_PRIV_USER);
-    run_test_suite("SHM Stress Test", shm_stress_main, PROC_PRIV_USER);
-    run_test_suite("Portal RPC Test Suite", portal_api_test_main, priv);
+    run_test_suite("Thread API Test Suite",      thread_api_test_main);
+    run_test_suite("Process API Test Suite",     process_api_test_main);
+    run_test_suite("Red-Black Tree Test Suite",  rbtree_test_main);
+    run_test_suite("Mixed Scheduling Test Suite", sched_mix_test_main);
 
     terminal_write("\n========== ALL TEST SUITES COMPLETE ==========\n\n");
 }
 
 /* ------------------------------------------------------------------ *
- *  Main entry thread — loops forever showing the menu                *
+ *  Main entry thread — loops forever showing the menu                 *
  * ------------------------------------------------------------------ */
-void process_test_main_thread(void)
+void _start(void)
 {
+    int tid = user_thread_create(TASK_PRIV_USER, (void*)key_listener_thread, 0);
+    if (tid >= 0)
+        user_thread_unblock(tid);
+
     for (;;) {
         menu_choice = 0;
         test_finished_flag = 0;
 
         draw_menu();
-        kb_register_callback(menu_kb_handler);
 
-        /* Wait for user to choose a test */
-        while (menu_choice == 0) {
-            thread_yield();
-        }
+        /* Wait for the user to choose a test */
+        while (menu_choice == 0)
+            user_yield();
 
-        /* Let the user pick the privilege level for this run.
-         * menu_kb_handler is still registered here and catches 'k'/'u'. */
-        proc_priv priv;
-        if (menu_choice == 6) {
-            priv = menu_ask_priv("all test suites");
-        } else if (menu_choice == 1) {
-            priv = menu_ask_priv("Thread API Test Suite");
-        } else if (menu_choice == 2) {
-            priv = menu_ask_priv("Process API Test Suite");
-        } else if (menu_choice == 3) {
-            priv = menu_ask_priv("Mailbox API Test Suite");
-        } else if (menu_choice == 5) {
-            priv = menu_ask_priv("Mixed Scheduling Test Suite");
-        } else if (menu_choice == 7) {
-            /* SHM tests handshake via globals — all processes share the address space */
-            priv = PROC_PRIV_USER;
-        } else if (menu_choice == 8) {
-            priv = PROC_PRIV_USER;
-        } else if (menu_choice == 9) {
-            priv = menu_ask_priv("Portal RPC Test Suite");
-        } else {
-            priv = menu_ask_priv("Red-Black Tree Test Suite");
-        }
-        kb_unregister_callback(menu_kb_handler);
-
-        /* Launch the selected test as a new process */
-        if (menu_choice == 6) {
-            run_all_test_suites(priv);
-        } else if (menu_choice == 1) {
-            run_test_suite("Thread API Test Suite", thread_api_test_main, priv);
-        } else if (menu_choice == 2) {
-            run_test_suite("Process API Test Suite", process_api_test_main, priv);
-        } else if (menu_choice == 3) {
-            run_test_suite("Mailbox API Test Suite", mailbox_api_test_main, priv);
-        } else if (menu_choice == 5) {
-            run_test_suite("Mixed Scheduling Test Suite", sched_mix_test_main, priv);
-        } else if (menu_choice == 7) {
-            run_test_suite("SHM Test Suite", shm_test_main, priv);
-        } else if (menu_choice == 8) {
-            run_test_suite("SHM Stress Test", shm_stress_main, priv);
-        } else if (menu_choice == 9) {
-            run_test_suite("Portal RPC Test Suite", portal_api_test_main, priv);
-        } else {
-            run_test_suite("Red-Black Tree Test Suite", rbtree_test_main, priv);
+        switch (menu_choice) {
+        case 1:
+            run_test_suite("Thread API Test Suite", thread_api_test_main);
+            break;
+        case 2:
+            run_test_suite("Process API Test Suite", process_api_test_main);
+            break;
+        case 3:
+            note_not_ported("Mailbox API Test Suite");
+            break;
+        case 4:
+            run_test_suite("Red-Black Tree Test Suite", rbtree_test_main);
+            break;
+        case 5:
+            run_test_suite("Mixed Scheduling Test Suite", sched_mix_test_main);
+            break;
+        case 6:
+            run_all_test_suites();
+            break;
+        case 7:
+            note_not_ported("SHM Test Suite");
+            break;
+        case 8:
+            note_not_ported("SHM Stress Test");
+            break;
+        case 9:
+            note_not_ported("Portal RPC Test Suite");
+            break;
+        default:
+            break;
         }
 
         terminal_write("\n*** Returning to menu... ***\n");

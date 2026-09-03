@@ -38,6 +38,11 @@
 static size_t term_row = 0;
 static size_t term_col = 0;
 
+/* Current text attribute.  Set by ESC[<code>m SGR sequences received over
+ * the console portal (clients emit them to colour PASS/FAIL lines); 0x07
+ * is the default light grey on black.  Written under g_vga_lock. */
+static volatile u8 term_color = TERM_COLOR;
+
 /* Serialises VGA writes between the portal thread and the key thread. */
 static uspinlock g_vga_lock = USPINLOCK_INIT;
 
@@ -72,6 +77,30 @@ static void term_sync_cursor_from_hw(void)
     uspin_unlock(&g_vga_lock);
 }
 
+/* Scroll the text buffer up by one row and blank the new bottom row.
+ * Caller holds g_vga_lock. */
+static void term_scroll_up(void)
+{
+    for (size_t r = 1; r < VGA_HEIGHT; r++)
+        for (size_t c = 0; c < VGA_WIDTH; c++)
+            VGA_BUF[(r - 1) * VGA_WIDTH + c] = VGA_BUF[r * VGA_WIDTH + c];
+    for (size_t c = 0; c < VGA_WIDTH; c++)
+        VGA_BUF[(VGA_HEIGHT - 1) * VGA_WIDTH + c] = (u16)TERM_COLOR << 8;
+
+    term_row = VGA_HEIGHT - 1;
+    term_col = 0;
+}
+
+/* Blank the whole screen and home the cursor.  Caller holds g_vga_lock. */
+static void term_clear_screen(void)
+{
+    for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++)
+        VGA_BUF[i] = (u16)TERM_COLOR << 8;
+
+    term_row = 0;
+    term_col = 0;
+}
+
 static void term_putc(char c)
 {
     uspin_lock(&g_vga_lock);
@@ -79,14 +108,14 @@ static void term_putc(char c)
     if (c == '\n') {
         term_col = 0;
         if (++term_row >= VGA_HEIGHT)
-            term_row = 0;
+            term_scroll_up();
     } else if (c >= ' ') {
         size_t index = term_row * VGA_WIDTH + term_col;
-        VGA_BUF[index] = (u16)c | (u16)TERM_COLOR << 8;
+        VGA_BUF[index] = (u16)c | (u16)term_color << 8;
         if (++term_col >= VGA_WIDTH) {
             term_col = 0;
             if (++term_row >= VGA_HEIGHT)
-                term_row = 0;
+                term_scroll_up();
         }
     }
 
@@ -95,10 +124,47 @@ static void term_putc(char c)
     uspin_unlock(&g_vga_lock);
 }
 
+/* Switch the current text attribute from an ANSI SGR colour code
+ * (ESC[30..37m dark, ESC[90..97m bright, ESC[0m reset). */
+static void term_set_color(int code)
+{
+    u8 attr;
+
+    if (code == 0)
+        attr = TERM_COLOR;
+    else if (code >= 30 && code <= 37)
+        attr = (u8)(code - 30);          /* dark fg on black */
+    else if (code >= 90 && code <= 97)
+        attr = (u8)(8 + (code - 90));    /* bright fg on black */
+    else
+        return;
+
+    uspin_lock(&g_vga_lock);
+    term_color = attr;
+    uspin_unlock(&g_vga_lock);
+}
+
 static void term_print(const u8* s, u32 len)
 {
-    for (u32 i = 0; i < len; i++)
+    for (u32 i = 0; i < len; i++) {
+        /* ANSI SGR colour sequence: ESC [ <digits> m.  Consumed here so
+         * it never reaches the screen as text. */
+        if (s[i] == 0x1b && i + 1 < len && s[i + 1] == '[') {
+            u32 j = i + 2;
+            int code = 0;
+
+            while (j < len && s[j] >= '0' && s[j] <= '9') {
+                code = code * 10 + (s[j] - '0');
+                j++;
+            }
+            if (j < len && s[j] == 'm') {
+                term_set_color(code);
+                i = j;             /* skip the whole sequence */
+                continue;
+            }
+        }
         term_putc((char)s[i]);
+    }
 }
 
 /*
@@ -168,9 +234,22 @@ void _start(void)
             continue;
 
         /* The payload is shm-mapped into this process's address space;
-         * print it directly (no copy, no heap). */
-        if (cfg.va && cfg.va_size)
+         * print it directly (no copy, no heap).  A tiny control payload
+         * (ESC[2J) clears the screen instead: clients send it before
+         * redrawing (menus, paginated tests) so stale text never mixes
+         * with new output. */
+        if (cfg.va && cfg.va_size == 4 &&
+            ((const u8*)cfg.va)[0] == 0x1b &&
+            ((const u8*)cfg.va)[1] == '[' &&
+            ((const u8*)cfg.va)[2] == '2' &&
+            ((const u8*)cfg.va)[3] == 'J') {
+            uspin_lock(&g_vga_lock);
+            term_clear_screen();
+            term_cursor_update();
+            uspin_unlock(&g_vga_lock);
+        } else if (cfg.va && cfg.va_size) {
             term_print((const u8*)cfg.va, cfg.va_size);
+        }
 
         cfg.cmd = U_PORTAL_CTRL_REPLY;
         cfg.ret = 0;

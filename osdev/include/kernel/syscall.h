@@ -27,15 +27,6 @@ typedef struct syscall {
  * so the same number can never be registered twice.
  */
 i32 syscall_register(i32 num, syscall_handler_fn fn, size_t max_param_size);
-
-/*
- * Register a handler whose code lives in the CALLING user process's
- * address space (a "user syscall", e.g. the log server's SYSCALL_LOG).
- * @owner_cr3 is the registering process's page directory, which
- * syscall_dispatch() switches to before invoking the handler.
- */
-i32 syscall_register_user(i32 num, syscall_handler_fn fn, size_t max_param_size,
-                          u32 owner_cr3);
 int syscall_unregister(i32 handle);
 
 /* Dispatcher invoked by arch_syscall_entry (int $100).  Looks up the

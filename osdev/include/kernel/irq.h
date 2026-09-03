@@ -64,18 +64,18 @@ typedef enum {
 } irq_syscall_cmd;
 
 /* Data structure carried through the IRQ syscall gate */
-typedef struct irq_syscall_data {
-    u8        cmd;       /* irq_syscall_cmd                            */
-    irq*           handle;    /* out (request) / in (release, mask, unmask) */
-    const char*    name;      /* request: irq name                          */
-    u32       major;     /* request: IRQ major                         */
-    u32       minor;     /* request: IRQ minor                         */
-    irq_handler_fn handler;   /* request: callback                          */
-    void*          param;     /* request: callback param                    */
-    int            is_user_irq;  /* request: is user mode irq               */
-    int            tid;
-    int            ret;       /* out: return code                           */
-} irq_syscall_data;
+typedef struct irq_ctrl_config {
+    u8              cmd;       /* irq_syscall_cmd                            */
+    irq*            handle;    /* out (request) / in (release, mask, unmask) */
+    const char*     name;      /* request: irq name                          */
+    u32             major;     /* request: IRQ major                         */
+    u32             minor;     /* request: IRQ minor                         */
+    irq_handler_fn  handler;   /* request: callback                          */
+    void*           param;     /* request: callback param                    */
+    int             is_user_irq;  /* request: is user mode irq               */
+    int             tid;
+    int             ret;       /* out: return code                           */
+} irq_ctrl_config;
 
 void irq_syscall_init(void);
 void irq_syscall_exit(void);

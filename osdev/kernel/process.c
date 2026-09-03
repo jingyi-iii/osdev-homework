@@ -26,6 +26,8 @@ enum proc_thread_ctrl {
     PROC_CTRL_EXIT,
     PROC_CTRL_BLOCK,
     PROC_CTRL_UNBLOCK,
+    PROC_CTRL_GET_PID,      /* out: cfg.pid = proc_get_pid()  (ring-3 needs it) */
+    THREAD_CTRL_GET_TID,    /* out: cfg.tid = thread_get_tid()                */
 };
 
 static DECLARE_HEAD_NODE(proc_head);
@@ -35,18 +37,26 @@ spinlock* schedule_lock = 0;
 
 /*
  * Whether a context-switching t_xxx/p_xxx call may execute directly.
- * True only for ring-0 code already inside a syscall/IRQ gate
- * (irq_reenter_cnt == 0): the gate entry saved the current thread's
- * context and the gate exit performs the actual switch.  At CPL3 or in
- * plain ring-0 context (irq_reenter_cnt == -1) the syscall gate must be
- * used — arch_task_restore_context() only re-points curr_task_ctx, the
- * switch completes on gate exit, and a direct call outside a gate would
- * leave the current thread's context unsaved (and corrupt the target's
- * saved frame on the next gate entry).
+ * True only for ring-0 code either
+ *   - already inside a syscall/IRQ gate (irq_reenter_cnt == 0): the gate
+ *     entry saved the current thread's context and the gate exit performs
+ *     the actual switch, or
+ *   - with no current task yet (boot time, curr_task_ctx == NULL): there
+ *     is no context to save.  The gate must NOT be entered in this state
+ *     — arch_syscall_entry's exit restores ESP from *curr_task_ctx
+ *     unconditionally, so a NULL context would read the IVT at address 0
+ *     (0xF000FF53) and triple-fault (same reasoning as irq.c's
+ *     irq_run_direct).
+ * At CPL3 or in plain ring-0 context (irq_reenter_cnt == -1) the syscall
+ * gate must be used — arch_task_restore_context() only re-points
+ * curr_task_ctx, the switch completes on gate exit, and a direct call
+ * outside a gate would leave the current thread's context unsaved (and
+ * corrupt the target's saved frame on the next gate entry).
  */
 static inline int may_run_direct(void)
 {
-    return !arch_running_ring3() && irq_reenter_cnt == 0;
+    return !arch_running_ring3() &&
+           (irq_reenter_cnt == 0 || thread_get_tid() < 0);
 }
 
 /*
@@ -123,7 +133,7 @@ static void switch_address_space(tcb* old, tcb* next)
     vmm_switch(&next->parent->vcb);
 }
 
-static i32 t_create_ex(pcb* parent, task_priv priv, task_entry_t entry,
+static i32 thread_create_ex_internal(pcb* parent, task_priv priv, task_entry_t entry,
                        void* param, thread_state initial_state)
 {
     tcb* thread = 0;
@@ -210,10 +220,10 @@ static i32 t_create_ex(pcb* parent, task_priv priv, task_entry_t entry,
  */
 static i32 t_create(pcb* parent, task_priv priv, task_entry_t entry, void* param)
 {
-    return t_create_ex(parent, priv, entry, param, TS_PENDING);
+    return thread_create_ex_internal(parent, priv, entry, param, TS_PENDING);
 }
 
-static void t_delete(i32 tid)
+static void thread_delete_internal(i32 tid)
 {
     if (!thread_run)
         return;
@@ -317,7 +327,7 @@ static void t_delete(i32 tid)
     }
 }
 
-static void t_block(i32 tid)
+static void thread_block_internal(i32 tid)
 {
     if (!thread_run)
         return;
@@ -357,7 +367,7 @@ static void t_block(i32 tid)
     spinlock_unlock_irqrestore(schedule_lock, eflags);
 }
 
-static void t_unblock(i32 tid)
+static void thread_unblock_internal(i32 tid)
 {
     if (!thread_run)
         return;
@@ -379,7 +389,7 @@ static void t_unblock(i32 tid)
     spinlock_unlock_irqrestore(schedule_lock, eflags);
 }
 
-static void t_yield(void)
+static void thread_yield_internal(void)
 {
     if (!thread_run)
         return;
@@ -457,7 +467,7 @@ static int p_create_ex(proc_priv priv, task_entry_t main_thread_entry, void* par
     list_add(&proc->this_node, &proc_head);
     spinlock_unlock_irqrestore(schedule_lock, eflags);
 
-    ret = t_create_ex(proc, (task_priv)priv, main_thread_entry, proc->param,
+    ret = thread_create_ex_internal(proc, (task_priv)priv, main_thread_entry, proc->param,
                       initial_state);
     if (ret >= 0)
         return proc->pid;
@@ -476,16 +486,16 @@ static int p_create_ex(proc_priv priv, task_entry_t main_thread_entry, void* par
 }
 
 /*
- * p_create - create a process whose main thread is born TS_PENDING.
+ * proc_create_internal - create a process whose main thread is born TS_PENDING.
  * The caller must proc_unblock(pid) to let it run — explicit start
  * semantics (the ELF loader maps the address space before unblocking).
  */
-static int p_create(proc_priv priv, task_entry_t main_thread_entry, void* param)
+static int proc_create_internal(proc_priv priv, task_entry_t main_thread_entry, void* param)
 {
     return p_create_ex(priv, main_thread_entry, param, TS_PENDING);
 }
 
-static void p_exit(i32 pid)
+static void proc_exit_internal(i32 pid)
 {
     struct pcb* found = 0;
     int self_in_proc = 0;
@@ -506,7 +516,7 @@ static void p_exit(i32 pid)
         /*
          * Delete all threads belonging to this process.
          * schedule_lock protects both thread_head and proc->tcbs
-         * (t_create and t_delete also hold schedule_lock when
+         * (t_create and thread_delete_internal also hold schedule_lock when
          * modifying proc->tcbs).  t->sp_lock is acquired only for
          * context release; proc->sp_lock is not needed here because
          * schedule_lock already serializes proc->tcbs accesses.
@@ -577,7 +587,7 @@ static void p_exit(i32 pid)
     (void)self_in_proc;
 }
 
-static int p_block(i32 pid)
+static int proc_block_internal(i32 pid)
 {
     u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
@@ -593,7 +603,7 @@ static int p_block(i32 pid)
         /*
          * Iterate proc->tcbs under schedule_lock protection.
          * Only t->sp_lock is acquired per thread (never nested with
-         * proc->sp_lock) to avoid ABBA deadlock with t_delete.
+         * proc->sp_lock) to avoid ABBA deadlock with thread_delete_internal.
          */
         list_for_each(tcb_node, &proc->tcbs) {
             struct tcb* thread = list_entry(tcb_node, struct tcb, proc_node);
@@ -612,7 +622,7 @@ static int p_block(i32 pid)
     return 0;
 }
 
-static int p_unblock(i32 pid)
+static int proc_unblock_internal(i32 pid)
 {
     u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
@@ -628,7 +638,7 @@ static int p_unblock(i32 pid)
         /*
          * Iterate proc->tcbs under schedule_lock protection.
          * Only t->sp_lock is acquired per thread (never nested with
-         * proc->sp_lock) to avoid ABBA deadlock with t_delete.
+         * proc->sp_lock) to avoid ABBA deadlock with thread_delete_internal.
          */
         list_for_each(tcb_node, &proc->tcbs) {
             struct tcb* thread = list_entry(tcb_node, struct tcb, proc_node);
@@ -645,41 +655,6 @@ static int p_unblock(i32 pid)
 
     spinlock_unlock_irqrestore(schedule_lock, eflags);
     return 0;
-}
-
-int schedule_if_needed(void)
-{
-    tcb* next = find_next_runnable(thread_run);
-    if (!next || next == thread_run)
-        return E_NODEV;
-
-    tcb* old = thread_run;
-    thread_run = next;
-    switch_address_space(old, next);
-    arch_task_restore_context(&next->context);
-    return 0;
-}
-
-/*
- * schedule_from_isr - scheduler kick for the threaded-irq gate exit.
- * Called from arch/i386/irq.S only when irq_defer_unmask is set (a
- * threaded irq was woken).  trylock: a ring-3 thread may hold
- * schedule_lock with interrupts unmasked (IOPL=0), and blocking here
- * would deadlock against the thread this ISR just preempted.
- * arch_task_restore_context() only re-points curr_task_ctx — the actual
- * switch happens at iret in irq.S — so this function always returns and
- * the lock is released normally.
- */
-void schedule_from_isr(void)
-{
-    if (!thread_run)
-        return;
-
-    if (spinlock_trylock(schedule_lock) != 0)
-        return;
-
-    schedule_if_needed();
-    spinlock_unlock(schedule_lock);
 }
 
 static void schedule_isr(void* p)
@@ -715,273 +690,8 @@ static void schedule_isr(void* p)
     spinlock_unlock(schedule_lock);
 }
 
-static int syscall_isr(void* data)
+static i32 proc_load_from_elf_internal(u8* elf_start, u8* elf_end, void* param)
 {
-    proc_thread_ctrl_config *config = (proc_thread_ctrl_config*)data;
-    tcb* cur;
-
-    /*
-     * Read thread_run into a local variable under schedule_lock to prevent
-     * a race with schedule_isr on another CPU.
-     */
-    u32 eflags = spinlock_lock_irqsave(schedule_lock);
-    cur = thread_run;
-    spinlock_unlock_irqrestore(schedule_lock, eflags);
-
-    switch (config->cmd) {
-    case THREAD_CTRL_CREATE:
-        if (cur)
-            config->tid = t_create(cur->parent, config->priv, config->entry, config->param);
-        break;
-    case THREAD_CTRL_DELETE:
-        t_delete(config->tid);
-        break;
-    case THREAD_CTRL_YIELD:
-        t_yield();
-        break;
-    case THREAD_CTRL_BLOCK:
-        t_block(config->tid);
-        break;
-    case THREAD_CTRL_UNBLOCK:
-        t_unblock(config->tid);
-        break;
-    case PROC_CTRL_CREATE:
-        config->pid = p_create((proc_priv)config->priv, config->entry, config->param);
-        break;
-    case PROC_CTRL_LOAD_FROM_ELF:
-        config->pid = proc_load_from_elf(config->elf_start, config->elf_end, config->param);
-        break;
-    case PROC_CTRL_EXIT:
-        p_exit(config->pid);
-        break;
-    case PROC_CTRL_BLOCK:
-        p_block(config->pid);
-        break;
-    case PROC_CTRL_UNBLOCK:
-        p_unblock(config->pid);
-        break;
-    default:
-        break;
-    }
-
-    return 0;
-}
-
-static irq* schedule_irq = 0;
-static i32 proc_scall_handle = -1;
-
-static void proc_env_init(void)
-{
-    schedule_lock = spinlock_alloc();
-    if (!schedule_lock) {
-        LOG("failed to alloc spin lock for scheduler");
-        return;
-    }
-
-    tss_init();
-    irq_request(&schedule_irq, "proc_tmr", TIMER_IRQ_NO, 0, schedule_isr, 0);
-    if (schedule_irq)
-        irq_unmask(schedule_irq);
-
-    proc_scall_handle = syscall_register(SYSCALL_PROC_THREAD, syscall_isr, sizeof(proc_thread_ctrl_config));
-
-#ifdef PROCESS_SUPPORT_MAILBOX
-    mailbox_syscall_init();
-#endif
-}
-
-static void proc_env_exit(void)
-{
-    if (schedule_lock)
-        spinlock_release(schedule_lock);
-
-    if (schedule_irq) {
-        irq_mask(schedule_irq);
-        irq_release(schedule_irq);
-    }
-
-    syscall_unregister(proc_scall_handle);
-
-#ifdef PROCESS_SUPPORT_MAILBOX
-    mailbox_syscall_exit();
-#endif
-}
-
-/*
- * Thread / process API.  The implementation is shared between user mode
- * and the kernel: CPL3 callers always trap through the syscall gate;
- * ring-0 callers run the t_xxx / p_xxx implementation directly only when
- * already inside a gate (see may_run_direct()).  Outside a gate the gate
- * must be used, because the actual context switch happens in the gate's
- * save/restore machinery.
- */
-void thread_yield(void)
-{
-    if (!may_run_direct()) {
-        proc_thread_ctrl_config config = {0};
-        config.cmd = THREAD_CTRL_YIELD;
-
-        arch_syscall(proc_scall_handle, &config, sizeof(config));
-        return;
-    }
-
-    /* Ring-0 inside a gate: yield directly; the gate exit performs the
-     * switch to the next thread. */
-    t_yield();
-}
-
-void thread_block(i32 tid)
-{
-    if (!may_run_direct()) {
-        proc_thread_ctrl_config config = {0};
-        config.cmd = THREAD_CTRL_BLOCK;
-        config.tid = tid;
-
-        arch_syscall(proc_scall_handle, &config, sizeof(config));
-        return;
-    }
-
-    /* Ring-0 inside a gate: block directly. */
-    t_block(tid);
-}
-
-void thread_unblock(i32 tid)
-{
-    if (!may_run_direct()) {
-        proc_thread_ctrl_config config = {0};
-        config.cmd = THREAD_CTRL_UNBLOCK;
-        config.tid = tid;
-
-        arch_syscall(proc_scall_handle, &config, sizeof(config));
-        return;
-    }
-
-    /* Ring-0 inside a gate: unblock directly. */
-    t_unblock(tid);
-}
-
-i32 thread_create(task_priv priv, task_entry_t entry, void* param)
-{
-    if (!may_run_direct()) {
-        /*
-         * A user (CPL3) process may only spawn kernel-privileged threads
-         * if it has been granted the CAP_CREATE_KRNL_THREAD capability.
-         * Creating plain user threads is always allowed.
-         */
-        if (arch_running_ring3() && priv == TASK_PRIV_KERNEL) {
-            pcb* proc = get_current_process();
-            if (!proc || cap_check(proc, CAP_CREATE_KRNL_THREAD, &(int){1}) != 0) {
-                LOG("no create-kernel-thread capability for pid %d",
-                    proc ? proc->pid : -1);
-                return E_PERM;
-            }
-        }
-
-        proc_thread_ctrl_config config = {0};
-        config.cmd = THREAD_CTRL_CREATE;
-        config.priv = priv;
-        config.entry = entry;
-        config.param = param;
-
-        arch_syscall(proc_scall_handle, &config, sizeof(config));
-
-        return config.tid;
-    }
-
-    /* Ring-0 inside a gate: create directly. */
-    tcb* cur = thread_run;
-    return cur ? t_create(cur->parent, priv, entry, param) : E_INVAL;
-}
-
-void thread_exit(i32 tid)
-{
-    if (!may_run_direct()) {
-        proc_thread_ctrl_config config = {0};
-        config.cmd = THREAD_CTRL_DELETE;
-        config.tid = tid;
-
-        arch_syscall(proc_scall_handle, &config, sizeof(config));
-        return;
-    }
-
-    /* Ring-0 inside a gate: delete directly. */
-    t_delete(tid);
-}
-
-int thread_get_tid(void)
-{
-    tcb* cur = thread_run;
-    return cur ? cur->tid : -1;
-}
-
-void* thread_get_param(void)
-{
-    tcb* cur = thread_run;
-    return cur ? cur->param : 0;
-}
-
-tcb* thread_get_by_tid(i32 tid)
-{
-    tcb* target = 0;
-
-    u32 eflags = spinlock_lock_irqsave(schedule_lock);
-
-    list_for_each(node, &thread_head) {
-        tcb* t = list_entry(node, tcb, this_node);
-        if (t->tid == tid) {
-            target = t;
-            break;
-        }
-    }
-
-    spinlock_unlock_irqrestore(schedule_lock, eflags);
-    return target;
-}
-
-i32 proc_create(proc_priv priv, task_entry_t entry, void* param)
-{
-    if (!may_run_direct()) {
-        /*
-         * A user (CPL3) process may only spawn kernel-privileged processes
-         * if it has been granted the CAP_CREATE_KRNL_PROC capability.
-         * Creating plain user processes is always allowed.
-         */
-        if (arch_running_ring3() && priv == PROC_PRIV_KERNEL) {
-            pcb* proc = get_current_process();
-            if (!proc || cap_check(proc, CAP_CREATE_KRNL_PROC, &(int){1}) != 0) {
-                LOG("no create-kernel-proc capability for pid %d",
-                    proc ? proc->pid : -1);
-                return E_PERM;
-            }
-        }
-
-        proc_thread_ctrl_config config = {0};
-        config.cmd = PROC_CTRL_CREATE;
-        config.priv = (task_priv)priv;
-        config.entry = entry;
-        config.param = param;
-        arch_syscall(proc_scall_handle, &config, sizeof(config));
-
-        return config.pid;
-    }
-
-    /* Ring-0 inside a gate: create directly. */
-    return p_create(priv, entry, param);
-}
-
-i32 proc_load_from_elf(u8* elf_start, u8* elf_end, void* param)
-{
-    if (!may_run_direct()) {
-        proc_thread_ctrl_config config = {0};
-        config.cmd = PROC_CTRL_LOAD_FROM_ELF;
-        config.priv = (task_priv)PROC_PRIV_USER;
-        config.elf_start = elf_start;
-        config.elf_end = elf_end;
-        arch_syscall(proc_scall_handle, &config, sizeof(config));
-
-        return config.pid;
-    }
-
     /*
      * Sanity-check the image range FIRST.  elf_end <= elf_start would
      * make (u32)(elf_end - elf_start) wrap to 0 or a huge value, which
@@ -1060,51 +770,366 @@ i32 proc_load_from_elf(u8* elf_start, u8* elf_end, void* param)
     return pid;
 }
 
-void proc_exit(i32 pid)
+static int proc_syscall_exec(proc_thread_ctrl_config *config)
 {
-    if (!may_run_direct()) {
-        proc_thread_ctrl_config config = {0};
-        config.cmd = PROC_CTRL_EXIT;
-        config.pid = pid;
+    tcb* cur = 0;
 
-        arch_syscall(proc_scall_handle, &config, sizeof(config));
+    /*
+     * Read thread_run into a local variable under schedule_lock to prevent
+     * a race with schedule_isr on another CPU.
+     */
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
+    cur = thread_run;
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
+
+    switch (config->cmd) {
+    case THREAD_CTRL_CREATE:
+        config->tid = cur ? t_create(cur->parent, config->priv, config->entry,
+                                     config->param)
+                          : E_INVAL;
+        break;
+    case THREAD_CTRL_DELETE:
+        thread_delete_internal(config->tid);
+        break;
+    case THREAD_CTRL_YIELD:
+        thread_yield_internal();
+        break;
+    case THREAD_CTRL_BLOCK:
+        thread_block_internal(config->tid);
+        break;
+    case THREAD_CTRL_UNBLOCK:
+        thread_unblock_internal(config->tid);
+        break;
+    case PROC_CTRL_CREATE:
+        config->pid = proc_create_internal((proc_priv)config->priv, config->entry, config->param);
+        break;
+    case PROC_CTRL_LOAD_FROM_ELF:
+        config->pid = proc_load_from_elf_internal(config->elf_start, config->elf_end, config->param);
+        break;
+    case PROC_CTRL_EXIT:
+        proc_exit_internal(config->pid);
+        break;
+    case PROC_CTRL_BLOCK:
+        proc_block_internal(config->pid);
+        break;
+    case PROC_CTRL_UNBLOCK:
+        proc_unblock_internal(config->pid);
+        break;
+    case PROC_CTRL_GET_PID:
+        config->pid = proc_get_pid();
+        break;
+    case THREAD_CTRL_GET_TID:
+        config->tid = thread_get_tid();
+        break;
+    default:
+        break;
+    }
+
+    return 0;
+}
+
+static int proc_syscall_isr(void* data)
+{
+    proc_thread_ctrl_config *config = (proc_thread_ctrl_config*)data;
+    if (!config)
+        return E_INVAL;
+
+    /*
+     * Capability gates on the trap path only (kernel callers are trusted
+     * and skip them):
+     *   - THREAD_CTRL_CREATE with TASK_PRIV_KERNEL requires
+     *     CAP_CREATE_KRNL_THREAD,
+     *   - PROC_CTRL_CREATE with PROC_PRIV_KERNEL requires
+     *     CAP_CREATE_KRNL_PROC.
+     * Creating user-privileged threads / processes is always allowed.
+     * The gate runs in the caller's context, so get_current_process() is
+     * the process behind the syscall.
+     */
+    pcb* proc = get_current_process();
+    if (proc && proc->priv != PROC_PRIV_KERNEL) {
+        if (config->cmd == THREAD_CTRL_CREATE &&
+            config->priv == TASK_PRIV_KERNEL &&
+            cap_check(proc, CAP_CREATE_KRNL_THREAD, &(int){1}) != 0) {
+            LOG("no create-kernel-thread capability for pid %d", proc->pid);
+            return E_PERM;
+        }
+        if (config->cmd == PROC_CTRL_CREATE &&
+            config->priv == (task_priv)PROC_PRIV_KERNEL &&
+            cap_check(proc, CAP_CREATE_KRNL_PROC, &(int){1}) != 0) {
+            LOG("no create-kernel-proc capability for pid %d", proc->pid);
+            return E_PERM;
+        }
+    }
+
+    return proc_syscall_exec(config);
+}
+
+static irq* schedule_irq = 0;
+static i32 proc_scall_handle = -1;
+
+static void proc_env_init(void)
+{
+    schedule_lock = spinlock_alloc();
+    if (!schedule_lock) {
+        LOG("failed to alloc spin lock for scheduler");
         return;
     }
 
-    /* Ring-0 inside a gate: exit directly. */
-    p_exit(pid);
+    tss_init();
+    irq_request(&schedule_irq, "proc_tmr", TIMER_IRQ_NO, 0, schedule_isr, 0);
+    if (schedule_irq)
+        irq_unmask(schedule_irq);
+
+    proc_scall_handle = syscall_register(SYSCALL_PROC_THREAD, proc_syscall_isr, sizeof(proc_thread_ctrl_config));
+
+#ifdef PROCESS_SUPPORT_MAILBOX
+    mailbox_syscall_init();
+#endif
+}
+
+static void proc_env_exit(void)
+{
+    if (schedule_lock)
+        spinlock_release(schedule_lock);
+
+    if (schedule_irq) {
+        irq_mask(schedule_irq);
+        irq_release(schedule_irq);
+    }
+
+    syscall_unregister(proc_scall_handle);
+
+#ifdef PROCESS_SUPPORT_MAILBOX
+    mailbox_syscall_exit();
+#endif
+}
+
+int schedule_if_needed(void)
+{
+    tcb* next = find_next_runnable(thread_run);
+    if (!next || next == thread_run)
+        return E_NODEV;
+
+    tcb* old = thread_run;
+    thread_run = next;
+    switch_address_space(old, next);
+    arch_task_restore_context(&next->context);
+    return 0;
+}
+
+/*
+ * schedule_from_isr - scheduler kick for the threaded-irq gate exit.
+ * Called from arch/i386/irq.S only when irq_defer_unmask is set (a
+ * threaded irq was woken).  trylock: a ring-3 thread may hold
+ * schedule_lock with interrupts unmasked (IOPL=0), and blocking here
+ * would deadlock against the thread this ISR just preempted.
+ * arch_task_restore_context() only re-points curr_task_ctx — the actual
+ * switch happens at iret in irq.S — so this function always returns and
+ * the lock is released normally.
+ */
+void schedule_from_isr(void)
+{
+    if (!thread_run)
+        return;
+
+    if (spinlock_trylock(schedule_lock) != 0)
+        return;
+
+    schedule_if_needed();
+    spinlock_unlock(schedule_lock);
+}
+
+/*
+ * Thread / process API.  The implementation is shared between user mode
+ * and the kernel: CPL3 callers always trap through the syscall gate;
+ * ring-0 callers run the t_xxx / p_xxx implementation directly only when
+ * already inside a gate (see may_run_direct()).  Outside a gate the gate
+ * must be used, because the actual context switch happens in the gate's
+ * save/restore machinery.
+ */
+void thread_yield(void)
+{
+    proc_thread_ctrl_config config = {0};
+    config.cmd = THREAD_CTRL_YIELD;
+
+    if (may_run_direct())
+        proc_syscall_exec(&config);
+    else
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
+}
+
+void thread_block(i32 tid)
+{
+    proc_thread_ctrl_config config = {0};
+    config.cmd = THREAD_CTRL_BLOCK;
+    config.tid = tid;
+
+    if (may_run_direct())
+        proc_syscall_exec(&config);
+    else
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
+}
+
+void thread_unblock(i32 tid)
+{
+    proc_thread_ctrl_config config = {0};
+    config.cmd = THREAD_CTRL_UNBLOCK;
+    config.tid = tid;
+
+    if (may_run_direct())
+        proc_syscall_exec(&config);
+    else
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
+}
+
+i32 thread_create(task_priv priv, task_entry_t entry, void* param)
+{
+    proc_thread_ctrl_config config = {0};
+    int ret = 0;
+
+    config.cmd = THREAD_CTRL_CREATE;
+    config.priv = priv;
+    config.entry = entry;
+    config.param = param;
+
+    if (may_run_direct())
+        ret = proc_syscall_exec(&config);
+    else
+        ret = arch_syscall(proc_scall_handle, &config, sizeof(config));
+
+    /* CAP_CREATE_KRNL_THREAD is enforced in proc_syscall_isr() and
+     * surfaces as the gate's return value. */
+    if (ret)
+        return ret;
+
+    return config.tid;
+}
+
+void thread_exit(i32 tid)
+{
+    proc_thread_ctrl_config config = {0};
+    config.cmd = THREAD_CTRL_DELETE;
+    config.tid = tid;
+
+    if (may_run_direct())
+        proc_syscall_exec(&config);
+    else
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
+}
+
+int thread_get_tid(void)
+{
+    tcb* cur = thread_run;
+    return cur ? cur->tid : -1;
+}
+
+void* thread_get_param(void)
+{
+    tcb* cur = thread_run;
+    return cur ? cur->param : 0;
+}
+
+tcb* thread_get_by_tid(i32 tid)
+{
+    tcb* target = 0;
+
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
+
+    list_for_each(node, &thread_head) {
+        tcb* t = list_entry(node, tcb, this_node);
+        if (t->tid == tid) {
+            target = t;
+            break;
+        }
+    }
+
+    spinlock_unlock_irqrestore(schedule_lock, eflags);
+    return target;
+}
+
+i32 proc_create(proc_priv priv, task_entry_t entry, void* param)
+{
+    proc_thread_ctrl_config config = {0};
+    int ret = 0;
+
+    config.cmd = PROC_CTRL_CREATE;
+    config.priv = (task_priv)priv;
+    config.entry = entry;
+    config.param = param;
+
+    if (may_run_direct()) 
+        ret = proc_syscall_exec(&config);
+    else
+        ret = arch_syscall(proc_scall_handle, &config, sizeof(config));
+
+    /* CAP_CREATE_KRNL_PROC is enforced in proc_syscall_isr() and
+     * surfaces as the gate's return value. */
+    if (ret)
+        return ret;
+
+    return config.pid;
+}
+
+i32 proc_load_from_elf(u8* elf_start, u8* elf_end, void* param)
+{
+    proc_thread_ctrl_config config = {0};
+    int ret = 0;
+
+    config.cmd = PROC_CTRL_LOAD_FROM_ELF;
+    config.priv = (task_priv)PROC_PRIV_USER;
+    config.elf_start = elf_start;
+    config.elf_end = elf_end;
+    config.param = param;
+
+    if (may_run_direct())
+        ret = proc_syscall_exec(&config);
+    else
+        ret = arch_syscall(proc_scall_handle, &config, sizeof(config));
+
+    if (ret)
+        return ret;
+
+    return config.pid;
+}
+
+void proc_exit(i32 pid)
+{
+    proc_thread_ctrl_config config = {0};
+    config.cmd = PROC_CTRL_EXIT;
+    config.pid = pid;
+
+    if (may_run_direct())
+        proc_syscall_exec(&config);
+    else
+        arch_syscall(proc_scall_handle, &config, sizeof(config));
 }
 
 int proc_block(i32 pid)
 {
-    if (!may_run_direct()) {
-        proc_thread_ctrl_config config = {0};
-        config.cmd = PROC_CTRL_BLOCK;
-        config.pid = pid;
+    proc_thread_ctrl_config config = {0};
+    config.cmd = PROC_CTRL_BLOCK;
+    config.pid = pid;
 
+    if (may_run_direct())
+        proc_syscall_exec(&config);
+    else
         arch_syscall(proc_scall_handle, &config, sizeof(config));
 
-        return 0;
-    }
-
-    /* Ring-0 inside a gate: block directly. */
-    return p_block(pid);
+    return 0;
 }
 
 int proc_unblock(i32 pid)
 {
-    if (!may_run_direct()) {
-        proc_thread_ctrl_config config = {0};
-        config.cmd = PROC_CTRL_UNBLOCK;
-        config.pid = pid;
+    proc_thread_ctrl_config config = {0};
+    config.cmd = PROC_CTRL_UNBLOCK;
+    config.pid = pid;
 
+    if (may_run_direct())
+        proc_syscall_exec(&config);
+    else
         arch_syscall(proc_scall_handle, &config, sizeof(config));
 
-        return 0;
-    }
-
-    /* Ring-0 inside a gate: unblock directly. */
-    return p_unblock(pid);
+    return 0;
 }
 
 int proc_get_pid(void)
