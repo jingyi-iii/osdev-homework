@@ -18,4 +18,9 @@ semaphore* semaphore_get    (int id);
 int        semaphore_wait   (int semid);
 int        semaphore_signal (int semid);
 
+/* Return 1 if @sem has threads blocked in semaphore_wait(), 0 otherwise.
+ * Used by teardown paths (e.g. portal destroy) to decide whether freeing
+ * the semaphore would strand its waiters. */
+int        semaphore_has_waiters(semaphore* sem);
+
 #endif

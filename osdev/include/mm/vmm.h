@@ -61,40 +61,12 @@ int vmm_lookup_region(pcb* proc, u32 va, u32* out_pa, u32* out_pa_size,
 u32 vmm_va_to_pa(pcb* proc, u32 va);
 
 /*
- * VMM syscall gate (int $100) for RING3 access.
- * vmm_alloc_pages / vmm_free_pages / vmm_map_memory / vmm_unmap_memory
- * transparently route through this gate when the caller runs in user mode
- * (CPL3), because the underlying page-table manipulation executes the
- * privileged invlpg instruction.  The handler runs in kernel context, so
- * the capability checks inside the kernel implementations still apply.
- * The syscall handle is allocated by syscall_register() (kernel/syscall.c)
- * — callers never pick a number.
+ * VMM is a KERNEL-INTERNAL service — there is deliberately NO ring-3
+ * syscall gate (SYSCALL_VMM was removed from the user ABI).  Memory is
+ * managed on behalf of user processes only by kernel modules: the ELF
+ * loader (vmm_map_fixed), shared memory (shm_share / shm_unshare) and
+ * thread-stack setup.  Ring-3 code that needs dynamic memory or sharing
+ * goes through mailbox / portal / shm instead of touching page tables.
  */
-
-/* VMM syscall commands */
-typedef enum {
-    VMM_CTRL_ALLOC_PAGES   = 0,
-    VMM_CTRL_FREE_PAGES    = 1,
-    VMM_CTRL_MAP_MEMORY    = 2,
-    VMM_CTRL_UNMAP_MEMORY  = 3,
-} vmm_syscall_cmd;
-
-/* Data structure carried through the VMM syscall gate.
- * vcb / proc may be NULL to mean "the current process". */
-typedef struct vmm_syscall_data {
-    u8   cmd;                  /* vmm_syscall_cmd                  */
-    vmm_control_block* vcb;    /* alloc/free: address space to use */
-    pcb* proc;                 /* map/unmap: target process        */
-    u32  page_cnt;             /* alloc: page count                */
-    u32  flags;                /* alloc/map: page flags            */
-    u32  phys_addr;            /* map: physical address            */
-    size_t size;               /* map/unmap: size                  */
-    void* va;                  /* free/unmap: virtual address      */
-    void* ret_va;              /* out: VA (alloc/map)              */
-    int   ret;                 /* out: return code                 */
-} vmm_syscall_data;
-
-void vmm_syscall_init(void);
-void vmm_syscall_exit(void);
 
 #endif /* VMM_H */

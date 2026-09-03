@@ -97,7 +97,7 @@ void release_mailbox(mailbox* mb)
 int send_mail(mailbox* mb, mail* m)
 {
     if (!mb || !m)
-        return -EINVAL;
+        return E_INVAL;
 
     /* IRQ-safe lock: every holder disables interrupts, so even from an ISR
      * this blocking acquisition can never deadlock on a preempted holder
@@ -133,7 +133,7 @@ int send_mail(mailbox* mb, mail* m)
 int send(mail* m)
 {
     if (!m)
-        return -EINVAL;
+        return E_INVAL;
 
     if (m->receiver_pid == MAIL_ANY_PID || m->receiver_tid == MAIL_ANY_TID) {
         /*
@@ -282,11 +282,11 @@ static mail* try_get_mail(mailbox* mb)
 static int register_handler(mailbox* mb, mail_handler handler)
 {
     if (!mb || !handler)
-        return -EINVAL;
+        return E_INVAL;
 
     mailhandler* mh = (mailhandler*)kmalloc(sizeof(mailhandler));
     if (!mh)
-        return -ENOMEM;
+        return E_NOMEM;
 
     mh->handler = handler;
     list_init(&mh->this_node);
@@ -301,7 +301,7 @@ static int register_handler(mailbox* mb, mail_handler handler)
 static int unregister_handler(mailbox* mb, mail_handler handler)
 {
     if (!mb || !handler)
-        return -EINVAL;
+        return E_INVAL;
 
     u32 eflags = spinlock_lock_irqsave(mb->sp_lock);
     list_for_each(pos, &mb->handlers) {
@@ -333,7 +333,7 @@ static int unregister_handler(mailbox* mb, mail_handler handler)
 static int mailbox_exec(mailbox_ctrl_config* config)
 {
     if (!config)
-        return -E_INVAL;
+        return E_INVAL;
 
     switch (config->cmd) {
     case MAILBOX_CTRL_SEND:
@@ -366,7 +366,7 @@ static int mailbox_exec(mailbox_ctrl_config* config)
         break;
     case MAILBOX_CTRL_ALLOC_MAIL:
         config->m = alloc_mail();
-        config->ret = (config->m != 0) ? 0 : -ENOMEM;
+        config->ret = (config->m != 0) ? 0 : E_NOMEM;
         break;
     case MAILBOX_CTRL_RELEASE_MAIL:
         release_mail(config->m);
@@ -374,7 +374,7 @@ static int mailbox_exec(mailbox_ctrl_config* config)
         break;
     case MAILBOX_CTRL_ALLOC:
         config->mb = alloc_mailbox(config->pid, config->tid);
-        config->ret = (config->mb != 0) ? 0 : -ENOMEM;
+        config->ret = (config->mb != 0) ? 0 : E_NOMEM;
         break;
     case MAILBOX_CTRL_RELEASE:
         release_mailbox(config->mb);
@@ -389,7 +389,7 @@ static int mailbox_exec(mailbox_ctrl_config* config)
             config->mb = t ? t->mailbox : 0;
         }
         if (!config->mb || config->magic == 0) {
-            config->ret = -EINVAL;
+            config->ret = E_INVAL;
             break;
         }
         u32 eflags = spinlock_lock_irqsave(config->mb->sp_lock);
@@ -410,7 +410,7 @@ static int mailbox_exec(mailbox_ctrl_config* config)
             }
         }
         spinlock_unlock_irqrestore(config->mb->sp_lock, eflags);
-        config->ret = -ENOMEM;
+        config->ret = E_NOMEM;
         break;
     case MAILBOX_CTRL_UNSUBSCRIBE_MAIL:
         /* mb == NULL: own mailbox, same as SUBSCRIBE / LISTEN. */
@@ -419,7 +419,7 @@ static int mailbox_exec(mailbox_ctrl_config* config)
             config->mb = t ? t->mailbox : 0;
         }
         if (!config->mb || config->magic == 0) {
-            config->ret = -EINVAL;
+            config->ret = E_INVAL;
             break;
         }
         u32 eflags2 = spinlock_lock_irqsave(config->mb->sp_lock);
@@ -432,10 +432,10 @@ static int mailbox_exec(mailbox_ctrl_config* config)
             }
         }
         spinlock_unlock_irqrestore(config->mb->sp_lock, eflags2);
-        config->ret = -EINVAL;
+        config->ret = E_INVAL;
         break;
     default:
-        config->ret = -EINVAL;
+        config->ret = E_INVAL;
         break;
     }
 
@@ -450,7 +450,7 @@ static int mailbox_syscall_isr(void* data)
 {
     mailbox_ctrl_config* config = (mailbox_ctrl_config*)data;
     if (!config)
-        return -E_INVAL;
+        return E_INVAL;
 
     /*
      * CAP_IPC gate: a user (CPL3) process may only use the mailbox IPC
@@ -462,7 +462,7 @@ static int mailbox_syscall_isr(void* data)
     if (proc && proc->priv != PROC_PRIV_KERNEL) {
         int ipc_ok = 1;
         if (cap_check(proc, CAP_IPC, &ipc_ok) != 0) {
-            config->ret = -E_PERM;
+            config->ret = E_PERM;
             return config->ret;
         }
     }

@@ -21,10 +21,10 @@
 #define DIV_ROUND_UP(n, d)  (((n) + (d) - 1) / (d))
 
 /* One bit per 4KB page: 1 = used, 0 = free */
-static const u32   block_size      = 4096;  /* 4KB pages */
-static u8*         bitmap_4k       = 0;
-static u32         total_blocks    = 0;
-static u32         free_blocks     = 0;
+static const u32        block_size      = 4096;  /* 4KB pages */
+static u8*              bitmap_4k       = 0;
+static u32              total_blocks    = 0;
+static u32              free_blocks     = 0;
 static spinlock*        pmm_lock        = 0;
 static int              pmm_initialized = 0;
 

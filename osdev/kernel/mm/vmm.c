@@ -4,13 +4,6 @@
 #include "kernel/process.h"
 #include "kernel/capability.h"
 #include "kernel/irq.h"
-#include "kernel/syscall.h"
-#include "kernel/uapi.h"
-#include "arch_irq.h"
-#include "lib/module.h"
-
-/* Syscall handle allocated by syscall_register() in vmm_syscall_init(). */
-static i32 vmm_scall_handle = -1;
 
 /*
  * PA allocator:
@@ -134,18 +127,6 @@ void vmm_destroy(vmm_control_block* vcb)
 
 void* vmm_alloc_pages(vmm_control_block* vcb, u32 page_cnt, u32 flags)
 {
-    /* RING3 caller: route through the syscall gate (ring 0 executes the
-     * privileged invlpg inside arch_map_4kb). */
-    if (arch_running_ring3()) {
-        vmm_syscall_data data = {0};
-        data.cmd = VMM_CTRL_ALLOC_PAGES;
-        data.vcb = vcb;
-        data.page_cnt = page_cnt;
-        data.flags = flags;
-        arch_syscall(vmm_scall_handle, &data, sizeof(data));
-        return data.ret_va;
-    }
-
     u32 pa = 0;
     u32 va = 0;
     vmm_region* region = 0;
@@ -246,16 +227,6 @@ void* vmm_alloc_pages(vmm_control_block* vcb, u32 page_cnt, u32 flags)
 
 void vmm_free_pages(vmm_control_block* vcb, void* va)
 {
-    /* RING3 caller: route through the syscall gate (privileged invlpg). */
-    if (arch_running_ring3()) {
-        vmm_syscall_data data = {0};
-        data.cmd = VMM_CTRL_FREE_PAGES;
-        data.vcb = vcb;
-        data.va = va;
-        arch_syscall(vmm_scall_handle, &data, sizeof(data));
-        return;
-    }
-
     rbnode* del_node = 0;   /* node captured inside the loop; the loop-scoped
                              * `node` goes out of scope after rbtree_for_each */
     vmm_region* region = 0;
@@ -442,18 +413,6 @@ int vmm_lookup_region(pcb* proc, u32 va, u32* out_pa, u32* out_pa_size,
 
 void* vmm_map_memory(pcb* proc, u32 phys_addr, size_t size, u32 flags)
 {
-    /* RING3 caller: route through the syscall gate (privileged invlpg). */
-    if (arch_running_ring3()) {
-        vmm_syscall_data data = {0};
-        data.cmd = VMM_CTRL_MAP_MEMORY;
-        data.proc = proc;
-        data.phys_addr = phys_addr;
-        data.size = size;
-        data.flags = flags;
-        arch_syscall(vmm_scall_handle, &data, sizeof(data));
-        return data.ret_va;
-    }
-
     cap_mem mem = {phys_addr, size, flags};
     u32 aligned_pa = phys_addr & ~(PAGE_SIZE - 1);
     u32 offset = phys_addr - aligned_pa;
@@ -557,17 +516,6 @@ int vmm_map_fixed(pcb* proc, u32 phys_addr, void* vaddr, size_t size, u32 flags)
 
 int vmm_unmap_memory(pcb* proc, void* virt_addr, size_t size)
 {
-    /* RING3 caller: route through the syscall gate (privileged invlpg). */
-    if (arch_running_ring3()) {
-        vmm_syscall_data data = {0};
-        data.cmd = VMM_CTRL_UNMAP_MEMORY;
-        data.proc = proc;
-        data.va = virt_addr;
-        data.size = size;
-        arch_syscall(vmm_scall_handle, &data, sizeof(data));
-        return data.ret;
-    }
-
     cap_mem mem = {0};
     u32 pa = 0;
     u32 pa_size = 0;
@@ -621,80 +569,3 @@ u32 vmm_va_to_pa(pcb* proc, u32 va)
     return pa;
 }
 
-/*
- * ============================================================================
- * VMM syscall layer (RING3)
- *
- * vmm_alloc_pages / vmm_free_pages / vmm_map_memory / vmm_unmap_memory are
- * routed through this gate whenever the caller runs in user mode (CPL3).
- * The handler runs in kernel context, so the privileged invlpg inside
- * arch_map_4kb / arch_unmap_4kb is executed at ring 0, and the capability
- * checks inside the kernel implementations still apply to the calling
- * process.
- * ============================================================================
- */
-static int vmm_syscall_isr(void* context)
-{
-    vmm_syscall_data* data = (vmm_syscall_data*)context;
-    if (!data)
-        return -E_INVAL;
-
-    switch (data->cmd) {
-    case VMM_CTRL_ALLOC_PAGES: {
-        vmm_control_block* vcb = data->vcb;
-        if (!vcb) {
-            pcb* proc = get_current_process();
-            if (!proc) { data->ret = EINVAL; break; }
-            vcb = &proc->vcb;
-        }
-        data->ret_va = vmm_alloc_pages(vcb, data->page_cnt, data->flags);
-        data->ret = data->ret_va ? 0 : ENOMEM;
-        break;
-    }
-    case VMM_CTRL_FREE_PAGES: {
-        vmm_control_block* vcb = data->vcb;
-        if (!vcb) {
-            pcb* proc = get_current_process();
-            if (!proc) { data->ret = EINVAL; break; }
-            vcb = &proc->vcb;
-        }
-        vmm_free_pages(vcb, data->va);
-        data->ret = 0;
-        break;
-    }
-    case VMM_CTRL_MAP_MEMORY: {
-        pcb* proc = data->proc;
-        if (!proc)
-            proc = get_current_process();
-        data->ret_va = vmm_map_memory(proc, data->phys_addr, data->size,
-                                      data->flags);
-        data->ret = VMM_IS_ERR(data->ret_va) ? VMM_PTR_ERR(data->ret_va) : 0;
-        break;
-    }
-    case VMM_CTRL_UNMAP_MEMORY: {
-        pcb* proc = data->proc;
-        if (!proc)
-            proc = get_current_process();
-        data->ret = vmm_unmap_memory(proc, data->va, data->size);
-        break;
-    }
-    default:
-        data->ret = EINVAL;
-        break;
-    }
-
-    return data->ret;
-}
-
-void vmm_syscall_init(void)
-{
-    vmm_scall_handle = syscall_register(SYSCALL_VMM, vmm_syscall_isr, sizeof(vmm_syscall_data));
-}
-
-void vmm_syscall_exit(void)
-{
-    syscall_unregister(vmm_scall_handle);
-}
-
-module_init(vmm_syscall_init);
-module_exit(vmm_syscall_exit);

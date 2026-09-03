@@ -54,7 +54,6 @@
 |----|-----|--------------|------|
 | 0 | `SYSCALL_PROC_THREAD` | `kernel/process.c` | 进程/线程控制（create / exit / yield / block / unblock） |
 | 1 | `SYSCALL_IO` | `kernel/io.c` | 端口 I/O；按 `CAP_ACCESS_IO` 端口范围检查 |
-| 2 | `SYSCALL_VMM` | `kernel/mm/vmm.c` | alloc / free / map / unmap 内存（ring-3 走 gate） |
 | 3 | `SYSCALL_IRQ` | `kernel/irq.c` | 请求 / 释放 / 掩码 IRQ |
 | 4 | `SYSCALL_MAILBOX` | `kernel/ipc/mailbox.c` | mailbox 收发（哑传输） |
 | 5 | `SYSCALL_PORTAL` | `kernel/ipc/portal.c` | portal 同步 RPC |
@@ -172,10 +171,9 @@ typedef enum {
 ### 2.4 内存映射 + shm（第 3 步 ✅ 功能等价）
 
 - `vmm_map_memory(proc, phys, size, flags)` / `vmm_unmap_memory`：页对齐、`CAP_MAP_MEM` 检查、
-  逐页 `arch_map_4kb`、失败回滚、ring-3 自动走 `SYSCALL_VMM` gate（特权 `invlpg` 在 ring-0 执行）。
-- `vmm_alloc_pages` / `vmm_free_pages` / `vmm_map_fixed`（ELF 装载用）/ `vmm_va_to_pa`。
+  逐页 `arch_map_4kb`、失败回滚。纯内核 API（ELF 装载 / shm 使用）；`SYSCALL_VMM` ring-3 gate 已移除。
+- `vmm_alloc_pages` / `vmm_free_pages` / `vmm_map_fixed`（ELF 装载用）/ `vmm_va_to_pa`：同上，内核内部使用。
 - `shm_share(pid, va, size, out)` / `shm_unshare`：portal 的数据通道。
-- 未按旧路线图改名 `sys_mem_map/unmap/share`——**没必要**，现有 API + syscall gate 已等价。
 
 ### 2.5 用户态 server（第 5 步 ✅ 以实际方案落地）
 

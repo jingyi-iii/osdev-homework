@@ -4,23 +4,11 @@
 #include "kernel/log.h"
 
 DECLARE_HEAD_NODE(semaphore_head);
-static spinlock* semaphore_lock = 0;
-
-static void semaphore_subsys_init(void)
-{
-    semaphore_lock = spinlock_alloc();
-    if (!semaphore_lock) {
-        LOG("failed to alloc spin lock for semaphore registry\n");
-    }
-}
-module_init(semaphore_subsys_init);
+static spinlock semaphore_lock = { .state = LOCK_UNLOCKED };
 
 semaphore* semaphore_create(int init_value)
 {
     static int next_id = 0;
-
-    if (!semaphore_lock)
-        return 0;
 
     semaphore* sem = (semaphore*)kmalloc(sizeof(semaphore));
     if (!sem)
@@ -35,9 +23,9 @@ semaphore* semaphore_create(int init_value)
     sem->value = init_value;
     list_init(&sem->this_node);
 
-    u32 eflags = spinlock_lock_irqsave(semaphore_lock);
+    u32 eflags = spinlock_lock_irqsave(&semaphore_lock);
     list_add(&sem->this_node, &semaphore_head);
-    spinlock_unlock_irqrestore(semaphore_lock, eflags);
+    spinlock_unlock_irqrestore(&semaphore_lock, eflags);
 
     return sem;
 }
@@ -54,9 +42,9 @@ int semaphore_destroy(semaphore* sem)
     }
     spinlock_unlock_irqrestore(sem->wq.sp_lock, eflags);
 
-    eflags = spinlock_lock_irqsave(semaphore_lock);
+    eflags = spinlock_lock_irqsave(&semaphore_lock);
     list_del(&sem->this_node);
-    spinlock_unlock_irqrestore(semaphore_lock, eflags);
+    spinlock_unlock_irqrestore(&semaphore_lock, eflags);
 
     spinlock_release(sem->wq.sp_lock);
     kfree(sem);
@@ -69,7 +57,7 @@ semaphore* semaphore_get(int id)
     semaphore* sem = 0;
     int found = 0;
 
-    u32 eflags = spinlock_lock_irqsave(semaphore_lock);
+    u32 eflags = spinlock_lock_irqsave(&semaphore_lock);
     list_for_each(node, &semaphore_head) {
         sem = list_entry(node, semaphore, this_node);
         if (!sem || sem->id != id)
@@ -78,7 +66,7 @@ semaphore* semaphore_get(int id)
         found = 1;
         break;
     }
-    spinlock_unlock_irqrestore(semaphore_lock, eflags);
+    spinlock_unlock_irqrestore(&semaphore_lock, eflags);
 
     return found ? sem : 0;
 }
@@ -114,4 +102,18 @@ int semaphore_signal(int semid)
     if (wake)
         wait_queue_wake_one(&sem->wq);
     return 0;
+}
+
+int semaphore_has_waiters(semaphore* sem)
+{
+    int busy = 0;
+
+    if (!sem)
+        return 0;
+
+    u32 eflags = spinlock_lock_irqsave(sem->wq.sp_lock);
+    busy = !list_empty(&sem->wq.waiters);
+    spinlock_unlock_irqrestore(sem->wq.sp_lock, eflags);
+
+    return busy;
 }

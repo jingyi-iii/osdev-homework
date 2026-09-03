@@ -18,7 +18,10 @@
 
 #define SYSCALL_PROC_THREAD 0   /* process/thread control (kernel/process.c) */
 #define SYSCALL_IO          1   /* port I/O (kernel/io.c)                    */
-#define SYSCALL_VMM         2   /* memory alloc/map (kernel/mm/vmm.c)        */
+                                /* slot 2 (was SYSCALL_VMM) removed: VMM is  */
+                                /* kernel-internal only (ELF loader / shm /  */
+                                /* task stacks); no ring-3 gate.  Kept free  */
+                                /* so fixed numbers below never shift.       */
 #define SYSCALL_IRQ         3   /* IRQ request/release (kernel/irq.c)        */
 #define SYSCALL_MAILBOX     4   /* mailbox IPC (kernel/ipc/mailbox.c)        */
 #define SYSCALL_PORTAL      5   /* portal RPC (kernel/ipc/portal.c)          */
