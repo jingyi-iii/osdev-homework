@@ -104,6 +104,36 @@ void pmm_init(u32 total_memory, u8* bitmap_pa)
          total_blocks, total_memory >> 20, free_blocks, (u32)bitmap_4k);
 }
 
+/*
+ * pmm_mark_used - Reserve a physical range so the allocator never hands
+ * it out (used at boot for the GRUB multiboot module images: GRUB loads
+ * them right after the kernel image — well ABOVE the PMM bitmap — so
+ * pmm_init() would otherwise treat them as free pages and hand them out
+ * to the first boot allocations, zeroing the module contents before they
+ * are copied into a process).
+ */
+void pmm_mark_used(u32 paddr, u32 size)
+{
+    u32 block;
+    u32 end_block;
+
+    if (!pmm_initialized || paddr == 0 || size == 0)
+        return;
+
+    spinlock_lock(pmm_lock);
+    block = paddr / block_size;
+    end_block = (paddr + size + block_size - 1) / block_size;
+    if (end_block > total_blocks)
+        end_block = total_blocks;
+    for (; block < end_block; block++) {
+        if (!bitmap_test(block)) {
+            bitmap_set(block);
+            free_blocks--;
+        }
+    }
+    spinlock_unlock(pmm_lock);
+}
+
 u32 pmm_alloc_page(void)
 {
     if (!pmm_initialized)

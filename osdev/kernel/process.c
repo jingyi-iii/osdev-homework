@@ -880,7 +880,8 @@ static void proc_env_init(void)
     if (schedule_irq)
         irq_unmask(schedule_irq);
 
-    proc_scall_handle = syscall_register(SYSCALL_PROC_THREAD, proc_syscall_isr, sizeof(proc_thread_ctrl_config));
+    proc_scall_handle = syscall_register(SYSCALL_PROC_THREAD, proc_syscall_isr,
+                                         sizeof(proc_thread_ctrl_config));
 
 #ifdef PROCESS_SUPPORT_MAILBOX
     mailbox_syscall_init();

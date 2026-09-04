@@ -7,16 +7,16 @@
 #include "sync/spinlock.h"
 #include "kernel/process.h"
 
-#define MAIL_ANY_PID            (-0xab)
-#define MAIL_ANY_TID            (-0xcd)
+#define MAIL_ANY_TID            (-0xcd)   /* receiver_tid wildcard = broadcast
+                                           * MUST equal USER_MAIL_ANY_TID
+                                           * (user/userlib.h) */
 #define MAX_SUBSCRIPTION_COUNT  (16)
 
 typedef struct mail {
     u32 magic;
-    int sender_pid;
-    int sender_tid;
-    int receiver_pid;
-    int receiver_tid;
+    int sender_tid;          /* informational: sender's thread (reply-to)  */
+    int receiver_tid;        /* routing: target thread, or MAIL_ANY_TID for
+                              * broadcast to subscribers of m->magic        */
     char data[256];
     size_t data_size;
 

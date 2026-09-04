@@ -11,6 +11,10 @@
  */
 static int g_row = 0;
 
+/* The demo process's frame buffer (graphics mode 0x13: 320x200x8).
+ * gfx_flush() shares it with the terminal server and asks it to blit. */
+u8 gfx_fb[GFX_FB_SIZE];
+
 static void count_lines(const char* s)
 {
     if (!s)
@@ -71,11 +75,10 @@ void terminal_flush(int mode)
 {
     (void)mode;
 
-    /* ESC[2J through the console portal: the terminal server blanks the
-     * whole screen and homes its cursor, so the next write starts clean
-     * instead of mixing with stale output. */
-    static const char clear_seq[] = { 0x1b, '[', '2', 'J' };
-    user_portal_call(PORTAL_ID_CONSOLE, (void*)clear_seq, sizeof(clear_seq));
+    /* ESC[2J through the namespace-resolved console portal: the terminal
+     * server blanks the whole screen and homes its cursor, so the next
+     * write starts clean instead of mixing with stale output. */
+    console_putstr("\x1b[2J");
 
     g_row = 0;
 }
@@ -91,7 +94,48 @@ void terminal_switch_to_text_mode(void)
 
 void timer_delay_ms(u32 ms)
 {
+    /* Real timed delay via the rtc server (SLEEP_MS portal RPC); fall
+     * back to the coarse yield loop while the server is not up yet. */
+    if (user_rtc_sleep_ms(ms) == 0)
+        return;
     user_delay_ms(ms);
+}
+
+/* ---- graphics (terminal server doubles as the graphics server) ---- */
+
+int gfx_set_graphics_mode(void)
+{
+    return gfx_set_mode(GFX_MODE_13);
+}
+
+int gfx_set_text_mode(void)
+{
+    return gfx_set_mode(GFX_MODE_TEXT);
+}
+
+void gfx_clear_screen(u8 color)
+{
+    for (u32 i = 0; i < GFX_FB_SIZE; i++)
+        gfx_fb[i] = color;
+}
+
+void gfx_put_pixel(int x, int y, u8 color)
+{
+    if (x < 0 || x >= 320 || y < 0 || y >= 200)
+        return;
+    gfx_fb[(u32)y * 320 + (u32)x] = color;
+}
+
+void gfx_fill_rect(int x, int y, int w, int h, u8 color)
+{
+    for (int row = y; row < y + h; row++)
+        for (int col = x; col < x + w; col++)
+            gfx_put_pixel(col, row, color);
+}
+
+int gfx_flush(void)
+{
+    return gfx_blit_shared(gfx_fb, GFX_FB_SIZE);
 }
 
 void log_write(const char* s)

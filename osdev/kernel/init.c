@@ -13,6 +13,18 @@
  * server gets exactly the resources its code touches through the io /
  * irq / ipc syscall gates.
  */
+/* namespace_server.elf — user namespace service at the fixed
+ * PORTAL_ID_NAMESPACE portal (the bootstrap name -> id registry).  Only
+ * the portal gate is used, so CAP_IPC is enough. */
+static void grant_ns_caps(pcb* proc)
+{
+    if (!proc)
+        return;
+
+    int ipc_ok = 1;
+    cap_grant(proc, CAP_IPC, &ipc_ok);
+}
+
 static void grant_terminal_caps(pcb* proc)
 {
     if (!proc)
@@ -47,11 +59,10 @@ static void grant_kb_caps(pcb* proc)
  *     gate, see kernel/io.c):
  *       VGA  {0x3C0, 32}:  terminal_write()/gfx_*() rendering
  *       COM1 {0x3F8, 8}:   LOG() output
- *       PIT/PPI/CMOS:      timer_delay_ms()/timer_get_time() (used by nearly
- *                          every test suite; without them pit_delay_ticks()
- *                          would spin forever on denied port reads)
- *   - CAP_IPC: the test suites use mailbox_* (mailbox_api_test) and
- *     shm_share/shm_unshare (shm_test).
+ *     (PIT/PPI/CMOS are no longer granted: timed delays go through the
+ *     rtc server's SLEEP_MS portal RPC instead of spinning on PIT ports.)
+ *   - CAP_IPC: the test suites use mailbox_* (mailbox_api_test),
+ *     shm_share/shm_unshare (shm_test) and the console/log/rtc portals.
  * Processes the demo spawns inherit a copy (cap_inherit_all in p_create),
  * so all test/game children keep working.  Driver-server ELFs get their
  * own grants from grant_terminal_caps/grant_kb_caps above.
@@ -63,15 +74,9 @@ static void grant_demo_caps(pcb* proc)
 
     cap_io_port vga  = { 0x3C0, 32 };   /* VGA ports 0x3C0-0x3DF */
     cap_io_port com1 = { 0x3F8, 8  };   /* COM1 (LOG() output)    */
-    cap_io_port pit  = { 0x40, 4  };    /* PIT 0x40-0x43 (timer_delay_*) */
-    cap_io_port ppi  = { 0x61, 1  };    /* PPI port B (PIT gate)  */
-    cap_io_port cmos = { 0x70, 2  };    /* CMOS 0x70-0x71 (timer_get_time) */
 
     cap_grant(proc, CAP_ACCESS_IO, &vga);
     cap_grant(proc, CAP_ACCESS_IO, &com1);
-    cap_grant(proc, CAP_ACCESS_IO, &pit);
-    cap_grant(proc, CAP_ACCESS_IO, &ppi);
-    cap_grant(proc, CAP_ACCESS_IO, &cmos);
 
     /* IPC: the test suites use mailbox_* (mailbox_api_test) and
      * shm_share/shm_unshare (shm_test); children inherit this grant. */
@@ -79,9 +84,41 @@ static void grant_demo_caps(pcb* proc)
     cap_grant(proc, CAP_IPC, &ipc_ok);
 }
 
-/* hello.elf — first user ELF demo.  It prints via the console portal
- * (portal_call shares the caller's buffer with shm_share, which is behind
- * the CAP_IPC gate) and LOGs via SYSCALL_LOG (no caps needed). */
+/* log_server2.elf — user-mode LOG server.  Registers "log" in the
+ * namespace and serves its dynamic portal; writes COM1 through the io
+ * syscall gate (needs CAP_ACCESS_IO for {0x3F8, 8}) + CAP_IPC for the
+ * portal/namespace gates. */
+static void grant_log_caps(pcb* proc)
+{
+    if (!proc)
+        return;
+
+    cap_io_port com1 = { 0x3F8, 8 };
+    int ipc_ok = 1;
+    cap_grant(proc, CAP_ACCESS_IO, &com1);
+    cap_grant(proc, CAP_IPC, &ipc_ok);
+}
+
+/* rtc_server.elf — user-mode RTC / sleep server.  Registers "rtc" in the
+ * namespace and serves GET_TIME (CMOS 0x70-0x71) + SLEEP_MS (latched PIT
+ * channel-0 counter, ports 0x40-0x43) over its dynamic portal.  Needs
+ * CAP_ACCESS_IO for both port ranges + CAP_IPC for the portal gate. */
+static void grant_rtc_caps(pcb* proc)
+{
+    if (!proc)
+        return;
+
+    cap_io_port cmos = { 0x70, 2 };    /* CMOS RTC 0x70-0x71  */
+    cap_io_port pit  = { 0x40, 4 };    /* PIT 0x40-0x43       */
+    int ipc_ok = 1;
+    cap_grant(proc, CAP_ACCESS_IO, &cmos);
+    cap_grant(proc, CAP_ACCESS_IO, &pit);
+    cap_grant(proc, CAP_IPC, &ipc_ok);
+}
+
+/* hello.elf — first user ELF demo.  It prints to the console and logs to
+ * COM1 through the namespace-resolved console/log portals; both are portal
+ * RPCs behind the CAP_IPC gate (portal_call shm-shares the buffer). */
 static void grant_hello_caps(pcb* proc)
 {
     if (!proc)
@@ -131,6 +168,9 @@ static i32 load_user_elf_by_name(const char* name, caps_grant_fn grant)
             break;
 
         i32 pid = proc_load_from_elf(start, end, 0);
+        if (pid <= 0)
+            LOG("load '%s': proc_load_from_elf failed (%d) start=0x%x end=0x%x",
+                name, pid, (u32)(uptr)start, (u32)(uptr)end);
         if (pid > 0) {
             if (grant)
                 grant(get_process_by_pid(pid));
@@ -157,11 +197,15 @@ void init_thread(void)
      * I/O on the VGA text buffer).  Driver servers are standalone user
      * ELFs (user/server/): load them as GRUB modules with their resource
      * grants, then run the portal test.  Loading order matters: the
-     * terminal server must publish PORTAL_ID_CONSOLE before portal_test
-     * prints through it (processes run in creation order).
+     * namespace server must come up before the other servers register
+     * their dynamic ids and before clients resolve names (processes run
+     * in creation order).
      * ---- */
     kterm_switch_to_text_mode();
     kterm_clear();
+
+    kterm_write("[launcher] starting namespace_server.elf\n");
+    load_user_elf_by_name("namespace_server.elf", grant_ns_caps);
 
     kterm_write("[launcher] starting terminal_server.elf\n");
     load_user_elf_by_name("terminal_server.elf", grant_terminal_caps);
@@ -169,17 +213,22 @@ void init_thread(void)
     kterm_write("[launcher] starting kb_server.elf\n");
     load_user_elf_by_name("kb_server.elf", grant_kb_caps);
 
-    /* User-mode LOG server: claims SYSCALL_LOG via SYSCALL_SYSCTL, so any
-     * process's SYSCALL_LOG trap reaches its ring-0 handler (running with
-     * the log server's page tables).  No grants: registration only needs a
-     * USER process; the handler writes COM1 via direct port I/O at ring 0. */
+    /* User-mode LOG server: registers "log" in the namespace; any user
+     * program logs via a portal RPC to it.  Grant COM1 port I/O (io
+     * syscall gate) + CAP_IPC (portal/namespace gates). */
     kterm_write("[launcher] starting log_server2.elf\n");
-    load_user_elf_by_name("log_server2.elf", 0);
+    load_user_elf_by_name("log_server2.elf", grant_log_caps);
+
+    /* User-mode RTC/sleep server: registers "rtc" in the namespace; demo
+     * timer_delay_ms() sleeps via its portal.  Grant CMOS + PIT port I/O
+     * + CAP_IPC. */
+    kterm_write("[launcher] starting rtc_server.elf\n");
+    load_user_elf_by_name("rtc_server.elf", grant_rtc_caps);
 
     kterm_write("[launcher] running portal_test.elf\n");
     load_user_elf_by_name("portal_test.elf", grant_demo_caps);
 
-    /* hello.elf — first user ELF demo: console portal + SYSCALL_LOG. */
+    /* hello.elf — first user ELF demo: console portal + log portal. */
     kterm_write("[launcher] running hello.elf\n");
     load_user_elf_by_name("hello.elf", grant_hello_caps);
 

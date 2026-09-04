@@ -135,7 +135,7 @@ int send(mail* m)
     if (!m)
         return E_INVAL;
 
-    if (m->receiver_pid == MAIL_ANY_PID || m->receiver_tid == MAIL_ANY_TID) {
+    if (m->receiver_tid == MAIL_ANY_TID) {
         /*
          * Broadcast: deliver only to mailboxes subscribed to m->magic.
          * ref_count tracks how many deliveries are outstanding:
@@ -233,9 +233,7 @@ int send(mail* m)
                     clone->magic = m->magic;   /* keep the notification tag */
                     memcpy(clone->data, m->data, sizeof(m->data));
                     clone->data_size = m->data_size;
-                    clone->sender_pid = m->sender_pid;
                     clone->sender_tid = m->sender_tid;
-                    clone->receiver_pid = m->receiver_pid;
                     clone->receiver_tid = m->receiver_tid;
                     clone->ref_count = 1;
                     u32 eflags = spinlock_lock_irqsave(t->mailbox->sp_lock);

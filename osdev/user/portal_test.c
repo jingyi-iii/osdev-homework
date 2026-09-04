@@ -6,7 +6,8 @@
  * with a keypress (see kernel/init.c).  Runs two tests:
  *
  *   Test 1 (console portal): client-side portal_call() to the terminal
- *          server's well-known portal (PORTAL_ID_CONSOLE) to print text.
+ *          server's console portal (resolved via the namespace) to print
+ *          text.
  *   Test 2 (self portal): the main thread spawns a server thread that owns
  *          a private portal; the main thread portal_calls it with an
  *          inline payload; the server verifies the payload and echoes a
@@ -83,14 +84,24 @@ static void portal_server_thread(void* param)
  * ------------------------------------------------------------------ */
 static void test_console_portal(void)
 {
-    pt_print("\n[portal-test] === Test 1: console portal ===\n");
+    pt_print("\n[portal-test] === Test 1: console portal (via namespace) ===\n");
 
     static const char hello[] = "hello via console portal";
-    if (user_portal_call(PORTAL_ID_CONSOLE, (void*)hello,
-                         sizeof(hello) - 1) == 0)
-        pt_print("[portal-test] console portal ... [PASS]\n");
+    u32 cid = 0, mt = 0, mm = 0;
+    int tries = 0;
+
+    /* Resolve the console portal through the namespace instead of
+     * hardcoding a portal id. */
+    while (tries++ < 10000) {
+        if (ns_lookup(NS_NAME_CONSOLE, &cid, &mt, &mm) == 0 && cid)
+            break;
+        user_yield();
+    }
+
+    if (cid && user_portal_call(cid, (void*)hello, sizeof(hello) - 1) == 0)
+        pt_print("[portal-test] console portal (ns) ... [PASS]\n");
     else
-        pt_print("[portal-test] console portal ... [FAIL]\n");
+        pt_print("[portal-test] console portal (ns) ... [FAIL]\n");
 }
 
 static void test_self_portal(void)

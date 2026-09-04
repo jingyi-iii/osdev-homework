@@ -4,7 +4,8 @@
  *
  * In the user-mode ELF world:
  *   - terminal_write* -> console portal (terminal_server prints it)
- *   - timer_delay_ms    -> yield-based coarse delay
+ *   - timer_delay_ms    -> rtc server SLEEP_MS portal RPC (rtc_server.elf,
+ *     PIT-counter timed; falls back to a yield loop if the server is down)
  *   - thread_* / proc_* -> userlib syscall wrappers (see userlib.h)
  *   - colors / priv     -> plain constants (colors are ignored by the
  *     terminal server, kept for source compatibility)
@@ -67,6 +68,22 @@ int  terminal_get_row(void);
 void terminal_switch_to_text_mode(void);
 void timer_delay_ms(u32 ms);
 void log_write(const char* s);
+
+/* --- graphics API (demo_common.c) — terminal server graphics mode ---
+ * A single shared frame buffer in this demo process:
+ *   gfx_clear_screen / gfx_put_pixel / gfx_fill_rect draw into it,
+ *   gfx_flush() blits the whole buffer to the screen through the console
+ *   portal (one shm_share per flush — no per-pixel IPC). */
+#define GFX_W 320
+#define GFX_H 200
+extern u8 gfx_fb[GFX_FB_SIZE];   /* 320*200 = 64000 bytes (static) */
+
+int  gfx_set_graphics_mode(void);   /* switch VGA to mode 0x13 (0 = ok) */
+int  gfx_set_text_mode(void);       /* switch back to 80x25 text (0 = ok) */
+void gfx_clear_screen(u8 color);
+void gfx_put_pixel(int x, int y, u8 color);
+void gfx_fill_rect(int x, int y, int w, int h, u8 color);
+int  gfx_flush(void);               /* blit the shared fb (0 = ok) */
 
 /*
  * Set by a test suite right before it exits (as a thread of the menu

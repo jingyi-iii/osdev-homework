@@ -16,7 +16,6 @@ typedef struct syscall {
     i32 handle;
     syscall_handler_fn fn;
     size_t max_param_size;
-    u32 owner_cr3;      /* 0 = kernel handler; else PD of registering process */
     list_node this_node;
 } syscall;
 
@@ -41,7 +40,6 @@ int syscall_dispatch(u32 handle, void* arg, size_t size);
 int copy_from_user(void* dst, const void* user_src, size_t n);
 int copy_to_user(void* user_dst, const void* src, size_t n);
 
-void syscall_init(void);
 void syscall_exit(void);
 
 #endif

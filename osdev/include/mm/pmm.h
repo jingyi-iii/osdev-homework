@@ -6,6 +6,12 @@
 void pmm_init(u32 total_memory, u8* bitmap_pa);
 
 /**
+ * pmm_mark_used - Reserve a physical range so the allocator never hands
+ * it out (e.g. GRUB multiboot module images loaded above the PMM bitmap).
+ */
+void pmm_mark_used(u32 paddr, u32 size);
+
+/**
  * pmm_alloc_page - Allocate a single zero-filled 4KB physical page.
  * Returns the physical address, or 0 on failure.
  */

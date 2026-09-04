@@ -13,7 +13,10 @@
 static DECLARE_HEAD_NODE(portal_header);
 static spinlock portal_lock = { .state = LOCK_UNLOCKED };
 
-static u32 portal_next_id = PORTAL_ID_ANY + 1;
+/* Auto-assigned ids start ABOVE the fixed well-known id (the namespace
+ * server, PORTAL_ID_NAMESPACE), so a dynamic portal can never collide
+ * with the bootstrap service no matter when it is created. */
+static u32 portal_next_id = PORTAL_ID_NAMESPACE + 1;
 
 static inline int portal_run_direct(void)
 {
@@ -90,10 +93,10 @@ static int portal_exec(portal_ctrl_config* cfg)
         if (!p)
             return E_NOMEM;
         memset(p, 0, sizeof(*p));
-        /* A non-zero cfg->server_id requests a specific well-known id (the
-         * terminal server publishes the console portal at the fixed
-         * PORTAL_ID_CONSOLE so separately-linked user ELFs can find it via
-         * the ABI constant).  0 = auto-assign. */
+        /* A non-zero cfg->server_id requests a specific id (the namespace
+         * server publishes PORTAL_ID_NAMESPACE so any client can reach it;
+         * everything else registers a dynamic id with the namespace).
+         * 0 = auto-assign. */
         if (cfg->server_id != 0) {
             if (portal_get_by_id(cfg->server_id)) {
                 kfree(p);

@@ -83,8 +83,7 @@ static void kb_broadcast_key(u8 scancode)
         return;
 
     m->magic          = MSG_KEY_EVENT;
-    m->receiver_pid   = USER_MAIL_ANY_PID;   /* broadcast */
-    m->receiver_tid   = USER_MAIL_ANY_TID;
+    m->receiver_tid   = USER_MAIL_ANY_TID;   /* broadcast */
     m->data_size      = sizeof(ev);
     for (size_t i = 0; i < sizeof(ev); i++)
         ((u8*)m->data)[i] = ((const u8*)&ev)[i];
@@ -97,6 +96,18 @@ void _start(void)
     void* irq = user_irq_request(KB_IRQ_NO, 0);
     if (irq)
         user_irq_unmask(irq);
+
+    /* Register "kb" in the namespace: keyboard events are consumed as
+     * mailbox broadcasts (mail_magic = MSG_KEY_EVENT); mailbox_tid is
+     * this thread's tid — its mailbox is where the kernel drops IRQ
+     * notifications — so a future client can also point-to-point mail us. */
+    {
+        u32 my_tid = (u32)user_thread_get_tid();
+        int tries = 0;
+        while (tries++ < 10000 &&
+               ns_register(NS_NAME_KEYBOARD, 0, my_tid, MSG_KEY_EVENT) != 0)
+            user_yield();
+    }
 
     for (;;) {
         user_irq_wait();

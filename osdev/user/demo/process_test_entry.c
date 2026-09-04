@@ -22,12 +22,13 @@ extern void sched_mix_test_main(void);
 /* Set by a test suite just before it exits; the menu polls it. */
 volatile int test_finished_flag = 0;
 
-/* Menu state: 0 = waiting, 1..9 = selected suite */
-static volatile int menu_choice = 0;
+/* Menu state: -1 = waiting, 0..9 = selected option ('0' = graphics demo —
+ * a valid choice, so the "no key yet" sentinel is -1, not 0). */
+static volatile int menu_choice = -1;
 
 /* ------------------------------------------------------------------ *
  *  Key listener: kb_server broadcasts MSG_KEY_EVENT mails to every    *
- *  subscribed mailbox; digits '1'..'9' select the test suite.         *
+ *  subscribed mailbox; '0' = graphics demo, '1'..'9' select suites.   *
  * ------------------------------------------------------------------ */
 static void key_listener_thread(void)
 {
@@ -44,7 +45,7 @@ static void key_listener_thread(void)
             for (u32 i = 0; i < sizeof(ev); i++)
                 ((u8*)&ev)[i] = ((const u8*)m->data)[i];
 
-            if (ev.pressed && ev.ascii >= '1' && ev.ascii <= '9')
+            if (ev.pressed && ev.ascii >= '0' && ev.ascii <= '9')
                 menu_choice = ev.ascii - '0';
         }
         if (m)
@@ -65,6 +66,7 @@ static void draw_menu(void)
     terminal_write("  PROCESS API TEST SUITE                \n");
     terminal_write("========================================\n");
     terminal_write("\n");
+    terminal_write("  [0] Graphics Demo (mode 0x13)         \n");
     terminal_write("  [1] Thread API Test Suite\n");
     terminal_write("  [2] Process API Test Suite\n");
     terminal_write("  [3] Mailbox API Test Suite            (not yet ported)\n");
@@ -75,7 +77,7 @@ static void draw_menu(void)
     terminal_write("  [8] SHM Stress Test                   (not yet ported)\n");
     terminal_write("  [9] Portal RPC Test Suite             (not yet ported)\n");
     terminal_write("\n");
-    terminal_write("  Press 1, 2, 3, 4, 5, 6, 7, 8 or 9 to select\n");
+    terminal_write("  Press 0, 1, 2, 3, 4, 5, 6, 7, 8 or 9 to select\n");
 }
 
 static void note_not_ported(const char* name)
@@ -85,6 +87,43 @@ static void note_not_ported(const char* name)
     terminal_write(" still uses kernel-only APIs (mailbox handlers / shm /\n");
     terminal_write("    kernel portal internals) — not yet ported to the user ELF. ***\n");
     timer_delay_ms(2000);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Graphics demo — switch the whole screen to mode 0x13, animate a    *
+ *  bouncing square in the shared frame buffer, then back to text.     *
+ *  Pacing comes from the rtc server (timer_delay_ms = SLEEP_MS RPC).  *
+ * ------------------------------------------------------------------ */
+static void graphics_demo(void)
+{
+    int x = 0, y = 0, dx = 2, dy = 1;
+    int w = 24, h = 24;
+    int cx = 160 - w / 2, cy = 100 - h / 2;   /* target centre */
+    u8 bg = 1;                                 /* blue background  */
+
+    gfx_set_graphics_mode();
+
+    for (int frame = 0; frame < 250; frame++) {
+        gfx_clear_screen(bg);
+        gfx_fill_rect(cx + x, cy + y, w, h, 14);      /* yellow block */
+        gfx_fill_rect(10, 10, 60, 8, 2);              /* green banner */
+        gfx_fill_rect(10, 182, 300, 8, 4);            /* red footer   */
+        gfx_flush();
+
+        x += dx;
+        y += dy;
+        if (x <= -cx || x + w >= 320 - cx)
+            dx = -dx;
+        if (y <= -cy || y + h >= 200 - cy)
+            dy = -dy;
+        if ((frame & 3) == 0)
+            bg = (u8)((bg + 1) & 0x0F);
+        timer_delay_ms(20);
+    }
+
+    gfx_set_text_mode();
+    terminal_flush(0);
+    terminal_write("\n*** Graphics demo finished — back in text mode. ***\n");
 }
 
 /* ------------------------------------------------------------------ *
@@ -137,16 +176,19 @@ void _start(void)
         user_thread_unblock(tid);
 
     for (;;) {
-        menu_choice = 0;
+        menu_choice = -1;
         test_finished_flag = 0;
 
         draw_menu();
 
-        /* Wait for the user to choose a test */
-        while (menu_choice == 0)
+        /* Wait for the user to choose an option */
+        while (menu_choice < 0)
             user_yield();
 
         switch (menu_choice) {
+        case 0:
+            graphics_demo();
+            break;
         case 1:
             run_test_suite("Thread API Test Suite", thread_api_test_main);
             break;

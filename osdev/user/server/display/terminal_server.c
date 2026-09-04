@@ -2,8 +2,9 @@
  * user/server/display/terminal_server.c — ring-3 console server
  * (standalone user ELF).
  *
- * Pure console-portal printer: publishes the well-known PORTAL_ID_CONSOLE
- * and prints every payload it receives straight to the VGA text buffer
+ * Pure console-portal printer: publishes a DYNAMIC console portal and
+ * registers it in the namespace under "console"; prints every payload it
+ * receives straight to the VGA text buffer
  * (0xB8000 — the low identity map is user-accessible).  The interactive
  * command line is gone, so there is no kb dependency.
  *
@@ -13,17 +14,17 @@
  *
  * Two threads share the VGA text buffer:
  *   - main thread: console-portal print loop;
- *   - key thread:  subscribes to the keyboard server's MSG_KEY_EVENT
- *                  broadcasts and echoes printable keys to the screen.
+ *   - key thread:  resolves the keyboard event magic from the namespace
+ *                  ("kb"), subscribes to it and echoes printable keys.
  * Both take a small user spinlock around every character write / cursor
  * move, since they share the row/col state.
  */
 
 #include "userlib.h"          /* user_syscall / portal + mailbox ABI     */
-#include "kernel/uapi.h"      /* PORTAL_ID_CONSOLE                       */
+#include "kernel/uapi.h"      /* PORTAL_ID_NAMESPACE              */
 #include "kernel/io.h"        /* ioread8/iowrite8 (provided by user_service.c) */
 #include "user/uspinlock.h"   /* user-mode spinlock (same-process threads) */
-#include "../server_msgs.h"   /* MSG_KEY_EVENT + key_event payload       */
+#include "../server_msgs.h"   /* key_event payload                        */
 #include <stddef.h>
 
 #define VGA_WIDTH      80
@@ -31,6 +32,23 @@
 #define VGA_BUF        ((volatile u16*)0xB8000)
 #define VGA_CRT_ADDR   0x3D4
 #define VGA_CRT_DATA   0x3D5
+
+/* Extra VGA ports for mode switching (all inside the {0x3C0, 32} grant). */
+#define VGA_MISC_WRITE 0x3C2
+#define VGA_SEQ_ADDR   0x3C4
+#define VGA_SEQ_DATA   0x3C5
+#define VGA_GC_ADDR    0x3CE
+#define VGA_GC_DATA    0x3CF
+#define VGA_AC_ADDR    0x3C0
+#define VGA_AC_DATA    0x3C0
+#define VGA_AC_READ    0x3C1
+#define VGA_DAC_MASK   0x3C6
+#define VGA_DAC_WRITE  0x3C8
+#define VGA_DAC_DATA   0x3C9
+#define VGA_STAT_READ  0x3DA
+
+/* Mode 0x13 linear frame buffer (identity-mapped, user-accessible). */
+#define GFX13_BUF      ((volatile u8*)0xA0000)
 
 /* Light grey on black — the default text attribute. */
 #define TERM_COLOR     0x07
@@ -45,6 +63,11 @@ static volatile u8 term_color = TERM_COLOR;
 
 /* Serialises VGA writes between the portal thread and the key thread. */
 static uspinlock g_vga_lock = USPINLOCK_INIT;
+
+/* Current display mode: GFX_MODE_TEXT (0x03) or GFX_MODE_13 (0x13).
+ * In graphics mode the console print loop and the key echo are parked —
+ * the screen belongs to whoever called gfx_set_mode(0x13). */
+static volatile u32 g_mode = GFX_MODE_TEXT;
 
 static void term_cursor_update(void)
 {
@@ -168,32 +191,217 @@ static void term_print(const u8* s, u32 len)
 }
 
 /*
- * Key-listener thread: subscribes this thread's OWN mailbox to the
- * keyboard server's MSG_KEY_EVENT broadcasts and echoes printable keys
- * to the screen.  Runs concurrently with the portal loop; VGA writes go
- * through the shared uspinlock in term_putc().
+ * Key-listener thread: resolves the keyboard broadcast magic from the
+ * namespace ("kb"), subscribes this thread's OWN mailbox to it and echoes
+ * printable keys to the screen.  Runs concurrently with the portal loop;
+ * VGA writes go through the shared uspinlock in term_putc().
  */
 static void term_key_thread(void)
 {
-    if (user_mail_subscribe(MSG_KEY_EVENT) != 0) {
-        /* No CAP_IPC or no mailbox — nothing to listen on. */
+    /* Keyboard events are mailbox broadcasts; their magic is registered in
+     * the namespace under "kb" (kb_server.elf).  Resolve it (retry while
+     * the namespace/kb servers come up), then subscribe. */
+    u32 pid = 0, kb_tid = 0, magic = 0;
+    int tries = 0;
+
+    while (tries++ < 10000) {
+        if (ns_lookup(NS_NAME_KEYBOARD, &pid, &kb_tid, &magic) == 0 && magic)
+            break;
+        user_yield();
+    }
+
+    if (magic == 0 || user_mail_subscribe(magic) != 0) {
+        /* No CAP_IPC / no mailbox / kb not registered — nothing to hear. */
         for (;;)
             user_yield();
     }
 
     for (;;) {
         user_mail* m = user_mail_listen();   /* yield until a mail arrives */
-        if (m && m->magic == MSG_KEY_EVENT) {
+        if (m && m->magic == magic) {
             key_event ev;
 
             for (size_t i = 0; i < sizeof(ev); i++)
                 ((u8*)&ev)[i] = ((const u8*)m->data)[i];
-            if (ev.pressed && ev.ascii)
+            if (ev.pressed && ev.ascii && g_mode == GFX_MODE_TEXT)
                 term_putc(ev.ascii);
         }
         if (m)
             user_mail_release(m);
     }
+}
+
+/* ====================================================================
+ * Graphics mode (VGA mode 0x13, 320x200x256) — the server doubles as
+ * the graphics server.  Register dumps below are the standard mode-0x13
+ * values; the text-mode (0x03) restore values mirror the kernel's
+ * kterm_vga_set_text_mode().
+ * ==================================================================== */
+
+static void vga_write_regs(u16 addr_port, u16 data_port,
+                           const u8* regs, size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        iowrite8(addr_port, (u8)i);
+        iowrite8(data_port, regs[i]);
+    }
+}
+
+/* Switch to VGA graphics mode 0x13 (320x200, 256 colours, linear frame
+ * buffer at 0xA0000).  Clears the frame buffer to colour 0. */
+static void gfx_enter_mode13(void)
+{
+    static const u8 seq_13[]   = { 0x03, 0x01, 0x0F, 0x00, 0x0E };
+    static const u8 crtc_13[]  = {
+        0x5F, 0x4F, 0x50, 0x82, 0x54, 0x80, 0xBF, 0x1F,
+        0x00, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x9C, 0x0E, 0x8F, 0x28, 0x40, 0x96, 0xB9, 0xA3,
+        0xFF
+    };
+    static const u8 gc_13[]    = {
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x05, 0x0F, 0xFF
+    };
+    static const u8 ac_13[]    = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x41
+    };
+
+    /* Misc output: 25 MHz dot clock, graphics. */
+    iowrite8(VGA_MISC_WRITE, 0x63);
+
+    /* Sequencer: reset, reprogram, restart. */
+    iowrite8(VGA_SEQ_ADDR, 0x00);
+    iowrite8(VGA_SEQ_DATA, 0x01);
+    vga_write_regs(VGA_SEQ_ADDR, VGA_SEQ_DATA, seq_13, 5);
+    iowrite8(VGA_SEQ_ADDR, 0x00);
+    iowrite8(VGA_SEQ_DATA, 0x03);
+
+    /* Unlock + program the CRTC. */
+    iowrite8(VGA_CRT_ADDR, 0x11);
+    iowrite8(VGA_CRT_DATA, (u8)(ioread8(VGA_CRT_DATA) & 0x7F));
+    vga_write_regs(VGA_CRT_ADDR, VGA_CRT_DATA, crtc_13, 25);
+
+    /* Graphics controller. */
+    vga_write_regs(VGA_GC_ADDR, VGA_GC_DATA, gc_13, 9);
+
+    /* Attribute controller (index write resets the flip-flop after the
+     * status read; then re-enable video with 0x20). */
+    ioread8(VGA_STAT_READ);
+    for (size_t i = 0; i < 17; i++) {
+        iowrite8(VGA_AC_ADDR, (u8)i);
+        iowrite8(VGA_AC_DATA, ac_13[i]);
+    }
+    iowrite8(VGA_AC_ADDR, 0x20);
+
+    /* Blank the frame buffer. */
+    for (u32 i = 0; i < GFX_FB_SIZE; i++)
+        GFX13_BUF[i] = 0;
+}
+
+/* Switch back to VGA text mode 0x03 (80x25) and clear the text buffer.
+ * Register values mirror the kernel's kterm_vga_set_text_mode(). */
+static void gfx_enter_text(void)
+{
+    static const u8 seq_03[]   = { 0x03, 0x00, 0x03, 0x00, 0x02 };
+    static const u8 crtc_03[]  = {
+        0x5F, 0x4F, 0x50, 0x82, 0x55, 0x81, 0xBF, 0x1F,
+        0x00, 0x4F, 0x0D, 0x0E, 0x00, 0x00, 0x00, 0x50,
+        0x9C, 0x0E, 0x8F, 0x28, 0x1F, 0x96, 0xB9, 0xA3,
+        0xFF
+    };
+    static const u8 gc_03[]    = {
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x0E, 0x0F, 0xFF
+    };
+    static const u8 ac_03[]    = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x0C
+    };
+    static const u8 text_palette[16][3] = {
+        {0x00,0x00,0x00},{0x00,0x00,0x2A},{0x00,0x2A,0x00},{0x00,0x2A,0x2A},
+        {0x2A,0x00,0x00},{0x2A,0x00,0x2A},{0x2A,0x15,0x00},{0x2A,0x2A,0x2A},
+        {0x15,0x15,0x15},{0x15,0x15,0x3F},{0x15,0x3F,0x15},{0x15,0x3F,0x3F},
+        {0x3F,0x15,0x15},{0x3F,0x15,0x3F},{0x3F,0x3F,0x15},{0x3F,0x3F,0x3F},
+    };
+
+    ioread8(VGA_STAT_READ);
+    iowrite8(VGA_MISC_WRITE, 0x67);
+
+    iowrite8(VGA_SEQ_ADDR, 0x00);
+    iowrite8(VGA_SEQ_DATA, 0x01);
+    vga_write_regs(VGA_SEQ_ADDR, VGA_SEQ_DATA, seq_03, 5);
+    iowrite8(VGA_SEQ_ADDR, 0x00);
+    iowrite8(VGA_SEQ_DATA, 0x03);
+
+    iowrite8(VGA_CRT_ADDR, 0x11);
+    iowrite8(VGA_CRT_DATA, (u8)(ioread8(VGA_CRT_DATA) & 0x7F));
+    vga_write_regs(VGA_CRT_ADDR, VGA_CRT_DATA, crtc_03, 25);
+
+    vga_write_regs(VGA_GC_ADDR, VGA_GC_DATA, gc_03, 9);
+
+    ioread8(VGA_STAT_READ);
+    for (size_t i = 0; i < 17; i++) {
+        iowrite8(VGA_AC_ADDR, (u8)i);
+        iowrite8(VGA_AC_DATA, ac_03[i]);
+    }
+    iowrite8(VGA_AC_ADDR, 0x20);
+
+    /* Restore the standard 16-colour text palette. */
+    iowrite8(VGA_DAC_MASK, 0xFF);
+    iowrite8(VGA_DAC_WRITE, 0);
+    for (int i = 0; i < 16; i++) {
+        iowrite8(VGA_DAC_DATA, text_palette[i][0]);
+        iowrite8(VGA_DAC_DATA, text_palette[i][1]);
+        iowrite8(VGA_DAC_DATA, text_palette[i][2]);
+    }
+
+    /* Hardware cursor shape (visible block) + blank the text buffer. */
+    iowrite8(VGA_CRT_ADDR, 0x0A);
+    iowrite8(VGA_CRT_DATA, 0x00);
+    iowrite8(VGA_CRT_ADDR, 0x0B);
+    iowrite8(VGA_CRT_DATA, 0x0F);
+
+    term_clear_screen();
+    term_cursor_update();
+}
+
+/* Handle one graphics control frame (payload already validated as a
+ * gfx_ctrl).  Returns the reply int for the portal client. */
+static int gfx_handle(const gfx_ctrl* g)
+{
+    if (g->cmd == GFX_CTRL_SET_MODE) {
+        uspin_lock(&g_vga_lock);
+        if (g->a == GFX_MODE_13) {
+            gfx_enter_mode13();
+            g_mode = GFX_MODE_13;
+        } else if (g->a == GFX_MODE_TEXT) {
+            gfx_enter_text();
+            g_mode = GFX_MODE_TEXT;
+        } else {
+            uspin_unlock(&g_vga_lock);
+            return -3;
+        }
+        uspin_unlock(&g_vga_lock);
+        return 0;
+    }
+
+    if (g->cmd == GFX_CTRL_BLIT) {
+        if (g_mode != GFX_MODE_13 || g->a != GFX_FB_SIZE)
+            return -1;
+        /* The client's frame buffer is shm-mapped right after this
+         * control header in the same shared region (the client
+         * shm_share()d header+fb together).  Copy it to the hardware
+         * frame buffer — one memcpy per frame, no per-pixel IPC. */
+        const u8* fb = (const u8*)g + sizeof(gfx_ctrl);
+        uspin_lock(&g_vga_lock);
+        for (u32 i = 0; i < GFX_FB_SIZE; i++)
+            GFX13_BUF[i] = fb[i];
+        uspin_unlock(&g_vga_lock);
+        return 0;
+    }
+
+    return -3;
 }
 
 void _start(void)
@@ -211,13 +419,20 @@ void _start(void)
     tc.cmd = U_THREAD_CTRL_UNBLOCK;            /* tc.tid filled by CREATE */
     user_syscall(SYSCALL_PROC_THREAD, &tc, sizeof(tc));
 
-    /* Publish the fixed console portal (id == PORTAL_ID_CONSOLE) so
-     * separately-linked user ELFs can print through it. */
+    /* Publish a DYNAMIC console portal and register it in the namespace
+     * under "console" so separately-linked user ELFs can resolve it. */
     cfg.cmd       = U_PORTAL_CTRL_INIT;
-    cfg.server_id = PORTAL_ID_CONSOLE;
+    cfg.server_id = 0;                         /* auto-assigned id */
     if (user_syscall(SYSCALL_PORTAL, &cfg, sizeof(cfg)) != 0) {
-        /* Portal already exists (should not happen at boot): idle. */
         for (;;)
+            user_yield();
+    }
+
+    {
+        u32 my_id = (u32)(uptr)cfg.out;
+        int tries = 0;
+        while (tries++ < 10000 &&
+               ns_register(NS_NAME_CONSOLE, my_id, 0, 0) != 0)
             user_yield();
     }
 
@@ -233,12 +448,23 @@ void _start(void)
         if (!cfg.req)
             continue;
 
-        /* The payload is shm-mapped into this process's address space;
-         * print it directly (no copy, no heap).  A tiny control payload
-         * (ESC[2J) clears the screen instead: clients send it before
-         * redrawing (menus, paginated tests) so stale text never mixes
-         * with new output. */
-        if (cfg.va && cfg.va_size == 4 &&
+        /* The payload is shm-mapped into this process's address space.
+         * Three payload kinds, all starting with ESC:
+         *   ESC 'G' ...   binary graphics control frame (gfx_ctrl) —
+         *                 SET_MODE switches text/graphics, BLIT copies
+         *                 the client's shm-mapped frame buffer (which
+         *                 sits right after the header in the same shared
+         *                 region) to 0xA0000.
+         *   ESC [ 2 J     clear the text screen (menu redraws).
+         *   anything else plain text (may embed ESC[<n>m SGR colours). */
+        cfg.cmd = U_PORTAL_CTRL_REPLY;
+        cfg.ret = 0;
+
+        if (cfg.va && cfg.va_size >= sizeof(gfx_ctrl) &&
+            ((const u8*)cfg.va)[0] == 0x1b &&
+            ((const u8*)cfg.va)[1] == 'G') {
+            cfg.ret = gfx_handle((const gfx_ctrl*)cfg.va);
+        } else if (cfg.va && cfg.va_size == 4 &&
             ((const u8*)cfg.va)[0] == 0x1b &&
             ((const u8*)cfg.va)[1] == '[' &&
             ((const u8*)cfg.va)[2] == '2' &&
@@ -247,12 +473,10 @@ void _start(void)
             term_clear_screen();
             term_cursor_update();
             uspin_unlock(&g_vga_lock);
-        } else if (cfg.va && cfg.va_size) {
+        } else if (cfg.va && cfg.va_size && g_mode == GFX_MODE_TEXT) {
             term_print((const u8*)cfg.va, cfg.va_size);
         }
 
-        cfg.cmd = U_PORTAL_CTRL_REPLY;
-        cfg.ret = 0;
         user_syscall(SYSCALL_PORTAL, &cfg, sizeof(cfg));
     }
 }

@@ -85,7 +85,7 @@ void klog_init(void)
 void klog_write(const char* s)
 {
     /* Ring-0 only (cli/sti → #GP at CPL3).  The ring-3 LOG path in
-     * log_server2.c uses its own direct port writer instead. */
+     * log_server2.c writes COM1 itself (via the io syscall gate). */
     (void)s;
 }
 

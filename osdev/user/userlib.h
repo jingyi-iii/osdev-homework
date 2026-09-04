@@ -1,15 +1,18 @@
 /*
  * user/userlib.h — minimal user-mode library.
  *
- * Self-contained: only depends on lib/types.h and kernel/uapi.h (both are
- * plain headers with no kernel-only dependencies), so user programs link
- * cleanly against the fixed syscall ABI without kernel symbols.
+ * Self-contained: depends only on lib/types.h, kernel/uapi.h and the
+ * user-space ns_proto.h (plain headers with no kernel-only dependencies),
+ * so user programs link cleanly against the fixed syscall ABI without
+ * kernel symbols.
  */
 #ifndef USERLIB_H
 #define USERLIB_H
 
 #include "lib/types.h"
 #include "kernel/uapi.h"
+#include "ns_proto.h"            /* namespace protocol (user<->user names/struct) */
+#include "server/server_msgs.h"  /* rtc_request/rtc_time and other server wire formats */
 
 /*
  * proc/thread control commands — MUST mirror the kernel's
@@ -199,19 +202,55 @@ typedef struct user_portal_ctrl {
 /* Synchronous portal RPC: CALL → WAIT_REPLY → GET_RESULT → CLEANUP. */
 int user_portal_call(u32 portal_id, void* va, u32 size);
 
-/* Print a NUL-terminated string via the terminal server's console portal
- * (PORTAL_ID_CONSOLE). */
+/* ---- namespace client (namespace_server.elf @ PORTAL_ID_NAMESPACE) ---- */
+
+/* Register this service's bindings (server side).  portal_id / mailbox_tid
+ * / mail_magic may each be 0 if the service does not offer that channel. */
+int ns_register(const char* name, u32 portal_id, u32 mailbox_tid,
+                u32 mail_magic);
+
+/* Resolve a registered name; fills the (non-NULL) out_* with the service's
+ * portal id, mailbox-owner thread tid and broadcast mail magic.  Returns
+ * 0 on success or a negative code (-1 = not registered yet). */
+int ns_lookup(const char* name, u32* out_portal_id,
+              u32* out_mailbox_tid, u32* out_mail_magic);
+
+/* Print a NUL-terminated string to the VGA console.  The console portal id
+ * is resolved from the namespace ("console", terminal_server.elf) on first
+ * use and cached; retries while the server comes up. */
 void console_putstr(const char* s);
 
 /*
- * Log through the user-mode log server (SYSCALL_LOG, claimed by
- * log_server2.elf via SYSCALL_SYSCTL).  Until the server registers, the
- * kernel returns E_NOTFOUND, so both retry briefly (same pattern as
+ * Log to serial (COM1) through the log server ("log", log_server2.elf),
+ * resolved from the namespace on first use and cached (retries like
  * console_putstr).  user_log_write takes raw bytes (binary-safe),
- * user_log_str logs a NUL-terminated string.
+ * user_log_str logs a NUL-terminated string.  The buffer must live in a
+ * VMM-mapped region (static/stack data of the ELF is fine).
  */
 void user_log_write(const char* s, u32 len);
 void user_log_str(const char* s);
+
+/* ---- RTC client (rtc_server.elf, namespace name "rtc") ----
+ * user_rtc_time reads the CMOS clock (year..second, decimal).
+ * user_rtc_sleep_ms is a real timed delay (PIT counter), unlike the
+ * fallback user_delay_ms() yield loop.  Both return 0 on success or a
+ * negative code (-1 = server not registered yet, -3 = bad args/cmd). */
+int  user_rtc_time(rtc_time* out);
+int  user_rtc_sleep_ms(u32 ms);
+
+/* ---- graphics client (terminal server doubles as the graphics server) ----
+ * gfx_set_mode(0x13) switches the VGA to 320x200x256 graphics; the client
+ * then shm_share()s its frame buffer with the terminal process once and
+ * calls gfx_blit() per frame (the server memcpy()s the shared buffer to
+ * 0xA0000).  gfx_set_mode(0x03) switches back to text.  Both return the
+ * server's reply int (0 = ok, negative = error). */
+int  gfx_set_mode(u32 mode);
+int  gfx_blit(u32 fb_size);
+
+/* Preferred blit: copies fb into a static header+fb staging buffer that
+ * is shm_share()d with the terminal process for the duration of the call;
+ * the server copies the fb to 0xA0000.  No persistent mapping needed. */
+int  gfx_blit_shared(const u8* fb, u32 fb_size);
 
 /*
  * ---- IRQ syscall (SYSCALL_IRQ) ---------------------------------------
@@ -260,9 +299,9 @@ enum {
     U_MAILBOX_CTRL_UNSUBSCRIBE_MAIL = 9,  /* unsubscribe own mailbox        */
 };
 
-/* Broadcast receiver wildcards — MUST mirror MAIL_ANY_PID / MAIL_ANY_TID
- * (include/ipc/mailbox.h).  Set user_mail.receiver_* to these to broadcast. */
-#define USER_MAIL_ANY_PID   (-0xab)
+/* Broadcast receiver wildcard — MUST mirror MAIL_ANY_TID
+ * (include/ipc/mailbox.h).  Set user_mail.receiver_tid to this to
+ * broadcast to every mailbox subscribed to m->magic. */
 #define USER_MAIL_ANY_TID   (-0xcd)
 
 typedef struct user_mailbox_ctrl {
@@ -281,17 +320,15 @@ typedef struct user_mailbox_ctrl {
  * (include/ipc/mailbox.h); the remaining fields are kernel-internal.
  * The kernel mail object lives in the low identity-mapped kernel heap, so
  * the view is directly readable AND writable from user mode:
- *   - outbound: fill magic / receiver_* / data / data_size, user_mail_send
- *   - inbound:  read magic / sender_* / data / data_size, user_mail_release
+ *   - outbound: fill magic / receiver_tid / data / data_size, user_mail_send
+ *   - inbound:  read magic / sender_tid / data / data_size, user_mail_release
  * magic is the opaque notification tag (e.g. MAIL_MAGIC_IRQ, or a
  * user-defined event magic such as MSG_KEY_EVENT).
  */
 typedef struct user_mail {
     u32  magic;
-    int  sender_pid;
-    int  sender_tid;
-    int  receiver_pid;
-    int  receiver_tid;
+    int  sender_tid;      /* informational (mirrors kernel's mail) */
+    int  receiver_tid;    /* routing: thread id or USER_MAIL_ANY_TID */
     char data[256];
     u32  data_size;   /* mirrors kernel's size_t (u32 on i686) */
 } user_mail;
@@ -304,8 +341,8 @@ void  user_mail_release(void* m);
 /* Allocate a mail for sending (view as user_mail* and fill it in). */
 void* user_mail_alloc(void);
 
-/* Send a mail: addressed (receiver_* set) or broadcast to every mailbox
- * subscribed to m->magic (receiver_* = USER_MAIL_ANY_PID/TID). */
+/* Send a mail: addressed (receiver_tid set) or broadcast to every mailbox
+ * subscribed to m->magic (receiver_tid = USER_MAIL_ANY_TID). */
 int   user_mail_send(void* m);
 
 /* Subscribe / unsubscribe the calling thread's OWN mailbox to a magic so

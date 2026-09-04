@@ -18,6 +18,7 @@
 #include "mm/pmm.h"
 #include "lib/string.h"
 #include "sync/spinlock.h"
+#include "multiboot.h"   /* reserve GRUB module images in the PMM */
 #include "kernel/log.h"
 
 /* ------------------------------------------------------------------ */
@@ -417,6 +418,23 @@ void arch_paging_init(u32 total_memory, u32 reserved_end)
     pmm_init(total_memory, __pmm_bitmap_start);
     LOG("Paging: paging-structures pool 0x%x-0x%x (%u slots)",
          VMM_PDE_ALLOC_BASE, VMM_PDE_ALLOC_END, PAGING_POOL_SLOTS);
+
+    /* Reserve the GRUB multiboot module images.  GRUB loads them right
+     * after the kernel image (~20 MB+, above the PMM bitmap), so pmm_init()
+     * would otherwise treat them as free pages and hand them out (zeroing
+     * them) to the first boot allocations — a large module (e.g. the ~1 MB
+     * process_test.elf) then reads back as zeros at load time.  Keep them
+     * reserved until proc_load_from_elf() copies each one into a process. */
+    {
+        int n = mboot_module_count();
+        for (int i = 0; i < n; i++) {
+            u8* s = 0;
+            u8* e = 0;
+            if (mboot_module_get(i, &s, &e) == 0 && e > s)
+                pmm_mark_used((u32)(uptr)s, (u32)(uptr)(e - s));
+        }
+    }
+
     LOG("Paging: bootstrap complete, %u pages free", pmm_get_free_page_count());
 }
 
