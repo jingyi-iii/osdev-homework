@@ -108,7 +108,8 @@ static void term_scroll_up(void)
         for (size_t c = 0; c < VGA_WIDTH; c++)
             VGA_BUF[(r - 1) * VGA_WIDTH + c] = VGA_BUF[r * VGA_WIDTH + c];
     for (size_t c = 0; c < VGA_WIDTH; c++)
-        VGA_BUF[(VGA_HEIGHT - 1) * VGA_WIDTH + c] = (u16)TERM_COLOR << 8;
+        VGA_BUF[(VGA_HEIGHT - 1) * VGA_WIDTH + c] =
+            (u16)TERM_COLOR << 8;
 
     term_row = VGA_HEIGHT - 1;
     term_col = 0;
@@ -247,6 +248,106 @@ static void vga_write_regs(u16 addr_port, u16 data_port,
     }
 }
 
+/* ---- 8x16 text font save/restore --------------------------------
+ * VGA text glyphs come from the 8x16 font stored in VRAM plane 2 at
+ * 0xA0000.  BIOS/GRUB load it once at boot.  Mode 0x13 is CHAIN4: its
+ * linear writes to 0xA0000 are distributed byte-by-byte across all four
+ * planes, so running a graphics demo WIPES plane 2 and with it the text
+ * font.  Register-only mode switches (no BIOS int 10h) never reload the
+ * font — after the first 0x13 round-trip text renders as garbage/blank.
+ *
+ * Fix: snapshot plane 2 once (before any graphics), then restore it
+ * every time we come back to text mode. */
+#define FONT_BYTES  (256 * 32)  /* 8x16 font, 256 glyphs, 32 bytes each
+                                 * (QEMU stores text fonts at a 32-byte
+                                 * per-glyph stride; 16 bytes used) */
+
+static u8 saved_font[FONT_BYTES];
+static int font_saved = 0;
+
+/* Read the 8x16 font out of plane 2 into saved_font[].  Call while the
+ * VGA is in text mode and the font is still intact (before any 0x13). */
+static void font_save(void)
+{
+    if (font_saved)
+        return;
+
+    iowrite8(VGA_SEQ_ADDR, 0x02);
+    iowrite8(VGA_SEQ_DATA, 0x0F);        /* map mask: all planes */
+    iowrite8(VGA_GC_ADDR, 0x05);
+    iowrite8(VGA_GC_DATA, 0x00);         /* disable odd/even */
+    iowrite8(VGA_GC_ADDR, 0x06);
+    iowrite8(VGA_GC_DATA, 0x04);         /* memory map 0xA0000 */
+    iowrite8(VGA_GC_ADDR, 0x04);
+    iowrite8(VGA_GC_DATA, 0x02);         /* read from plane 2 */
+
+    const volatile u8* fb = (const volatile u8*)0xA0000;
+    for (u32 i = 0; i < FONT_BYTES; i++)
+        saved_font[i] = fb[i];
+
+    /* Put the VGA back to text-mode defaults. */
+    iowrite8(VGA_GC_ADDR, 0x04);
+    iowrite8(VGA_GC_DATA, 0x00);
+    iowrite8(VGA_GC_ADDR, 0x05);
+    iowrite8(VGA_GC_DATA, 0x10);         /* odd/even text mode */
+    iowrite8(VGA_GC_ADDR, 0x06);
+    iowrite8(VGA_GC_DATA, 0x0E);         /* memory map 0xB8000 */
+    iowrite8(VGA_SEQ_ADDR, 0x02);
+    iowrite8(VGA_SEQ_DATA, 0x0F);
+
+    font_saved = 1;
+}
+
+/* Reload saved_font[] into plane 2.  Call after the text-mode register
+ * dump (mode 0x03) has been programmed; the caller holds g_vga_lock. */
+static void font_load(void)
+{
+    if (!font_saved)
+        return;
+
+    /* Video off (AC index write with bit 5 clear) during the upload. */
+    ioread8(VGA_STAT_READ);              /* reset AC index flip-flop */
+    iowrite8(VGA_AC_ADDR, 0x00);
+
+    /* Point writes at plane 2, map 0xA0000, write mode 0.
+     *
+     * CRITICAL: sr[4] (sequencer memory mode) MUST have the SEQ_MODE bit
+     * set (0x06) for the upload.  With the text-mode value 0x02 QEMU (and
+     * real VGA text mapping) applies an odd/even filter to CPU writes:
+     * odd window addresses would have their plane-2 mask cleared and be
+     * dropped, leaving every other scanline of each glyph corrupted. */
+    iowrite8(VGA_SEQ_ADDR, 0x02);
+    iowrite8(VGA_SEQ_DATA, 0x04);        /* map mask: plane 2 only */
+    iowrite8(VGA_SEQ_ADDR, 0x04);
+    iowrite8(VGA_SEQ_DATA, 0x06);        /* EXT_MEM | SEQ_MODE */
+    iowrite8(VGA_GC_ADDR, 0x05);
+    iowrite8(VGA_GC_DATA, 0x00);
+    iowrite8(VGA_GC_ADDR, 0x06);
+    iowrite8(VGA_GC_DATA, 0x04);
+    iowrite8(VGA_GC_ADDR, 0x04);
+    iowrite8(VGA_GC_DATA, 0x00);
+
+    volatile u8* fb = (volatile u8*)0xA0000;
+    for (u32 i = 0; i < FONT_BYTES; i++)
+        fb[i] = saved_font[i];
+
+    /* Restore text-mode GC/seq state. */
+    iowrite8(VGA_GC_ADDR, 0x04);
+    iowrite8(VGA_GC_DATA, 0x00);
+    iowrite8(VGA_GC_ADDR, 0x05);
+    iowrite8(VGA_GC_DATA, 0x10);
+    iowrite8(VGA_GC_ADDR, 0x06);
+    iowrite8(VGA_GC_DATA, 0x0E);
+    iowrite8(VGA_SEQ_ADDR, 0x04);
+    iowrite8(VGA_SEQ_DATA, 0x02);
+    iowrite8(VGA_SEQ_ADDR, 0x02);
+    iowrite8(VGA_SEQ_DATA, 0x0F);
+
+    /* Video back on. */
+    ioread8(VGA_STAT_READ);
+    iowrite8(VGA_AC_ADDR, 0x20);
+}
+
 /* Switch to VGA graphics mode 0x13 (320x200, 256 colours, linear frame
  * buffer at 0xA0000).  Clears the frame buffer to colour 0. */
 static void gfx_enter_mode13(void)
@@ -356,6 +457,14 @@ static void gfx_enter_text(void)
         iowrite8(VGA_DAC_DATA, text_palette[i][2]);
     }
 
+    /* Mode 0x13 chain4 wiped the text font out of plane 2 — put it back.
+     * This MUST happen before term_clear_screen() below: the QEMU text
+     * renderer only redraws cells whose content changed, so any cell
+     * written while the font is still wiped would stay garbled on screen
+     * (and never be repainted).  Reload first, then blank + repaint
+     * everything with the restored glyphs. */
+    font_load();
+
     /* Hardware cursor shape (visible block) + blank the text buffer. */
     iowrite8(VGA_CRT_ADDR, 0x0A);
     iowrite8(VGA_CRT_DATA, 0x00);
@@ -438,6 +547,10 @@ void _start(void)
 
     /* Continue on the screen where the kernel's kterm left off. */
     term_sync_cursor_from_hw();
+
+    /* Snapshot the 8x16 text font while it is still intact — the first
+     * mode-0x13 session will destroy it (chain4 writes hit plane 2). */
+    font_save();
 
     for (;;) {
         cfg.cmd = U_PORTAL_CTRL_WAIT;
