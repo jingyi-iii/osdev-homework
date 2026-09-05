@@ -82,6 +82,11 @@ void    thread_exit         (i32 tid);
 void    thread_yield        (void);
 void    thread_block        (i32 tid);
 void    thread_unblock      (i32 tid);
+/* Wake @tid WITHOUT taking schedule_lock — caller must already hold it
+ * (interrupts disabled).  Used by wakers that are themselves walking the
+ * thread list under schedule_lock (mailbox broadcast) where the normal
+ * thread_unblock would deadlock on the re-acquisition. */
+void    thread_unblock_locked(i32 tid);
 int     thread_get_tid      (void);
 void*   thread_get_param    (void);
 tcb*    thread_get_by_tid   (i32 tid);

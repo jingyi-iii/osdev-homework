@@ -44,6 +44,10 @@ RTC_ELF  := $(OUT_DIR)rtc_server.elf
 HELLO_SRCS := user/hello.c user/userlib.c
 HELLO_ELF  := $(OUT_DIR)hello.elf
 
+# ipc_bench.elf — IPC ping-pong latency benchmark (TSC timing; CAP_IPC only).
+IPCBENCH_SRCS := user/ipc_bench.c user/userlib.c
+IPCBENCH_ELF  := $(OUT_DIR)ipc_bench.elf
+
 # process_test.elf — keyboard-driven text-mode test menu.  The ported demo
 # suites run as threads of this process; kernel/lib/{rbtree,string,spinlock}
 # are linked in so the suites keep their kernel-era code.  userlib provides
@@ -92,7 +96,7 @@ MEMORY_MAP := $(OUT_DIR)memory_map
 # The user ELFs are shipped as separate GRUB multiboot modules (see
 # config/grub.cfg), NOT embedded into the kernel image.  The ISO must
 # depend on them and copy them next to the kernel binary.
-$(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) $(NS_ELF) $(PORTAL_ELF) $(TERMINAL_ELF) $(KB_ELF) $(LOG_ELF) $(RTC_ELF) $(HELLO_ELF) $(PROCESS_TEST_ELF) | $(OUT_DIR) $(GRUB_DIR)
+$(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) $(NS_ELF) $(PORTAL_ELF) $(TERMINAL_ELF) $(KB_ELF) $(LOG_ELF) $(RTC_ELF) $(HELLO_ELF) $(PROCESS_TEST_ELF) $(IPCBENCH_ELF) | $(OUT_DIR) $(GRUB_DIR)
 	cp $(TARGET_BIN) $(OUT_DIR)iso/boot/myos.bin
 	cp $(NS_ELF) $(OUT_DIR)iso/boot/
 	cp $(PORTAL_ELF) $(OUT_DIR)iso/boot/
@@ -101,6 +105,7 @@ $(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) $(NS_ELF) $(PORTAL_ELF) $(TERMINAL_ELF)
 	cp $(LOG_ELF) $(OUT_DIR)iso/boot/
 	cp $(RTC_ELF) $(OUT_DIR)iso/boot/
 	cp $(HELLO_ELF) $(OUT_DIR)iso/boot/
+	cp $(IPCBENCH_ELF) $(OUT_DIR)iso/boot/
 	cp $(PROCESS_TEST_ELF) $(OUT_DIR)iso/boot/
 	cp $(GRUBFILE) $(GRUB_DIR)
 	grub-mkrescue -o $(TARGET_ISO) $(OUT_DIR)iso
@@ -152,6 +157,9 @@ $(RTC_ELF): $(RTC_SRCS) $(USER_LD) | $(OUT_DIR)
 
 $(HELLO_ELF): $(HELLO_SRCS) $(USER_LD) | $(OUT_DIR)
 	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(HELLO_SRCS) -o $@ -lgcc
+
+$(IPCBENCH_ELF): $(IPCBENCH_SRCS) $(USER_LD) | $(OUT_DIR)
+	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(IPCBENCH_SRCS) -o $@ -lgcc
 
 $(PROCESS_TEST_ELF): $(PROCESS_TEST_SRCS) $(USER_LD) | $(OUT_DIR)
 	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(PROCESS_TEST_SRCS) -o $@ -lgcc

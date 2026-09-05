@@ -367,12 +367,13 @@ static void thread_block_internal(i32 tid)
     spinlock_unlock_irqrestore(schedule_lock, eflags);
 }
 
-static void thread_unblock_internal(i32 tid)
+/* Wake @tid without taking schedule_lock — caller MUST already hold it
+ * (see thread_unblock_internal).  Safe from ISR and from wakers that are
+ * themselves walking the thread list under schedule_lock. */
+void thread_unblock_locked(i32 tid)
 {
     if (!thread_run)
         return;
-
-    u32 eflags = spinlock_lock_irqsave(schedule_lock);
 
     list_for_each(node, &thread_head) {
         tcb* t = list_entry(node, tcb, this_node);
@@ -385,7 +386,12 @@ static void thread_unblock_internal(i32 tid)
         spinlock_unlock(t->sp_lock);
         break;
     }
+}
 
+static void thread_unblock_internal(i32 tid)
+{
+    u32 eflags = spinlock_lock_irqsave(schedule_lock);
+    thread_unblock_locked(tid);
     spinlock_unlock_irqrestore(schedule_lock, eflags);
 }
 

@@ -5,6 +5,7 @@
 #include "lib/types.h"
 #include "lib/list.h"
 #include "sync/spinlock.h"
+#include "sync/wait_queue.h"
 #include "kernel/process.h"
 
 #define MAIL_ANY_TID            (-0xcd)   /* receiver_tid wildcard = broadcast
@@ -50,6 +51,11 @@ typedef struct mailbox {
     spinlock* sp_lock;
     list_node mails;
     list_node handlers;
+    /* Threads parked in MAILBOX_CTRL_LISTEN_BLOCK.  waiters.sp_lock SHARES
+     * mb->sp_lock (set in alloc_mailbox, NOT wait_queue_init) so the
+     * empty-check + enqueue in LISTEN_BLOCK and a sender's queue + wake
+     * are atomic under ONE lock — no lost wakeup. */
+    wait_queue waiters;
 } mailbox;
 
 enum mailbox_ctrl_cmd {
@@ -63,6 +69,7 @@ enum mailbox_ctrl_cmd {
     MAILBOX_CTRL_RELEASE,
     MAILBOX_CTRL_SUBSCRIBE_MAIL,
     MAILBOX_CTRL_UNSUBSCRIBE_MAIL,
+    MAILBOX_CTRL_LISTEN_BLOCK,  /* = 10: tail-block until a mail is queued */
 };
 
 typedef struct mailbox_ctrl_config {

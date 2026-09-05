@@ -115,6 +115,12 @@ mailbox* alloc_mailbox(int owner_pid, int owner_tid)
     list_init(&mb->mails);
     list_init(&mb->handlers);
 
+    /* waiters SHARES mb->sp_lock (NOT wait_queue_init — that would allocate
+     * a second lock) so LISTEN_BLOCK's empty-check + enqueue and a sender's
+     * queue + wake are atomic under one lock: no lost wakeup. */
+    list_init(&mb->waiters.waiters);
+    mb->waiters.sp_lock = mb->sp_lock;
+
     return mb;
 }
 
@@ -184,6 +190,14 @@ int send_mail(mailbox* mb, mail* m)
         }
         list_add(&meta->this_node, &mb->mails);
         spinlock_unlock_irqrestore(mb->sp_lock, eflags);
+
+        /* A thread may be parked in MAILBOX_CTRL_LISTEN_BLOCK on this
+         * mailbox — wake it so it dequeues promptly instead of on the next
+         * scheduler tick.  wake_one takes mb->sp_lock again (waiters shares
+         * it), so it MUST run after the unlock above.  Safe from ISR
+         * context: thread_unblock only marks the thread runnable; the
+         * actual switch happens at a later gate exit. */
+        wait_queue_wake_one(&mb->waiters);
     }
 
     return 0;
@@ -316,6 +330,14 @@ int send(mail* m)
                     if (clone_meta)
                         list_add(&clone_meta->this_node, &t->mailbox->mails);
                     spinlock_unlock_irqrestore(t->mailbox->sp_lock, eflags);
+
+                    /* Wake a parked LISTEN_BLOCK waiter (e.g. a game thread
+                     * waiting for a key broadcast).  We hold schedule_lock
+                     * while walking the thread list, so use the LOCKED wake
+                     * variant — wait_queue_wake_one -> thread_unblock would
+                     * re-take schedule_lock and deadlock.  No-op if nobody
+                     * is parked on this mailbox. */
+                    wait_queue_wake_one_locked(&t->mailbox->waiters);
                 }
             }
         }
@@ -432,6 +454,59 @@ static int mailbox_exec(mailbox_ctrl_config* config)
         }
         config->m = try_get_mail(config->mb);
         config->ret = (config->m != 0) ? 0 : -1;
+        break;
+    case MAILBOX_CTRL_LISTEN_BLOCK:
+        /*
+         * Tail-blocking variant of LISTEN — the kernel's ONE supported
+         * "block inside a syscall" shape.  This kernel defers context
+         * switches to the gate exit (arch_task_restore_context only
+         * re-points curr_task_ctx), so a thread parked here NEVER resumes
+         * in the middle of this gate: it resumes in user mode right after
+         * the syscall.  Therefore this call does NOT hand back the mail; it
+         * only guarantees one is queued — the caller must follow up with a
+         * non-blocking LISTEN to dequeue (portal's WAIT_REPLY -> GET_RESULT
+         * two-phase pattern).  Spurious wakes (woken before the mail was
+         * dequeuable) are absorbed by the user-side retry loop.
+         *
+         * The park is the LAST blocking action of this case — deliberately
+         * NO re-check loop: after wait_queue_sleep_locked() returns only
+         * gate teardown runs before the deferred switch fires.
+         */
+        if (!config->mb) {
+            tcb* t = thread_get_by_tid(thread_get_tid());
+            config->mb = t ? t->mailbox : 0;
+        }
+        if (!config->mb) {
+            config->ret = E_INVAL;
+            break;
+        }
+
+        /* Set the result BEFORE the block and cache everything we still
+         * need into locals.  The tail-block defers the real context switch
+         * to the gate exit, but thread_block() already switched address
+         * space (CR3) to the next thread — which may be in ANOTHER process.
+         * From that point on the syscall config buffer (a kmalloc'd kbuf,
+         * not readable under another process's CR3) is OFF LIMITS: do NOT
+         * re-read config->mb / config->ret after wait_queue_sleep_locked().
+         * Only the cached mailbox (< 16MB identity, shared) and the static
+         * spinlock array are safe to touch afterwards. */
+        config->ret = 0;
+        {
+            mailbox* mb = config->mb;
+            spinlock* sp = mb->sp_lock;
+            u32 eflags = spinlock_lock_irqsave(sp);
+            if (list_empty(&mb->mails)) {
+                /* No mail: park.  sleep_locked expects the caller to already
+                 * hold wq->sp_lock (== mb->sp_lock) with IF=0; it enqueues
+                 * us, unlocks, thread_block()s (deferred switch), re-locks.
+                 * After it returns we may be running under another process's
+                 * CR3 — release the lock with the CACHED sp only, then exit
+                 * the gate (the thread resumes in user mode after the
+                 * syscall once woken; it never comes back into this case). */
+                wait_queue_sleep_locked(&mb->waiters);
+            }
+            spinlock_unlock_irqrestore(sp, eflags);
+        }
         break;
     case MAILBOX_CTRL_REGISTER_HANDLER:
         config->ret = register_handler(config->mb, config->handler);

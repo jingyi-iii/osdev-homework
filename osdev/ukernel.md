@@ -155,7 +155,10 @@ typedef enum {
   维护每个 mailbox 的 `subscriptions[16]`；广播时只投递给订阅了 `m->magic` 的线程（有 handler 直接
   回调 / 无 handler 入队克隆）。`magic == 0` 永不匹配（subscribe 拒绝 0）；引用计数按「已订阅且有
   handler」精确统计，杜绝中途误释放 / double-free。
-- 用户侧 `user_mail_listen()`（`user/userlib.c`）= `LISTEN` + `user_yield()` **忙等轮询**。
+- 用户侧 `user_mail_listen()` / `user_irq_wait()`（`user/userlib.c`）= **两段式阻塞收信**（2026-09 从忙等
+  轮询改为真阻塞）：`MAILBOX_CTRL_LISTEN_BLOCK` 在**内核 tail-block**（deferred switch 到 gate 出口，
+  唤醒后直接回用户态）→ 再发一个非阻塞 `LISTEN` 取信（portal `WAIT_REPLY → GET_RESULT` 同款模式）；
+  唤醒后用户态自动重试吸收 spurious wake。
 - 用户侧封装（2026-09）：`user_mail_alloc/send`（定向或 `USER_MAIL_ANY_TID` 广播）、`user_mail_subscribe/
   unsubscribe`（作用于调用线程自己的 mailbox）、`user_mail_listen/release`；`user_mail` 视图可读写
   `magic`/`data`，收发方无需内核符号。
@@ -250,6 +253,10 @@ typedef enum {
 10. **QEMU monitor `xp` 读 0xB8000 不可靠**：一旦有代码碰过 VGA GC/SEQ 寄存器，`xp` 读文本缓冲会
     返回缺字/行重叠/NUL 带等假象（看起来像缓冲损坏）。真实缓冲要用**内核侧读回打到 COM1** 验证
     （曾因此误判菜单被写坏数小时）；截屏（实际渲染输出）可靠。
+11. **thread_api_test（菜单 1）在 ipc_bench 也加载时 #GP（预先存在，2026-09 定位，与 LISTEN_BLOCK 无关）**：
+    thread_api_test 的线程 create/block/unblock/exit 风暴 + ipc_bench 结尾 `for(;;) user_yield()` 空闲线程
+    触发潜在调度竞态（某线程内核栈保存帧被毁，`iret` #GP）。把全部 LISTEN_BLOCK 改动还原后仍复现；
+    **在 `init.c` 里禁用 ipc_bench 加载即消失**。根因未深挖。教训：在这套代码上做二分/崩溃测试，先禁 ipc_bench。
 
 ### 2.8 地址空间访问范围审计（2026-09 · 更新于低 16MB 隔离后）
 
@@ -306,10 +313,16 @@ typedef enum {
 
 **目标**：让 server 能把类型化事件推给 N 个订阅者（键盘 → 游戏）。
 
-**已完成（2026-09）——事件推送全链路（除游戏 consumer）**：
+**已完成（2026-09）——事件推送全链路（除游戏 consumer）；阻塞 listen 已落地**：
 - 内核（`kernel/ipc/mailbox.c`）：订阅注册表 + 广播按 magic 过滤；`magic == 0` 永不匹配；引用计数精确统计；
   SUBSCRIBE/UNSUBSCRIBE 支持 `mb == NULL`（自己的 mailbox）
-- userlib：`user_mail_alloc/send/subscribe/unsubscribe/listen/release` + `user_mail` 视图 + `USER_MAIL_ANY_TID`
+- ✅ **阻塞 listen（2026-09）**：mailbox 增加共享 `mb->sp_lock` 的 `waiters`；新命令 `MAILBOX_CTRL_LISTEN_BLOCK`
+  （=10）在 `mailbox_exec` 尾阻塞（`wait_queue_sleep_locked`）；`send_mail` 入队 / 广播 clone 后唤醒投递
+  （普通 `wake_one`，及持 `schedule_lock` 时的 `wake_one_locked` + 新增 `thread_unblock_locked` 无锁变体）。
+  benchmark mailbox 往返 ~178ms → ~0.9ms（见 §五.2）
+- userlib：`user_mail_alloc/send/subscribe/unsubscribe/listen/release` + `user_mail` 视图 + `USER_MAIL_ANY_TID`；
+  `user_mail_listen`/`user_irq_wait` 两段式（`LISTEN_BLOCK` → `LISTEN`，两段之间必须把回写的 `cfg.mb` 清零——
+  ring3 gate 拒非空 mb）
 - 事件源（`user/server/input/kb_server.c`）：IRQ1 scancode → `MSG_KEY_EVENT` 广播，可打印键兼写 COM1
 - consumer 样板（`user/server/display/terminal_server.c`）：开用户线程 ns_lookup("kb") 拿 magic →
   `user_mail_subscribe` → `user_mail_listen` 过滤回显到屏幕；共享头 `user/server/server_msgs.h`（`MSG_KEY_EVENT` + `key_event`）
@@ -318,9 +331,8 @@ typedef enum {
 
 | 子项 | 内容 | 位置 |
 |------|------|------|
-| 1. 游戏 consumer | 游戏 `user_mail_subscribe(MSG_KEY_EVENT)` + `user_mail_listen` 轮询（随 P1 demo 一起做） | `user/demo/*` |
-| 2.（可选）阻塞 listen | 用 wait_queue 把 `user_mail_listen` 从忙等改成真阻塞 | `kernel/ipc/mailbox.c` |
-| 3.（可选）扩展键 | kb 处理 E0 前缀方向键 / shift 状态 | `user/server/input/kb_server.c` |
+| 1. 游戏 consumer | 游戏 `user_mail_subscribe(MSG_KEY_EVENT)` + `user_mail_listen`（阻塞收信，随 P1 demo 一起做） | `user/demo/*` |
+| 2.（可选）扩展键 | kb 处理 E0 前缀方向键 / shift 状态 | `user/server/input/kb_server.c` |
 
 > 不做：`mailbox_call`（portal 已覆盖同步 RPC）。
 
@@ -383,8 +395,24 @@ typedef enum {
 - **共享内存优先**：帧缓冲一次 `shm_share`，不要每次画点发 IPC。
 - **批量处理**：能合并成一次 IPC 的操作合并。
 
-### 2. 先 benchmark，再优化
-写一个 IPC ping-pong 延迟测试（portal 或 mailbox 往返），确认延迟在**百微秒级以内**再继续。
+### 2. 先 benchmark，再优化（2026-09 已做，结果如下）
+
+`user/ipc_bench.c`（ipc_bench.elf，最后加载，`CAP_IPC`）用 ring-3 `rdtsc`（CR4.TSD 未置，可读）计时，
+先经 rtc server 的 `SLEEP_MS`（PIT 计数）校准 TSC 频率，再测两种往返：
+
+| 路径 | 平均往返 | 结论 |
+|------|---------|------|
+| **portal**（跨进程 RTC GET_TIME RPC）| ~144 µs | ✅ 达标（semaphore 直唤醒，不依赖 tick）|
+| **mailbox**（同进程双线程定向 mail，阻塞 listen 后）| ~0.9 ms | ✅ 亚毫秒（2026-09 `MAILBOX_CTRL_LISTEN_BLOCK` 落地；见下）|
+
+**含义**：mailbox 原先 ~178ms 的瓶颈 = 用户侧 `LISTEN + user_yield()` 忙等轮询（唤醒要等 18.2Hz 的
+下个 PIT tick，~3 tick/轮），不是内核 mailbox 本身。2026-09 落地内核 tail-block 的
+`MAILBOX_CTRL_LISTEN_BLOCK`（mailbox 加 `waiters`，投递直接唤醒）后，干净环境下 mailbox 往返降到
+**~0.9ms**。
+
+⚠️ **测 mailbox 前先在 `init.c` 禁用 hello.elf**：hello 在 boot 时发 2000ms `RTC_CMD_SLEEP_MS`，
+rtc_server 会 **PIT 忙等** 2 秒，期间调度器只在每 5 个 PIT tick（~275ms）抢占一次——mailbox bench 读数
+会被拉到 ~235ms。那是 rtc 忙等的并发干扰，不是 mailbox 路径本身（一个 tick 内整轮 ping-pong 瞬时完成）。
 
 ### 3. 逐步迁移，保持可运行
 每一步完成都应有一个可启动、可演示的版本：
@@ -399,6 +427,10 @@ typedef enum {
 - ✅ 2026-09：`SYSCALL_HEAP`（共享 user-heap malloc/free）+ `SYSCALL_MMIO`（`kernel/mmio.c`）—— terminal VGA 经 mmio 映射到高 VA（0xE0000000/0xE0010000），低地址回退移除
 - ✅ 2026-09：低 16MB 改 `PTE_KERNEL` —— ring3 不再可达内核 text/堆/页表（P3 主体落地，`copy_*_user` 语义干净）
 - ✅ 2026-09：清理死代码 —— 删除 `include/kernel/driver.h` / `device.h`（platform_bus 残留）
+- ✅ 2026-09：IPC ping-pong benchmark（ipc_bench.elf，TSC 计时，日志可读化：千位分隔/单位/对比）——
+  portal RPC ~144µs 达标；mailbox 往返 ~178ms → 阻塞 listen 后 ~0.9ms（见下条）
+- ✅ 2026-09：mailbox **阻塞 listen**（`MAILBOX_CTRL_LISTEN_BLOCK` + 共享 sp_lock 的 waiters + 投递唤醒 +
+  `wake_one_locked`/`thread_unblock_locked`）—— mailbox 往返 ~178ms → ~0.9ms（禁用 hello 后实测）
 - P3 剩余（可选）：用户主线程栈高区化（`split_4mb_pde` 已修，见 §3 P3）
 - P0 后：键盘事件能广播、游戏能收到（游戏 consumer 随 P1 demo）
 - P1 后：airplane/snake 作为独立进程在共享帧缓冲上运行

@@ -297,6 +297,7 @@ enum {
     U_MAILBOX_CTRL_RELEASE_MAIL     = 5,  /* free a received mail           */
     U_MAILBOX_CTRL_SUBSCRIBE_MAIL   = 8,  /* subscribe own mailbox to magic */
     U_MAILBOX_CTRL_UNSUBSCRIBE_MAIL = 9,  /* unsubscribe own mailbox        */
+    U_MAILBOX_CTRL_LISTEN_BLOCK     = 10, /* tail-block until a mail queued */
 };
 
 /* Broadcast receiver wildcard — MUST mirror MAIL_ANY_TID

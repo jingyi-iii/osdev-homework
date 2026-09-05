@@ -344,17 +344,28 @@ int user_irq_unmask(void* handle)
 
 void* user_mail_listen(void)
 {
+    /* Two-phase receive (portal's WAIT_REPLY -> GET_RESULT pattern):
+     *   1. LISTEN_BLOCK tail-blocks in the kernel (the switch is deferred
+     *      to the syscall gate exit) until a mail is queued on our mailbox
+     *      — no busy-poll, no scheduler-tick waiting.  It never returns the
+     *      mail, only "one is queued".
+     *   2. plain LISTEN dequeues it (non-blocking; must succeed unless the
+     *      wake was spurious, in which case we loop and re-park). */
     for (;;) {
         user_mailbox_ctrl cfg = {0};
 
-        cfg.cmd = U_MAILBOX_CTRL_LISTEN;   /* mb == NULL: own mailbox */
+        cfg.cmd = U_MAILBOX_CTRL_LISTEN_BLOCK;   /* mb == NULL: own mailbox */
+        user_syscall(SYSCALL_MAILBOX, &cfg, sizeof(cfg));
+
+        /* LISTEN_BLOCK resolves "own mailbox" and echoes the kernel mailbox
+         * pointer back through cfg.mb — ring-3 must pass NULL (the gate
+         * rejects a non-NULL mb), so clear it before the LISTEN phase. */
+        cfg.cmd = U_MAILBOX_CTRL_LISTEN;
+        cfg.mb  = 0;                              /* mb == NULL: own mailbox */
         user_syscall(SYSCALL_MAILBOX, &cfg, sizeof(cfg));
 
         if (cfg.m)
             return cfg.m;
-
-        /* No mail yet: yield so IRQ handlers get a chance to deliver. */
-        user_yield();
     }
 }
 
@@ -413,10 +424,19 @@ int user_mail_unsubscribe(u32 magic)
 
 int user_irq_wait(void)
 {
+    /* Two-phase like user_mail_listen (LISTEN_BLOCK then LISTEN), so we
+     * sleep in the kernel and are woken directly by the IRQ mail delivery
+     * instead of busy-polling user_yield() on the scheduler tick. */
     for (;;) {
         user_mailbox_ctrl cfg = {0};
 
-        cfg.cmd = U_MAILBOX_CTRL_LISTEN;   /* mb == NULL: own mailbox */
+        cfg.cmd = U_MAILBOX_CTRL_LISTEN_BLOCK;   /* mb == NULL: own mailbox */
+        user_syscall(SYSCALL_MAILBOX, &cfg, sizeof(cfg));
+
+        /* Same re-NULL of cfg.mb as user_mail_listen (LISTEN_BLOCK echoes
+         * the resolved kernel mailbox pointer back; ring-3 must pass NULL). */
+        cfg.cmd = U_MAILBOX_CTRL_LISTEN;
+        cfg.mb  = 0;                              /* mb == NULL: own mailbox */
         user_syscall(SYSCALL_MAILBOX, &cfg, sizeof(cfg));
 
         if (cfg.m) {
@@ -428,9 +448,6 @@ int user_irq_wait(void)
             }
             user_mail_release(cfg.m);
         }
-
-        /* No mail yet: yield so IRQ handlers get a chance to deliver. */
-        user_yield();
     }
 }
 

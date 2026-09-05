@@ -62,6 +62,33 @@ void wait_queue_wake_one(wait_queue *wq)
     spinlock_unlock_irqrestore(wq->sp_lock, eflags);
 }
 
+void wait_queue_wake_one_locked(wait_queue *wq)
+{
+    /* Caller holds schedule_lock (IF=0), so a plain spinlock suffices —
+     * same reasoning as tcb_detach_wait(). */
+    spinlock_lock(wq->sp_lock);
+    if (list_empty(&wq->waiters)) {
+        spinlock_unlock(wq->sp_lock);
+        return;
+    }
+
+    list_for_each_safe(pos, n, &wq->waiters) {
+        list_node* node = pos;
+        tcb* t = list_entry(node, tcb, wait_node);
+
+        if (t->waiting_on != wq) {
+            continue;
+        }
+
+        t->waiting_on = 0;
+        list_del(node);
+        spinlock_unlock(wq->sp_lock);
+        thread_unblock_locked(t->tid);
+        return;
+    }
+    spinlock_unlock(wq->sp_lock);
+}
+
 void wait_queue_wake_by_tid(wait_queue *wq, u32 tid)
 {
     u32 eflags = spinlock_lock_irqsave(wq->sp_lock);

@@ -139,6 +139,18 @@ static void grant_hello_caps(pcb* proc)
     cap_grant(proc, CAP_IPC, &ipc_ok);
 }
 
+/* ipc_bench.elf — IPC ping-pong latency benchmark.  Uses the mailbox gate
+ * (directed mail between its own threads) and portal RPCs to the rtc/log
+ * servers; CAP_IPC covers both gates, no port I/O needed. */
+static void grant_bench_caps(pcb* proc)
+{
+    if (!proc)
+        return;
+
+    int ipc_ok = 1;
+    cap_grant(proc, CAP_IPC, &ipc_ok);
+}
+
 /* Capability grant for a freshly loaded ELF process. */
 typedef void (*caps_grant_fn)(pcb* proc);
 
@@ -247,6 +259,10 @@ void init_thread(void)
      * demo suites as threads; needs CAP_IPC for the console portal). */
     kterm_write("[launcher] running process_test.elf\n");
     load_user_elf_by_name("process_test.elf", grant_demo_caps);
+
+    /* ipc_bench.elf — IPC ping-pong latency benchmark (logs to COM1). */
+    kterm_write("[launcher] running ipc_bench.elf\n");
+    load_user_elf_by_name("ipc_bench.elf", grant_bench_caps);
 
     proc_exit(proc_get_pid());
 }
