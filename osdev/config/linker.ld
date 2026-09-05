@@ -76,6 +76,14 @@ SECTIONS
 	__kernel_end = .;
 }
 
+SECTIONS
+{
+	. = 0xC0000000;
+	__user_heap_start = .;
+	. = . + 0x1000000;
+	__user_heap_end = .;
+}
+
 PHDRS
 {
     text   PT_LOAD FLAGS(5);   /* 5 (RX) */

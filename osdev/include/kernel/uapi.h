@@ -17,10 +17,12 @@
 #include "lib/types.h"
 
 #define SYSCALL_PROC_THREAD 0   /* process/thread control (kernel/process.c) */
-#define SYSCALL_IO          1   /* port I/O (kernel/io.c)                    */
-#define SYSCALL_IRQ         2   /* IRQ request/release (kernel/irq.c)        */
-#define SYSCALL_MAILBOX     3   /* mailbox IPC (kernel/ipc/mailbox.c)        */
-#define SYSCALL_PORTAL      4   /* portal RPC (kernel/ipc/portal.c)          */
+#define SYSCALL_IRQ         1   /* IRQ request/release (kernel/irq.c)        */
+#define SYSCALL_MAILBOX     2   /* mailbox IPC (kernel/ipc/mailbox.c)        */
+#define SYSCALL_PORTAL      3   /* portal RPC (kernel/ipc/portal.c)          */
+#define SYSCALL_HEAP        4   /* user-heap malloc/free (kernel/mm/heap.c)  */
+#define SYSCALL_IO          5   /* port I/O (kernel/io.c)                    */
+#define SYSCALL_MMIO        6   /* MMIO read/write (kernel/mmio.c)           */
 
 /*
  * PORTAL_ID_NAMESPACE — the ONE fixed well-known portal id (bootstrap).

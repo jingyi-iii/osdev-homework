@@ -6,7 +6,8 @@
  *      arrays (page-aligned, part of the kernel image).
  *   2. Identity-maps the first N megabytes so the kernel can keep
  *      running after paging is enabled.
- *   3. Also maps the kernel at KERNEL_BASE_VADDR (higher-half).
+ *   3. Reserves the high user area ([0xC0000000,0xC1000000) user heap,
+ *      0xC1000000+ user ELF) — mapped per-process on demand, NOT here.
  *   4. Initialises the PMM with the remaining free physical memory.
  *   5. Calls arch_set_kernel_pdir() to register the master PD.
  *
@@ -14,7 +15,7 @@
  * arch_paging_init() exactly once before any process creation.
  */
 
-#include "mm/paging.h"
+#include "paging.h"
 #include "mm/pmm.h"
 #include "lib/string.h"
 #include "sync/spinlock.h"
@@ -202,6 +203,16 @@ static inline int split_4mb_pde(pde* p, u32 user_accessible)
         return E_NOMEM;
     }
 
+    /*
+     * x86: a PDE with U/S=0 makes every page in its table supervisor-only,
+     * so to host a USER page in a region previously covered by a kernel
+     * 4MB page, the PDE itself must become user (U/S=1).  That only opens
+     * the TABLE to ring-3 — each page's permission still comes from its
+     * own PTE's U/S bit.  Preserve the ORIGINAL page permission in the
+     * sibling PTEs (kernel pages stay supervisor); arch_map_4kb() then
+     * sets just the one target PTE to the requested flags.
+     */
+    int orig_user = p->user;
     if (user_accessible && p->user == 0)
         p->user = 1;
 
@@ -209,7 +220,7 @@ static inline int split_4mb_pde(pde* p, u32 user_accessible)
         ptl[i].raw         = 0;
         ptl[i].present     = p->present;
         ptl[i].rw          = p->rw;
-        ptl[i].user        = p->user;
+        ptl[i].user        = orig_user;
         ptl[i].pwt         = p->pwt;
         ptl[i].pcd         = p->pcd;
         ptl[i].global      = p->global;
@@ -382,18 +393,26 @@ void arch_paging_init(u32 total_memory, u32 reserved_end)
          total_memory >> 20, (u32)__pmm_bitmap_start);
 
     /* Step 1: Build the initial page directory.
-     * Use PTE_USER_PAGE so that user-mode (ring-3) threads can
-     * execute kernel code and access kernel data within the same
-     * address space.  This is acceptable for a hobby / testing OS. */
+     * The first 16MB are identity-mapped SUPERVISOR (PTE_KERNEL): kernel
+     * image/heap/page tables live here and ring-3 must not touch them.
+     * User processes clone these PDEs into their own directories, so
+     * kernel code keeps running under a user CR3; ring-3 reaches memory
+     * only through per-process PTE_USER mappings (ELF, user heap, MMIO
+     * windows mapped via the mmio syscall / vmm_map_fixed). */
     memset(pdes, 0, sizeof(pdes));
-    arch_map_4mb_range((void*)pdes, 0x0, 0x1000000, PTE_USER_PAGE);  /* identity map first 16MB */
-    arch_map_4mb((void*)pdes, (void*)0xC0000000, (void*)0x0, PTE_USER_PAGE);
+    arch_map_4mb_range((void*)pdes, 0x0, 0x1000000, PTE_KERNEL);  /* identity map first 16MB */
 
-    for (u32 addr = 0x1000000; addr < total_memory; addr += 0x400000) {
-        if (addr == 0xC0000000)
-            continue;  /* skip the higher-half slot */
+    /* The high user area [0xC0000000, 0xC1000000) is RESERVED as the
+     * user-heap range and 0xC1000000+ as the user-ELF range (see
+     * paging.h / user/user.ld).  NOTHING is mapped here at this point:
+     *   - ELF segments get per-process PTE_USER mappings via vmm_map_fixed();
+     *   - the user heap is backed with real pmm pages AFTER pmm_init()
+     *     below (an arch_map_4mb_range over 0xC0000000..0xC1000000 would
+     *     map VA 3GB -> PA 3GB, where no physical RAM exists — wrong).
+     * The old 0xC0000000 higher-half alias of physical 0 is gone. */
+
+    for (u32 addr = 0x1000000; addr < total_memory; addr += 0x400000)
         arch_map_4mb((void*)pdes, (void*)addr, (void*)addr, PTE_KERNEL);
-    }
 
     /* Step 2: Set PSE (Page Size Extension) in CR4 */
     __asm__ __volatile__(
@@ -432,6 +451,31 @@ void arch_paging_init(u32 total_memory, u32 reserved_end)
             u8* e = 0;
             if (mboot_module_get(i, &s, &e) == 0 && e > s)
                 pmm_mark_used((u32)(uptr)s, (u32)(uptr)(e - s));
+        }
+    }
+
+    /* Map the reserved user-heap region [USER_HEAP_BASE, USER_HEAP_END)
+     * (see paging.h) as shared PTE_USER pages in the MASTER page
+     * directory.  Every user process clones these PDEs, so pointers
+     * returned by the user-heap syscall (SYSCALL_HEAP, kernel/mm/heap.c)
+     * are valid in any process.  No demand paging yet: back all 16 MB
+     * up front.  Must run AFTER pmm_init() (pages come from the PMM). */
+    {
+        const u32 hp_base   = USER_HEAP_BASE;
+        const u32 hp_npages = (USER_HEAP_END - USER_HEAP_BASE) >> 12;
+        u32 hp_pa = pmm_alloc_pages(hp_npages);
+
+        if (!hp_pa) {
+            LOG("user heap: no contiguous physical memory for %u pages",
+                hp_npages);
+        } else {
+            for (u32 i = 0; i < hp_npages; i++)
+                arch_map_4kb((void*)pdes,
+                             (void*)(hp_base + i * PAGE_SIZE),
+                             (void*)(hp_pa + i * PAGE_SIZE),
+                             PTE_USER_PAGE);
+            LOG("user heap: 0x%x-0x%x PTE_USER (phys 0x%x)",
+                hp_base, USER_HEAP_END, hp_pa);
         }
     }
 
@@ -480,12 +524,12 @@ u32 arch_clone_kernel_pde(u32 pde_pa, int user_accessible)
 
     /*
      * Clone ALL PDEs from the kernel master PD, including the low
-     * identity map.  The kernel is linked at 1MB (identity mapped),
-     * so a user process MUST share the kernel's low identity map to
-     * be able to execute any kernel code (the first 16MB are mapped
-     * with PTE_USER_PAGE for exactly this purpose — see
-     * arch_paging_init()).  For this hobby OS, user and kernel
-     * processes therefore live in the same address space.
+     * identity map.  The kernel is linked at 1MB (identity mapped); a
+     * user process MUST share the kernel's low identity map (supervisor,
+     * PTE_KERNEL) so kernel code keeps running under the user CR3 during
+     * syscalls/IRQs.  Ring-3 itself can no longer dereference anything
+     * below 16MB — user code/data/MMIO live in per-process PTE_USER
+     * mappings above (ELF / user heap / mmio windows).
      */
     (void)user_accessible;
     for (u32 i = 0; i < 1024; i++)
@@ -504,8 +548,11 @@ void arch_destroy_address_space(u32 pdir_phys)
     pde* pdes = pdir_of(pdir_phys);
     pde* kern_pdes = pdir_of(kernel_pdir_phys);
 
-    /* only release user pages */
-    for (u32 i = 0; i < 768; i++) {
+    /* Only release user page tables below USER_SPACE_TOP.  The reserved
+     * kernel high-half (>= KERNEL_BASE_VADDR) is not part of any user
+     * directory; user mappings (ELF at 0xC1000000+, future user heap at
+     * 0xC0000000) live in PDE indices below USER_SPACE_TOP >> 22. */
+    for (u32 i = 0; i < (USER_SPACE_TOP >> 22); i++) {
         if (!pdes[i].present)
             continue;
         if (pdes[i].paddr == kern_pdes[i].paddr)

@@ -7,7 +7,7 @@
  */
 
 #include "arch_mem.h"
-#include "mm/paging.h"     /* PAGE_MASK, PAGE_SIZE, PTE_*, PD_INDEX, PT_INDEX, PAGE_OFFSET, USER_SPACE_TOP */
+#include "paging.h"     /* PAGE_MASK, PAGE_SIZE, PTE_*, PD_INDEX, PT_INDEX, PAGE_OFFSET, USER_SPACE_TOP */
 #include "arch_irq.h"      /* arch_get_cr3 */
 
 int arch_validate_user_range(const void* user_addr, size_t n, int for_write)

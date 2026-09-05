@@ -19,7 +19,7 @@
 #include "kernel/errno.h"
 #include "lib/string.h"
 #include "mm/pmm.h"
-#include "mm/paging.h"
+#include "paging.h"
 #include "mm/vmm.h"
 #include "kernel/capability.h"
 #include "kernel/log.h"
@@ -100,7 +100,7 @@ int elf_load(pcb* proc, const void* image, u32 image_size, u32* out_entry)
         }
 
         if (vmm_map_fixed(proc, pa, (void*)page_base,
-                          npages * PAGE_SIZE, PTE_USER_PAGE) != 0) {
+                          npages * PAGE_SIZE, PTE_USER_PAGE, 1) != 0) {
             cap_revoke(proc, CAP_MAP_MEM, &cmem);
             pmm_free_pages(pa, npages);
             return E_LIMIT;

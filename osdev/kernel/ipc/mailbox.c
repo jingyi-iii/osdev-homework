@@ -9,42 +9,92 @@
 #include "kernel/process.h"
 #include "kernel/capability.h"
 
+/*
+ * Registry of every live mail's bookkeeping (mailmeta), keyed by payload.
+ * Lets the kernel map a user-visible mail* back to its kernel-side meta
+ * WITHOUT storing a meta pointer inside the ring-3-writable mail object.
+ *
+ * INVARIANT: every access (alloc_mail's list_add, release_mail's list_del,
+ * get_mailmeta's walk) must run with interrupts DISABLED.  All current
+ * callers do so (syscall gate / schedule_lock / ISR context).  Keep it that
+ * way — do not call these from an interrupt-enabled ring-0 thread.
+ */
+static LIST_HEAD(inflight_mail_header);
+
+static mailmeta* get_mailmeta(mail* m)
+{
+    if (!m)
+        return 0;
+
+    list_for_each(pos, &inflight_mail_header) {
+        mailmeta* meta = list_entry(pos, mailmeta, query_node);
+        if (meta->payload == m)
+            return meta;
+    }
+
+    return 0;
+}
+
 mail* alloc_mail(void)
 {
     static size_t unique_id = 0;
 
-    mail* m = (mail*)kmalloc(sizeof(mail));
+    /* The user-visible part lives in the shared USER heap (SYSCALL_HEAP /
+     * kernel/mm/heap.c malloc) so ring-3 can dereference it directly; the
+     * bookkeeping meta stays in the KERNEL heap (kmalloc) so ring-3 never
+     * touches refcounts / locks / list nodes. */
+    mail* m = (mail*)malloc(sizeof(mail));
     if (!m)
         return 0;
 
-    memset(m, 0, sizeof(mail));
-    m->ref_count = 1;   /* caller initially holds one reference */
-    m->sp_lock = spinlock_alloc();
-    if (!m->sp_lock) {
-        kfree(m);
+    mailmeta* meta = (mailmeta*)kmalloc(sizeof(mailmeta));
+    if (!meta) {
+        free(m);
         return 0;
     }
 
-    m->unique_id = __sync_fetch_and_add(&unique_id, 1);
-    list_init(&m->this_node);
+    memset(m, 0, sizeof(mail));
+    meta->payload = m;         /* queue<->mail link: try_get_mail() returns this */
+    meta->ref_count = 1;       /* caller initially holds one reference */
+    meta->sp_lock = spinlock_alloc();
+    if (!meta->sp_lock) {
+        kfree(meta);
+        free(m);
+        return 0;
+    }
+
+    meta->unique_id = __sync_fetch_and_add(&unique_id, 1);
+    list_init(&meta->this_node);
+    list_init(&meta->query_node);
+
+    list_add(&meta->query_node, &inflight_mail_header);
 
     return m;
 }
 
 static void release_mail(mail* m)
 {
-    if (m) {
-        u32 eflags = spinlock_lock_irqsave(m->sp_lock);
-        m->ref_count--;
-        if (m->ref_count > 0) {
-            spinlock_unlock_irqrestore(m->sp_lock, eflags);
-            return;
-        }
-        spinlock_unlock_irqrestore(m->sp_lock, eflags);
-        spinlock_release(m->sp_lock);
-        memset(m, 0, sizeof(mail));
-        kfree(m);
+    if (!m)
+        return;
+
+    mailmeta* meta = get_mailmeta(m);
+    if (!meta)
+        return;
+
+    u32 eflags = spinlock_lock_irqsave(meta->sp_lock);
+    meta->ref_count--;
+    if (meta->ref_count > 0) {
+        spinlock_unlock_irqrestore(meta->sp_lock, eflags);
+        return;
     }
+    spinlock_unlock_irqrestore(meta->sp_lock, eflags);
+    spinlock_release(meta->sp_lock);
+    list_del(&meta->query_node);
+    memset(meta, 0, sizeof(mailmeta));
+    kfree(meta);    /* bookkeeping:      kernel heap */
+
+    memset(m, 0, sizeof(mail));
+    free(m);        /* user-visible part: user pool  */
 }
 
 mailbox* alloc_mailbox(int owner_pid, int owner_tid)
@@ -75,9 +125,9 @@ void release_mailbox(mailbox* mb)
 
         /* Release all pending mails, safely removing each from the list first */
         while (!list_empty(&mb->mails)) {
-            mail* m = list_entry(mb->mails.prev, mail, this_node);
-            list_del(&m->this_node);
-            release_mail(m);
+            mailmeta* meta = list_entry(mb->mails.prev, mailmeta, this_node);
+            list_del(&meta->this_node);
+            release_mail(meta->payload);
         }
 
         /* Release all registered handlers */
@@ -123,7 +173,16 @@ int send_mail(mailbox* mb, mail* m)
         return 0;
     } else {
         /* No handler: queue the mail for later retrieval via mailbox_listen */
-        list_add(&m->this_node, &mb->mails);
+        mailmeta* meta = get_mailmeta(m);
+        if (!meta) {
+            /* Untracked / forged mail: it cannot be queued.  Drop the
+             * reference (a no-op for an untracked mail) and report failure
+             * instead of silently losing the mail. */
+            spinlock_unlock_irqrestore(mb->sp_lock, eflags);
+            release_mail(m);
+            return E_INVAL;
+        }
+        list_add(&meta->this_node, &mb->mails);
         spinlock_unlock_irqrestore(mb->sp_lock, eflags);
     }
 
@@ -183,14 +242,22 @@ int send(mail* m)
             return 0;
         }
 
+        mailmeta* meta = get_mailmeta(m);
+        if (!meta) {
+            spinlock_unlock_irqrestore(schedule_lock, eflags);
+            return E_INVAL;
+        }
         /*
          * ref_count accounts for:
          *   - one reference per subscribed handler-having mailbox
          *     (consumed by send_mail's internal release_mail after
          *     handlers return)
          *   - one extra reference for the sender (consumed by release_mail below)
+         * Accumulate rather than overwrite so any pre-existing outstanding
+         * reference (e.g. this mail already queued elsewhere) is preserved;
+         * the sender's own reference was set to 1 by alloc_mail().
          */
-        m->ref_count = handler_recipients + 1;
+        meta->ref_count += handler_recipients;
 
         /* Second pass: deliver to each recipient */
         list_for_each(node, &thread_head) {
@@ -230,14 +297,24 @@ int send(mail* m)
                  */
                 mail* clone = alloc_mail();
                 if (clone) {
-                    clone->magic = m->magic;   /* keep the notification tag */
-                    memcpy(clone->data, m->data, sizeof(m->data));
-                    clone->data_size = m->data_size;
-                    clone->sender_tid = m->sender_tid;
+                    /* Copy only the user-visible payload.  alloc_mail()
+                     * already gave the clone its OWN meta (ref_count=1,
+                     * payload=clone, fresh spinlock + list node) — do NOT
+                     * copy m's bookkeeping over it (that would share m's
+                     * spinlock and clobber the clone's ref_count/list state). */
+                    clone->magic        = m->magic;
+                    clone->sender_tid   = m->sender_tid;
                     clone->receiver_tid = m->receiver_tid;
-                    clone->ref_count = 1;
+                    clone->data_size    = m->data_size;
+                    memcpy(clone->data, m->data, sizeof(m->data));
+
+                    /* alloc_mail() registered the clone's meta in the inflight
+                     * list (ref_count already 1), so the lookup below always
+                     * succeeds — no extra refcount bookkeeping is needed. */
                     u32 eflags = spinlock_lock_irqsave(t->mailbox->sp_lock);
-                    list_add(&clone->this_node, &t->mailbox->mails);
+                    mailmeta* clone_meta = get_mailmeta(clone);
+                    if (clone_meta)
+                        list_add(&clone_meta->this_node, &t->mailbox->mails);
                     spinlock_unlock_irqrestore(t->mailbox->sp_lock, eflags);
                 }
             }
@@ -270,11 +347,11 @@ static mail* try_get_mail(mailbox* mb)
         return 0;
     }
 
-    mail* m = list_entry(mb->mails.prev, mail, this_node);
-    list_del(&m->this_node);
+    mailmeta* meta = list_entry(mb->mails.prev, mailmeta, this_node);
+    list_del(&meta->this_node);
     spinlock_unlock_irqrestore(mb->sp_lock, eflags);
 
-    return m;
+    return meta->payload;
 }
 
 static int register_handler(mailbox* mb, mail_handler handler)
@@ -458,6 +535,19 @@ static int mailbox_syscall_isr(void* data)
      */
     pcb* proc = get_current_process();
     if (proc && proc->priv != PROC_PRIV_KERNEL) {
+        /*
+         * Ring-3 has NO legitimate mailbox handle: the only mailbox a user
+         * thread may touch is its own, addressed by mb == NULL (mailbox_exec
+         * resolves it to the current thread).  A non-NULL mb from CPL3 is a
+         * forged raw kernel pointer (mailbox* lives in the kernel heap) —
+         * reject it so the kernel never dereferences caller-chosen
+         * addresses through LISTEN/SUBSCRIBE/...  Kernel/driver callers are
+         * trusted and keep passing real mailbox* handles.
+         */
+        if (config->mb) {
+            config->ret = E_INVAL;
+            return config->ret;
+        }
         int ipc_ok = 1;
         if (cap_check(proc, CAP_IPC, &ipc_ok) != 0) {
             config->ret = E_PERM;
@@ -498,7 +588,10 @@ mail* mailbox_alloc_mail(void)
     mailbox_ctrl_config config = {0};
     config.cmd = MAILBOX_CTRL_ALLOC_MAIL;
 
-    arch_syscall(mailbox_scall_handle, &config, sizeof(config));
+    if (mb_run_direct())
+        mailbox_exec(&config);
+    else
+        arch_syscall(mailbox_scall_handle, &config, sizeof(config));
 
     return config.m;
 }

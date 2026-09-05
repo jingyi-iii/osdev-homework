@@ -3,7 +3,7 @@
 
 #include "lib/types.h"
 #include <stddef.h>
-#include "mm/paging.h"
+#include "paging.h"
 #include "lib/rbtree.h"
 #include "sync/spinlock.h"
 
@@ -49,12 +49,25 @@ int   vmm_unmap_memory(pcb* proc, void* virt_addr, size_t size);
 
 /*
  * vmm_map_fixed - map @size bytes of physical memory at a FIXED virtual
- * address (the caller's choice, e.g. an ELF segment's linked VA).
+ * address (the caller's choice: an ELF segment's linked VA, or a ring-3
+ * MMIO window the caller picks in the high user area).
  * Requires the caller to hold a CAP_MAP_MEM capability covering the range.
- * The pages are recorded as owned (freed on address-space destroy).
+ * @own_phys: 1 = this mapping owns the pages — returned to the PMM on
+ * address-space destroy (ELF loader), or via vmm_unmap_fixed(); 0 = pure
+ * alias (MMIO windows) — never touched by the PMM, only unmapped.
  * Returns 0 or a negative errno.
  */
-int vmm_map_fixed(pcb* proc, u32 phys_addr, void* vaddr, size_t size, u32 flags);
+int vmm_map_fixed(pcb* proc, u32 phys_addr, void* vaddr, size_t size,
+                  u32 flags, int own_phys);
+
+/*
+ * vmm_unmap_fixed - release a mapping created by vmm_map_fixed() at a
+ * fixed VA.  Requires the caller to hold CAP_MAP_MEM over the region's
+ * physical range.  Unmaps the PTEs; an own_phys = 1 region has its pages
+ * returned to the PMM, an own_phys = 0 (MMIO) region just loses the alias.
+ * Returns 0 or a negative errno.
+ */
+int vmm_unmap_fixed(pcb* proc, void* vaddr, size_t size);
 
 int vmm_lookup_region(pcb* proc, u32 va, u32* out_pa, u32* out_pa_size,
                       void** out_start_va);

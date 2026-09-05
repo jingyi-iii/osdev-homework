@@ -74,11 +74,23 @@ typedef union pte {
     (((u32)(x) & (PAGE_SIZE - 1)) == 0)
 
 /*
- * Kernel virtual address space layout (32-bit, 4GB total):
- *   0x00000000 - 0xBFFFFFFF  (0~3GB)    : User space
- *   0xC0000000 - 0xFFFFFFFF  (3GB~4GB)  : Kernel space (identity-mapped to physical 0~1GB)
+ * Virtual address space layout (32-bit, 4GB total):
+ *   Kernel runs identity-mapped in LOW physical memory (0..64MB);
+ *   the high user area starts at 0xC0000000:
+ *     0xC0000000 - 0xC1000000  : USER HEAP (16MB, reserved for the
+ *                                user-heap allocator / mailbox views)
+ *     0xC1000000 - ...         : USER ELF images (code/data/bss), stacks
+ *                                are mapped above each ELF image
+ *   The top 256MB (0xF0000000 - 0xFFFFFFFF) is reserved for a future
+ *   higher-half kernel mapping — currently unused, the kernel's code
+ *   and data stay in the low identity map at 1MB.
  */
-#define KERNEL_BASE_VADDR   0xC0000000
+#define USER_HEAP_BASE      0xC0000000
+#define USER_HEAP_SIZE      0x01000000            /* 16 MB */
+#define USER_HEAP_END       (USER_HEAP_BASE + USER_HEAP_SIZE)  /* 0xC1000000 */
+#define USER_ELF_BASE       0xC1000000
+
+#define KERNEL_BASE_VADDR   0xF0000000            /* reserved kernel high-half */
 #define USER_SPACE_TOP      KERNEL_BASE_VADDR
 
 /**

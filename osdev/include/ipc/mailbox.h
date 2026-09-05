@@ -12,6 +12,7 @@
                                            * (user/userlib.h) */
 #define MAX_SUBSCRIPTION_COUNT  (16)
 
+struct mailmeta;
 typedef struct mail {
     u32 magic;
     int sender_tid;          /* informational: sender's thread (reply-to)  */
@@ -19,13 +20,16 @@ typedef struct mail {
                               * broadcast to subscribers of m->magic        */
     char data[256];
     size_t data_size;
+} mail;
 
-    // do not use these fields directly, they are for internal use only
+typedef struct mailmeta {
     size_t unique_id;
     int ref_count;
+    mail* payload;
     spinlock* sp_lock;
-    list_node this_node;
-} mail;
+    list_node this_node;    // attach to mailbox->mails list
+    list_node query_node;
+} mailmeta;
 
 /*
  * Mail handler callback. Handlers run synchronously in ISR context during

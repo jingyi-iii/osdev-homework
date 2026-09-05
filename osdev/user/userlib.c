@@ -433,3 +433,56 @@ int user_irq_wait(void)
         user_yield();
     }
 }
+
+/* ---- user-heap syscall (SYSCALL_HEAP): malloc / free ----
+ * The kernel allocates from the shared user region
+ * [USER_HEAP_BASE, USER_HEAP_END) (mapped PTE_USER into every process),
+ * so the returned pointer is directly dereferenceable at ring 3. */
+void* malloc(unsigned int size)
+{
+    user_heap_ctrl cfg = {0};
+
+    cfg.cmd  = U_HEAP_CTRL_MALLOC;
+    cfg.size = size;
+    user_syscall(SYSCALL_HEAP, &cfg, sizeof(cfg));
+
+    return (cfg.ret == 0) ? cfg.ptr : 0;
+}
+
+void free(void* ptr)
+{
+    user_heap_ctrl cfg = {0};
+
+    cfg.cmd = U_HEAP_CTRL_FREE;
+    cfg.ptr = ptr;
+    user_syscall(SYSCALL_HEAP, &cfg, sizeof(cfg));
+}
+
+/* ---- MMIO window syscall (SYSCALL_MMIO): map CAP-authorized MMIO ----
+ * The mapping lands at the caller-chosen fixed high VA @vaddr
+ * (vmm_map_fixed, own_phys = 0) and is directly dereferenceable at
+ * ring 3; release it later with user_mmio_unmap(vaddr, size). */
+int user_mmio_map(u32 pa, u32 size, void* vaddr)
+{
+    user_mmio_ctrl cfg = {0};
+
+    cfg.cmd  = U_MMIO_CTRL_MAP;
+    cfg.pa   = pa;
+    cfg.size = size;
+    cfg.va   = (u32)(uptr)vaddr;
+    user_syscall(SYSCALL_MMIO, &cfg, sizeof(cfg));
+
+    return cfg.ret;
+}
+
+int user_mmio_unmap(void* vaddr, u32 size)
+{
+    user_mmio_ctrl cfg = {0};
+
+    cfg.cmd  = U_MMIO_CTRL_UNMAP;
+    cfg.va   = (u32)(uptr)vaddr;
+    cfg.size = size;
+    user_syscall(SYSCALL_MMIO, &cfg, sizeof(cfg));
+
+    return cfg.ret;
+}

@@ -4,9 +4,11 @@
  *
  * Pure console-portal printer: publishes a DYNAMIC console portal and
  * registers it in the namespace under "console"; prints every payload it
- * receives straight to the VGA text buffer
- * (0xB8000 — the low identity map is user-accessible).  The interactive
- * command line is gone, so there is no kb dependency.
+ * receives straight to the VGA text buffer.  The two VGA MMIO windows
+ * (text 0xB8000, mode-13 fb 0xA0000) are mapped into this process via the
+ * SYSCALL_MMIO gate (granted CAP_MAP_MEM at load time); if the mapping
+ * is unavailable the code falls back to the low identity-map addresses.
+ * The interactive command line is gone, so there is no kb dependency.
  *
  * VGA text cells are written with direct memory stores; the hardware
  * cursor is moved through the io syscall gate (ports 0x3D4/0x3D5, inside
@@ -29,7 +31,15 @@
 
 #define VGA_WIDTH      80
 #define VGA_HEIGHT     25
-#define VGA_BUF        ((volatile u16*)0xB8000)
+
+/* VGA text buffer — set by vga_map_windows() to the kernel-chosen high VA
+ * returned by the MMIO syscall.  The low identity map (0xB8000) is now
+ * supervisor-only, so if the mapping is missing this stays NULL and the
+ * text paths below become no-ops instead of faulting.  Every text write
+ * goes through this pointer. */
+static volatile u16* vga_buf_ptr = 0;
+#define VGA_BUF        vga_buf_ptr
+
 #define VGA_CRT_ADDR   0x3D4
 #define VGA_CRT_DATA   0x3D5
 
@@ -47,8 +57,10 @@
 #define VGA_DAC_DATA   0x3C9
 #define VGA_STAT_READ  0x3DA
 
-/* Mode 0x13 linear frame buffer (identity-mapped, user-accessible). */
-#define GFX13_BUF      ((volatile u8*)0xA0000)
+/* Mode 0x13 linear frame buffer — set by vga_map_windows() like VGA_BUF;
+ * NULL (unmapped) makes the frame-buffer paths no-ops. */
+static volatile u8* gfx13_buf_ptr = 0;
+#define GFX13_BUF      gfx13_buf_ptr
 
 /* Light grey on black — the default text attribute. */
 #define TERM_COLOR     0x07
@@ -104,6 +116,9 @@ static void term_sync_cursor_from_hw(void)
  * Caller holds g_vga_lock. */
 static void term_scroll_up(void)
 {
+    if (!vga_buf_ptr)
+        return;               /* no VGA mapping — nothing to draw */
+
     for (size_t r = 1; r < VGA_HEIGHT; r++)
         for (size_t c = 0; c < VGA_WIDTH; c++)
             VGA_BUF[(r - 1) * VGA_WIDTH + c] = VGA_BUF[r * VGA_WIDTH + c];
@@ -118,6 +133,9 @@ static void term_scroll_up(void)
 /* Blank the whole screen and home the cursor.  Caller holds g_vga_lock. */
 static void term_clear_screen(void)
 {
+    if (!vga_buf_ptr)
+        return;               /* no VGA mapping — nothing to draw */
+
     for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++)
         VGA_BUF[i] = (u16)TERM_COLOR << 8;
 
@@ -128,6 +146,11 @@ static void term_clear_screen(void)
 static void term_putc(char c)
 {
     uspin_lock(&g_vga_lock);
+
+    if (!vga_buf_ptr) {       /* no VGA mapping — nothing to draw */
+        uspin_unlock(&g_vga_lock);
+        return;
+    }
 
     if (c == '\n') {
         term_col = 0;
@@ -171,21 +194,50 @@ static void term_set_color(int code)
 static void term_print(const u8* s, u32 len)
 {
     for (u32 i = 0; i < len; i++) {
-        /* ANSI SGR colour sequence: ESC [ <digits> m.  Consumed here so
-         * it never reaches the screen as text. */
+        /* ANSI escape sequence: ESC [ <digits> <final>.  Consumed here so
+         * it never reaches the screen as text.  Supported finals:
+         *   m  — SGR colour (ESC[0m reset, ESC[30..37m / 90..97m colours);
+         *   J  — erase display (ESC[2J / bare ESC[J = clear whole screen);
+         *   H  — cursor home (ESC[H = row 0, col 0).
+         * (A whole-page menu is sent as one request that starts with
+         * ESC[2J so the clear + text render atomically in one request —
+         * concurrent writers can never splice into it.) */
         if (s[i] == 0x1b && i + 1 < len && s[i + 1] == '[') {
             u32 j = i + 2;
             int code = 0;
+            int has_digits = 0;
 
             while (j < len && s[j] >= '0' && s[j] <= '9') {
                 code = code * 10 + (s[j] - '0');
+                has_digits = 1;
                 j++;
             }
-            if (j < len && s[j] == 'm') {
-                term_set_color(code);
+            if (j < len && (s[j] == 'm' || s[j] == 'J' || s[j] == 'H')) {
+                u8 final = (u8)s[j];
+
+                if (final == 'm') {
+                    term_set_color(has_digits ? code : 0);
+                } else if (final == 'J') {
+                    /* ESC[2J (or bare ESC[J): erase the whole screen. */
+                    if (!has_digits || code == 2) {
+                        uspin_lock(&g_vga_lock);
+                        term_clear_screen();
+                        term_color = TERM_COLOR;
+                        term_cursor_update();
+                        uspin_unlock(&g_vga_lock);
+                    }
+                } else if (final == 'H') {
+                    /* ESC[H / ESC[1;1H: home the cursor. */
+                    uspin_lock(&g_vga_lock);
+                    term_row = 0;
+                    term_col = 0;
+                    term_cursor_update();
+                    uspin_unlock(&g_vga_lock);
+                }
                 i = j;             /* skip the whole sequence */
                 continue;
             }
+            /* Unrecognised: fall through and print the ESC literally. */
         }
         term_putc((char)s[i]);
     }
@@ -248,106 +300,6 @@ static void vga_write_regs(u16 addr_port, u16 data_port,
     }
 }
 
-/* ---- 8x16 text font save/restore --------------------------------
- * VGA text glyphs come from the 8x16 font stored in VRAM plane 2 at
- * 0xA0000.  BIOS/GRUB load it once at boot.  Mode 0x13 is CHAIN4: its
- * linear writes to 0xA0000 are distributed byte-by-byte across all four
- * planes, so running a graphics demo WIPES plane 2 and with it the text
- * font.  Register-only mode switches (no BIOS int 10h) never reload the
- * font — after the first 0x13 round-trip text renders as garbage/blank.
- *
- * Fix: snapshot plane 2 once (before any graphics), then restore it
- * every time we come back to text mode. */
-#define FONT_BYTES  (256 * 32)  /* 8x16 font, 256 glyphs, 32 bytes each
-                                 * (QEMU stores text fonts at a 32-byte
-                                 * per-glyph stride; 16 bytes used) */
-
-static u8 saved_font[FONT_BYTES];
-static int font_saved = 0;
-
-/* Read the 8x16 font out of plane 2 into saved_font[].  Call while the
- * VGA is in text mode and the font is still intact (before any 0x13). */
-static void font_save(void)
-{
-    if (font_saved)
-        return;
-
-    iowrite8(VGA_SEQ_ADDR, 0x02);
-    iowrite8(VGA_SEQ_DATA, 0x0F);        /* map mask: all planes */
-    iowrite8(VGA_GC_ADDR, 0x05);
-    iowrite8(VGA_GC_DATA, 0x00);         /* disable odd/even */
-    iowrite8(VGA_GC_ADDR, 0x06);
-    iowrite8(VGA_GC_DATA, 0x04);         /* memory map 0xA0000 */
-    iowrite8(VGA_GC_ADDR, 0x04);
-    iowrite8(VGA_GC_DATA, 0x02);         /* read from plane 2 */
-
-    const volatile u8* fb = (const volatile u8*)0xA0000;
-    for (u32 i = 0; i < FONT_BYTES; i++)
-        saved_font[i] = fb[i];
-
-    /* Put the VGA back to text-mode defaults. */
-    iowrite8(VGA_GC_ADDR, 0x04);
-    iowrite8(VGA_GC_DATA, 0x00);
-    iowrite8(VGA_GC_ADDR, 0x05);
-    iowrite8(VGA_GC_DATA, 0x10);         /* odd/even text mode */
-    iowrite8(VGA_GC_ADDR, 0x06);
-    iowrite8(VGA_GC_DATA, 0x0E);         /* memory map 0xB8000 */
-    iowrite8(VGA_SEQ_ADDR, 0x02);
-    iowrite8(VGA_SEQ_DATA, 0x0F);
-
-    font_saved = 1;
-}
-
-/* Reload saved_font[] into plane 2.  Call after the text-mode register
- * dump (mode 0x03) has been programmed; the caller holds g_vga_lock. */
-static void font_load(void)
-{
-    if (!font_saved)
-        return;
-
-    /* Video off (AC index write with bit 5 clear) during the upload. */
-    ioread8(VGA_STAT_READ);              /* reset AC index flip-flop */
-    iowrite8(VGA_AC_ADDR, 0x00);
-
-    /* Point writes at plane 2, map 0xA0000, write mode 0.
-     *
-     * CRITICAL: sr[4] (sequencer memory mode) MUST have the SEQ_MODE bit
-     * set (0x06) for the upload.  With the text-mode value 0x02 QEMU (and
-     * real VGA text mapping) applies an odd/even filter to CPU writes:
-     * odd window addresses would have their plane-2 mask cleared and be
-     * dropped, leaving every other scanline of each glyph corrupted. */
-    iowrite8(VGA_SEQ_ADDR, 0x02);
-    iowrite8(VGA_SEQ_DATA, 0x04);        /* map mask: plane 2 only */
-    iowrite8(VGA_SEQ_ADDR, 0x04);
-    iowrite8(VGA_SEQ_DATA, 0x06);        /* EXT_MEM | SEQ_MODE */
-    iowrite8(VGA_GC_ADDR, 0x05);
-    iowrite8(VGA_GC_DATA, 0x00);
-    iowrite8(VGA_GC_ADDR, 0x06);
-    iowrite8(VGA_GC_DATA, 0x04);
-    iowrite8(VGA_GC_ADDR, 0x04);
-    iowrite8(VGA_GC_DATA, 0x00);
-
-    volatile u8* fb = (volatile u8*)0xA0000;
-    for (u32 i = 0; i < FONT_BYTES; i++)
-        fb[i] = saved_font[i];
-
-    /* Restore text-mode GC/seq state. */
-    iowrite8(VGA_GC_ADDR, 0x04);
-    iowrite8(VGA_GC_DATA, 0x00);
-    iowrite8(VGA_GC_ADDR, 0x05);
-    iowrite8(VGA_GC_DATA, 0x10);
-    iowrite8(VGA_GC_ADDR, 0x06);
-    iowrite8(VGA_GC_DATA, 0x0E);
-    iowrite8(VGA_SEQ_ADDR, 0x04);
-    iowrite8(VGA_SEQ_DATA, 0x02);
-    iowrite8(VGA_SEQ_ADDR, 0x02);
-    iowrite8(VGA_SEQ_DATA, 0x0F);
-
-    /* Video back on. */
-    ioread8(VGA_STAT_READ);
-    iowrite8(VGA_AC_ADDR, 0x20);
-}
-
 /* Switch to VGA graphics mode 0x13 (320x200, 256 colours, linear frame
  * buffer at 0xA0000).  Clears the frame buffer to colour 0. */
 static void gfx_enter_mode13(void)
@@ -395,9 +347,10 @@ static void gfx_enter_mode13(void)
     }
     iowrite8(VGA_AC_ADDR, 0x20);
 
-    /* Blank the frame buffer. */
-    for (u32 i = 0; i < GFX_FB_SIZE; i++)
-        GFX13_BUF[i] = 0;
+    /* Blank the frame buffer (no-op if the fb window is not mapped). */
+    if (gfx13_buf_ptr)
+        for (u32 i = 0; i < GFX_FB_SIZE; i++)
+            GFX13_BUF[i] = 0;
 }
 
 /* Switch back to VGA text mode 0x03 (80x25) and clear the text buffer.
@@ -457,14 +410,6 @@ static void gfx_enter_text(void)
         iowrite8(VGA_DAC_DATA, text_palette[i][2]);
     }
 
-    /* Mode 0x13 chain4 wiped the text font out of plane 2 — put it back.
-     * This MUST happen before term_clear_screen() below: the QEMU text
-     * renderer only redraws cells whose content changed, so any cell
-     * written while the font is still wiped would stay garbled on screen
-     * (and never be repainted).  Reload first, then blank + repaint
-     * everything with the restored glyphs. */
-    font_load();
-
     /* Hardware cursor shape (visible block) + blank the text buffer. */
     iowrite8(VGA_CRT_ADDR, 0x0A);
     iowrite8(VGA_CRT_DATA, 0x00);
@@ -504,8 +449,9 @@ static int gfx_handle(const gfx_ctrl* g)
          * frame buffer — one memcpy per frame, no per-pixel IPC. */
         const u8* fb = (const u8*)g + sizeof(gfx_ctrl);
         uspin_lock(&g_vga_lock);
-        for (u32 i = 0; i < GFX_FB_SIZE; i++)
-            GFX13_BUF[i] = fb[i];
+        if (gfx13_buf_ptr)
+            for (u32 i = 0; i < GFX_FB_SIZE; i++)
+                GFX13_BUF[i] = fb[i];
         uspin_unlock(&g_vga_lock);
         return 0;
     }
@@ -513,9 +459,32 @@ static int gfx_handle(const gfx_ctrl* g)
     return -3;
 }
 
+/* Fixed high VAs (below USER_SPACE_TOP 0xF0000000, above the shared user
+ * heap [0xC0000000, 0xC1000000) and this ELF at 0xC1000000+) at which the
+ * two VGA windows are mapped through the MMIO syscall.  Each process has
+ * its own region tree, so the same VAs are fine in other servers. */
+#define MMIO_TEXT_VA   ((void*)0xE0000000)
+#define MMIO_GFX_VA    ((void*)0xE0010000)
+
+/* Map the two VGA MMIO windows through the MMIO syscall gate.  On success
+ * the pointers alias the hardware at the fixed high VAs above; the server
+ * no longer depends on ring-3 access to the low identity map (which is
+ * supervisor-only now).  If a mapping fails the pointer stays NULL and the
+ * draw paths above become no-ops.  Runs once, before any thread can touch
+ * the screen. */
+static void vga_map_windows(void)
+{
+    if (user_mmio_map(0xB8000, 0x1000, MMIO_TEXT_VA) == 0)
+        vga_buf_ptr = (volatile u16*)MMIO_TEXT_VA;
+    if (user_mmio_map(0xA0000, 0x10000, MMIO_GFX_VA) == 0)
+        gfx13_buf_ptr = (volatile u8*)MMIO_GFX_VA;
+}
+
 void _start(void)
 {
     user_portal_ctrl cfg = {0};
+
+    vga_map_windows();
 
     /* Spawn a sibling USER thread that echoes keyboard events while this
      * thread keeps serving the console portal (threads of one process
@@ -548,9 +517,12 @@ void _start(void)
     /* Continue on the screen where the kernel's kterm left off. */
     term_sync_cursor_from_hw();
 
-    /* Snapshot the 8x16 text font while it is still intact — the first
-     * mode-0x13 session will destroy it (chain4 writes hit plane 2). */
-    font_save();
+    /* NOTE: the text font is deliberately NOT snapshotted at startup.
+     * font_save() remaps the VGA memory window to plane 2 (0xA0000); at
+     * boot the user ELFs run concurrently with the kernel's init_thread
+     * still writing kterm launcher lines to 0xB8000, and those writes
+     * get redirected into VRAM during the remap window — corrupting the
+     * font and garbling every glyph on the text screen. */
 
     for (;;) {
         cfg.cmd = U_PORTAL_CTRL_WAIT;

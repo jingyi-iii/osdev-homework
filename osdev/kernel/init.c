@@ -35,6 +35,17 @@ static void grant_terminal_caps(pcb* proc)
 
     cap_grant(proc, CAP_ACCESS_IO, &vga);
     cap_grant(proc, CAP_IPC, &ipc_ok);
+
+    /* CAP_MAP_MEM grants for the two VGA MMIO windows terminal_server
+     * maps through the SYSCALL_MMIO gate (kernel/mmio.c): the text
+     * buffer 0xB8000 (4KB) and the mode-13 frame buffer 0xA0000 (64KB).
+     * vmm_map_fixed() internally cap-checks the requested range against
+     * these; without them the syscall fails E_PERM and the server falls
+     * back to writing the low identity-map addresses. */
+    cap_mem vga_txt = { 0xB8000, 0x1000, PTE_USER_PAGE };
+    cap_mem vga_gfx = { 0xA0000, 0x10000, PTE_USER_PAGE };
+    cap_grant(proc, CAP_MAP_MEM, &vga_txt);
+    cap_grant(proc, CAP_MAP_MEM, &vga_gfx);
 }
 
 static void grant_kb_caps(pcb* proc)

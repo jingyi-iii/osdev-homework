@@ -1,5 +1,5 @@
 #include "mm/pmm.h"
-#include "mm/paging.h"
+#include "paging.h"
 #include "lib/string.h"
 #include "kernel/log.h"
 #include "sync/spinlock.h"

@@ -450,7 +450,8 @@ void* vmm_map_memory(pcb* proc, u32 phys_addr, size_t size, u32 flags)
     return (void*)((u8*)va + offset);
 }
 
-int vmm_map_fixed(pcb* proc, u32 phys_addr, void* vaddr, size_t size, u32 flags)
+int vmm_map_fixed(pcb* proc, u32 phys_addr, void* vaddr, size_t size,
+                  u32 flags, int own_phys)
 {
     cap_mem mem = {phys_addr, size, flags};
     vmm_region* region = 0;
@@ -491,7 +492,7 @@ int vmm_map_fixed(pcb* proc, u32 phys_addr, void* vaddr, size_t size, u32 flags)
     region->size     = size;
     region->flags    = flags;
     region->pa       = phys_addr;
-    region->own_phys = 1;   /* caller (ELF loader) owns the pages */
+    region->own_phys = own_phys;   /* 1: ELF loader pages / 0: MMIO alias */
     rbtree_insert(proc->vcb.tree, &region->node, vmm_rbtree_node_cmp);
     spinlock_unlock(proc->vcb.lock);
 
@@ -548,6 +549,73 @@ int vmm_unmap_memory(pcb* proc, void* virt_addr, size_t size)
     for (u32 i = 0; i < region_size / PAGE_SIZE; i++)
         arch_unmap_4kb((void*)proc->vcb.cr3,
                        (u8*)va + i * PAGE_SIZE);
+
+    return 0;
+}
+
+int vmm_unmap_fixed(pcb* proc, void* vaddr, size_t size)
+{
+    vmm_region* region = 0;
+    u32 pa = 0;
+    u32 pa_size = 0;
+    u32 own = 0;
+    u32 region_size = 0;
+    void* start_va = 0;
+    int ret;
+
+    if (!proc || !proc->vcb.tree)
+        return EINVAL;
+
+    /* Find the region + its physical range first (any own_phys), then
+     * cap-check exactly like vmm_unmap_memory(). */
+    ret = vmm_lookup_region(proc, (u32)vaddr, &pa, &pa_size, &start_va);
+    if (ret)
+        return E_NOTFOUND;
+
+    {
+        cap_mem mem = { pa, pa_size, 0 };
+        if (cap_check(proc, CAP_MAP_MEM, &mem) != 0)
+            return EPERM;
+    }
+
+    /* Re-find + validate + delete the region under the lock. */
+    if (spinlock_lock(proc->vcb.lock) != 0)
+        return EINVAL;
+
+    rbtree_for_each(node, proc->vcb.tree) {
+        vmm_region* r = rb_entry(node, vmm_region, node);
+        if ((u32)r->start_va <= (u32)vaddr &&
+            (u32)r->start_va + r->size > (u32)vaddr) {
+            if (size > r->size ||
+                (u32)vaddr + size < (u32)vaddr ||
+                (u32)vaddr + size > (u32)r->start_va + r->size) {
+                spinlock_unlock(proc->vcb.lock);
+                return EINVAL;
+            }
+            region = r;
+            break;
+        }
+    }
+    if (!region) {
+        spinlock_unlock(proc->vcb.lock);
+        return E_NOTFOUND;
+    }
+
+    start_va    = region->start_va;
+    region_size = region->size;
+    pa          = region->pa;
+    own         = region->own_phys;
+    rbtree_delete(proc->vcb.tree, &region->node);
+    kfree(region);
+    spinlock_unlock(proc->vcb.lock);
+
+    /* Drop the PTEs.  Only own_phys = 1 mappings return their pages to
+     * the PMM; MMIO windows (own_phys = 0) are pure aliases. */
+    for (u32 i = 0; i < region_size / PAGE_SIZE; i++)
+        arch_unmap_4kb((void*)proc->vcb.cr3,
+                       (u8*)start_va + i * PAGE_SIZE);
+    if (own)
+        pmm_free_pages(pa, region_size / PAGE_SIZE);
 
     return 0;
 }

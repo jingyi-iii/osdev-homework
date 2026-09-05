@@ -58,26 +58,48 @@ static void key_listener_thread(void)
  * ------------------------------------------------------------------ */
 static void draw_menu(void)
 {
-    /* Redraw on a clean screen so stale suite output never mixes with
-     * the menu text. */
-    terminal_flush(0);
+    /* The whole menu (clear + every line) is assembled into ONE buffer
+     * and sent as a single portal call.  The terminal server renders a
+     * request atomically, so concurrent writers (boot demos etc.) can
+     * never splice their text between menu rows — with per-line calls
+     * they could, because every portal RPC costs a few scheduler ticks
+     * and other processes write in between. */
+    static const char* lines[] = {
+        "========================================",
+        "  PROCESS API TEST SUITE                ",
+        "========================================",
+        "",
+        "  [0] Graphics Demo (mode 0x13)         ",
+        "  [1] Thread API Test Suite",
+        "  [2] Process API Test Suite",
+        "  [3] Mailbox API Test Suite            (not yet ported)",
+        "  [4] Red-Black Tree Test Suite",
+        "  [5] Mixed Scheduling Test Suite",
+        "  [6] Run All Test Suites",
+        "  [7] SHM Test Suite                    (not yet ported)",
+        "  [8] SHM Stress Test                   (not yet ported)",
+        "  [9] Portal RPC Test Suite             (not yet ported)",
+        "",
+        "  Press 0, 1, 2, 3, 4, 5, 6, 7, 8 or 9 to select",
+    };
+    static char buf[640];
+    int o = 0;
+    const char* p;
 
-    terminal_write("========================================\n");
-    terminal_write("  PROCESS API TEST SUITE                \n");
-    terminal_write("========================================\n");
-    terminal_write("\n");
-    terminal_write("  [0] Graphics Demo (mode 0x13)         \n");
-    terminal_write("  [1] Thread API Test Suite\n");
-    terminal_write("  [2] Process API Test Suite\n");
-    terminal_write("  [3] Mailbox API Test Suite            (not yet ported)\n");
-    terminal_write("  [4] Red-Black Tree Test Suite\n");
-    terminal_write("  [5] Mixed Scheduling Test Suite\n");
-    terminal_write("  [6] Run All Test Suites\n");
-    terminal_write("  [7] SHM Test Suite                    (not yet ported)\n");
-    terminal_write("  [8] SHM Stress Test                   (not yet ported)\n");
-    terminal_write("  [9] Portal RPC Test Suite             (not yet ported)\n");
-    terminal_write("\n");
-    terminal_write("  Press 0, 1, 2, 3, 4, 5, 6, 7, 8 or 9 to select\n");
+    /* Leading ESC[2J: clear the screen, then the text fills it from the
+     * top — all inside the one request. */
+    p = "\x1b[2J";
+    while (*p)
+        buf[o++] = *p++;
+
+    for (u32 i = 0; i < sizeof(lines) / sizeof(lines[0]); i++) {
+        for (p = lines[i]; *p; p++)
+            buf[o++] = *p;
+        buf[o++] = '\n';
+    }
+    buf[o] = 0;
+
+    console_putstr(buf);
 }
 
 static void note_not_ported(const char* name)

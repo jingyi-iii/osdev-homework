@@ -3,7 +3,7 @@
  * linked into a demo ELF (kernel/lib/rbtree.c allocates its tree + nil
  * node) gets memory from the user-mode heap instead of the kernel heap.
  */
-#include "user/userheap.h"
+#include "userlib.h"
 
 void* kmalloc(unsigned int size)
 {

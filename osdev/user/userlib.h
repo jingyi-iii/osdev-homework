@@ -317,9 +317,10 @@ typedef struct user_mailbox_ctrl {
 
 /*
  * Mail view — mirrors the LEADING fields of the kernel's mail
- * (include/ipc/mailbox.h); the remaining fields are kernel-internal.
- * The kernel mail object lives in the low identity-mapped kernel heap, so
- * the view is directly readable AND writable from user mode:
+ * (include/ipc/mailbox.h).  The kernel mail object is allocated from the
+ * SHARED USER heap (SYSCALL_HEAP malloc, [0xC0000000, 0xC1000000)); its
+ * bookkeeping (mailmeta) stays in the kernel heap and is never exposed to
+ * ring-3.  The view is therefore directly readable AND writable:
  *   - outbound: fill magic / receiver_tid / data / data_size, user_mail_send
  *   - inbound:  read magic / sender_tid / data / data_size, user_mail_release
  * magic is the opaque notification tag (e.g. MAIL_MAGIC_IRQ, or a
@@ -351,5 +352,49 @@ int   user_mail_subscribe(u32 magic);
 int   user_mail_unsubscribe(u32 magic);
 
 int user_irq_wait(void);
+
+/* ------------------------------------------------------------------
+ * User-heap syscall (SYSCALL_HEAP) — ring-3 malloc()/free().
+ *
+ * Mirrors heap_ctrl_config (include/mm/heap.h): layout + command values
+ * must stay in sync.  malloc()/free() are the libc-style names; user
+ * ELFs are compiled with -fno-builtin so GCC never rewrites calls into
+ * __builtin_malloc.  The heap lives in the shared user region
+ * [0xC0000000, 0xC1000000) (USER_HEAP_BASE, arch/i386/paging.h).
+ * ---------------------------------------------------------------- */
+#define U_HEAP_CTRL_MALLOC      0
+#define U_HEAP_CTRL_FREE        1
+
+typedef struct user_heap_ctrl {
+    u32   cmd;      /* U_HEAP_CTRL_MALLOC / U_HEAP_CTRL_FREE */
+    u32   size;     /* MALLOC: bytes requested              */
+    void* ptr;      /* MALLOC: out — new ptr; FREE: in      */
+    int   ret;      /* out: 0 / errno                       */
+} user_heap_ctrl;
+
+void* malloc(unsigned int size);
+void  free(void* ptr);
+
+/* ------------------------------------------------------------------
+ * MMIO window mapping syscall (SYSCALL_MMIO, kernel/mmio.c) — map a
+ * CAP_MAP_MEM-authorized physical MMIO window into THIS process at a
+ * caller-chosen fixed high VA (own_phys = 0, so the window is never
+ * returned to the PMM).  Mirrors mmio_syscall_data
+ * (include/kernel/mmio.h); layout + command values must stay in sync.
+ * ---------------------------------------------------------------- */
+#define U_MMIO_CTRL_MAP      0
+#define U_MMIO_CTRL_UNMAP    1
+
+typedef struct user_mmio_ctrl {
+    u8   cmd;      /* U_MMIO_CTRL_MAP / U_MMIO_CTRL_UNMAP */
+    u32  pa;       /* MAP: in — physical MMIO address     */
+    u32  size;     /* MAP/UNMAP: in — bytes (page mult.)  */
+    u32  va;       /* MAP/UNMAP: in — caller-chosen VA    */
+    int  ret;      /* out: 0 / errno                      */
+} user_mmio_ctrl;
+
+/* MAP: map [pa,pa+size) at the fixed high VA @vaddr; UNMAP: drop it. */
+int user_mmio_map(u32 pa, u32 size, void* vaddr);
+int user_mmio_unmap(void* vaddr, u32 size);
 
 #endif

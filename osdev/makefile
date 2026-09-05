@@ -46,7 +46,8 @@ HELLO_ELF  := $(OUT_DIR)hello.elf
 
 # process_test.elf — keyboard-driven text-mode test menu.  The ported demo
 # suites run as threads of this process; kernel/lib/{rbtree,string,spinlock}
-# and user/userheap are linked in so the suites keep their kernel-era code.
+# are linked in so the suites keep their kernel-era code.  userlib provides
+# malloc/free (SYSCALL_HEAP) for the suites' kmalloc/kfree shims.
 PROCESS_TEST_SRCS := user/demo/process_test_entry.c \
 	user/demo/demo_common.c \
 	user/demo/thread_api_test.c \
@@ -57,11 +58,10 @@ PROCESS_TEST_SRCS := user/demo/process_test_entry.c \
 	kernel/lib/rbtree.c \
 	kernel/lib/string.c \
 	kernel/sync/spinlock.c \
-	user/userheap.c \
 	user/userlib.c
 PROCESS_TEST_ELF := $(OUT_DIR)process_test.elf
 
-OBJS     := $(COBJS) $(CXXOBJS) $(ASMOBJS) $(OBJS_DIR)user/userheap.c.o
+OBJS     := $(COBJS) $(CXXOBJS) $(ASMOBJS)
 
 TARGET_BIN := $(OUT_DIR)myos.bin
 TARGET_ISO := $(OUT_DIR)myos.iso
@@ -128,12 +128,9 @@ $(OBJS_DIR)%.S.o: %.S
 	@mkdir -p $(@D)
 	$(AS) $(ASFLAGS) $< -o $@
 
-# User-mode heap: built into the kernel (the ring-3 servers run from the
-# kernel image) but excluded from USER_SRCS so it is not linked into the
-# user hello.elf.  -fno-builtin stops GCC treating malloc/free as builtins.
-$(OBJS_DIR)user/userheap.c.o: user/userheap.c
-	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -fno-builtin -c $< -o $@
+# --- user-heap syscall lives in kernel/mm/heap.c (SYSCALL_HEAP); the old
+# ring-3 static userheap.c is gone.  -fno-builtin stops GCC treating
+# malloc/free as builtins in USER_CFLAGS below.
 
 $(NS_ELF): $(NS_SRCS) $(USER_LD) | $(OUT_DIR)
 	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(NS_SRCS) -o $@ -lgcc

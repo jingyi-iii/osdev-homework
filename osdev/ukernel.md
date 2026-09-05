@@ -28,7 +28,7 @@
 │  µKernel（myos.bin，i686，单核）                              │
 │  ┌─────────────┐  ┌─────────────┐  ┌──────────────────────┐  │
 │  │ scheduler   │  │ VMM / PMM   │  │ syscall 分发 (int $100)│  │
-│  │ (PIT IRQ0)  │  │ rbtree VMM  │  │ 固定号 0..4（内核侧）   │  │
+│  │ (PIT IRQ0)  │  │ rbtree VMM  │  │ 固定号 0..6（内核侧）   │  │
 │  ├─────────────┼──┼─────────────┼──┼──────────────────────┤  │
 │  │ capability  │  │ mailbox     │  │ portal (RPC)         │  │
 │  │ (信任根)     │  │ (哑传输)     │  │ shm (共享内存)        │  │
@@ -59,6 +59,8 @@
 | 2 | `SYSCALL_IRQ` | `kernel/irq.c` | 请求 / 释放 / 掩码 IRQ |
 | 3 | `SYSCALL_MAILBOX` | `kernel/ipc/mailbox.c` | mailbox 收发（哑传输） |
 | 4 | `SYSCALL_PORTAL` | `kernel/ipc/portal.c` | portal 同步 RPC（用户驱动服务统一走 portal/mailbox，无固定 driver syscall） |
+| 5 | `SYSCALL_HEAP` | `kernel/mm/heap.c` | 用户堆 `malloc/free`——共享 user-heap 区 `[0xC0000000,0xC1000000)`（2026-09） |
+| 6 | `SYSCALL_MMIO` | `kernel/mmio.c` | 把授权 MMIO 窗口映射到调用者自选高 VA（`CAP_MAP_MEM`；terminal 的 VGA 窗口走这里） |
 
 ### 1.3 启动流程（`kernel/init.c` 的 `init_thread`）
 
@@ -91,24 +93,26 @@ init_thread
 | 类别 | 组件 | 位置 | 状态 |
 |------|------|------|------|
 | ✅ 已落地 | 能力系统 | `kernel/capability.c` + `include/kernel/capability.h` | 6 类 cap，全部 syscall gate 已接入 |
-| ✅ 已落地 | 固定 syscall ABI | `include/kernel/uapi.h` | 号 0..4 固定 |
+| ✅ 已落地 | 固定 syscall ABI | `include/kernel/uapi.h` | 号 0..6 固定 |
 | ⚰️ 已移除 | 用户态 syscall 注册（SYSCALL_SYSCTL/SYSCALL_LOG） | 曾 `kernel/syscall.c` CR3 切换执行用户 handler | 2026-09 移除：log 改为 namespace 里的 portal 服务（"log"），避免 ring-0 跑用户代码 |
 | ✅ 已落地 | portal 同步 RPC | `kernel/ipc/portal.c` + `SYSCALL_PORTAL` | console portal 在用 |
-| ✅ 已落地 | mailbox 哑传输 | `kernel/ipc/mailbox.c` + `SYSCALL_MAILBOX` | magic 不透明标签（2026-09 重构） |
+| ✅ 已落地 | mailbox 哑传输 | `kernel/ipc/mailbox.c` + `SYSCALL_MAILBOX` | magic 不透明标签；2026-09 mail/mailmeta 拆分（用户堆 mail + 内核堆簿记） |
 | ✅ 已落地 | IRQ→mail 转发 | `kernel/irq.c` `dispatch_user_mode_irq` | `MAIL_MAGIC_IRQ` 定向投到注册线程 mailbox |
-| ✅ 已落地 | VMM + cap 检查 | `kernel/mm/vmm.c` | map/unmap/alloc + `CAP_MAP_MEM` |
+| ✅ 已落地 | VMM + cap 检查 | `kernel/mm/vmm.c` | map/unmap/alloc + `vmm_map_fixed(...,own_phys)`/`vmm_unmap_fixed` + `CAP_MAP_MEM` |
 | ✅ 已落地 | shm 共享内存 | `kernel/ipc/shm.c` | portal 的数据通道 |
 | ✅ 已落地 | 异常 dump | `arch/i386/irq.c` `exception_handler` | 寄存器/错误码/CR2/栈回溯 |
 | ✅ 已落地 | 地基修复 | paging / list / heap | `split_4mb_pde(pde*)`、`list_for_each_safe`、`kmalloc` 8 字节对齐 |
-| ✅ 已落地 | terminal / graphics server | `user/server/display/terminal_server.c` | 动态 console portal（注册 "console"）+ 按键回显（订阅 ns 解析的 kb magic）+ **图形模式 0x13**：`ESC 'G'` 控制帧 SET_MODE 切换、BLIT 把客户端 shm 的帧缓冲拷到 0xA0000 |
+| ✅ 已落地 | terminal / graphics server | `user/server/display/terminal_server.c` | 动态 console portal（注册 "console"）+ 按键回显 + **图形 mode 0x13**：VGA 窗口经 `SYSCALL_MMIO` 映射到高 VA（0xE0000000/0xE0010000），`BLIT` 把客户端 fb 拷到 gfx 别名 |
 | ✅ 已落地 | kb server | `user/server/input/kb_server.c` | 收 IRQ 读 scancode → 广播 `MSG_KEY_EVENT`（以 "kb" 注册 magic+tid）；可打印键兼写 COM1 |
 | ✅ 已落地 | 用户态 LOG server | `user/server/serial/log_server2.c` + `userlib`（`user_log_str/write`） | 动态 portal，注册 "log" → 写 COM1（2026-09 接线） |
-| ⚰️ 死代码 | `driver.h` / `device.h` | `include/kernel/driver.h` / `device.h` | platform_bus 退役后的残留 |
+| ✅ 已删除 | `driver.h` / `device.h`（platform_bus 残留）| 曾 `include/kernel/` | 2026-09 删除；驱动接口统一走 userlib + portal/mailbox + namespace |
 | ✅ 已落地 | RTC / sleep server | `user/server/clock/rtc_server.c` + `user/server/server_msgs.h` | 动态 portal，注册 "rtc"；`RTC_CMD_GET_TIME`（CMOS BCD）+ `RTC_CMD_SLEEP_MS`（latch PIT ch0 计数，内核从不重编程 PIT）；userlib `user_rtc_time/user_rtc_sleep_ms`，demo `timer_delay_ms` 已接入（失败 fallback yield 循环） |
 | ✅ 已落地 | 命名服务（namespace） | `user/server/ns/namespace_server.c` + `user/ns_proto.h` | 用户态 portal 服务（固定 PORTAL_ID_NAMESPACE）；`ns_register`/`ns_lookup` → {portal_id, mailbox_tid, mail_magic}（协议不进内核 ABI） |
 | ✅ 已落地 | mailbox 订阅/广播 | `kernel/ipc/mailbox.c` + `user/userlib.h` | 内核订阅注册表 + 广播过滤；userlib 封装 `user_mail_subscribe/send`（2026-09） |
 | 🟡 半成品 | 事件端到端接线 | `terminal_server.c` / 游戏 | kb 广播 + terminal 订阅回显完成（2026-09）；游戏 consumer 随 P1 demo |
-| ❌ 缺失 | 地址空间根治 | — | 低 16MB 仍 user-accessible |
+| ✅ 已落地 | MMIO 窗口 syscall | `kernel/mmio.c` + `SYSCALL_MMIO` | ring3 映射授权 MMIO 到自选高 VA（fixed + own_phys=0）；gate 校验 va≥USER_HEAP_END |
+| ✅ 已落地 | 低 16MB 隔离 | `arch/i386/paging.c` | 前 16MB 恒等映射改 `PTE_KERNEL`（2026-09）；ring3 不可再读写内核 text/堆/页表 |
+| ✅ 已基本消除 | 用户主线程栈落低区 | `arch/i386/paging.c`（split 已修）| 栈若落内核带也只暴露自身 4KB；可选后续：用户栈高区化（见 §2.8 / §3 P3） |
 
 ---
 
@@ -143,6 +147,10 @@ typedef enum {
   magic（如按键 `MSG_KEY_EVENT`）在 `user/server/server_msgs.h`。**内核只搬运、从不解释 magic**——
   新增应用消息类型零内核改动。
 - 投递：`send` 定向（按 receiver_tid）；`MAIL_ANY_TID` 广播（sender_pid/receiver_pid 字段已删）；`try_get_mail` 非阻塞取信。
+- **mail/mailmeta 拆分（2026-09）**：`mail`（用户可见，共享 user-heap `malloc`，ring3 直接读写，**无内核指针**）
+  与 `mailmeta`（内核堆 `kmalloc`：ref_count/sp_lock/队列节点/`payload`）分离。内核经全局 inflight 注册表
+  `get_mailmeta(m)` 按 payload 反查 meta——ring3 不再持有任何内核簿记指针，伪造/已释放的 mail* 安全失败。
+  mailbox syscall gate 拒绝 ring3 传入**非空 `mb`**（`mb==NULL` 由内核解析为调用线程自己的 mailbox）。
 - **订阅/广播（2026-09 完成，内核侧）**：`mailbox_subscribe_mail(mb, magic)` / `mailbox_unsubscribe_mail`
   维护每个 mailbox 的 `subscriptions[16]`；广播时只投递给订阅了 `m->magic` 的线程（有 handler 直接
   回调 / 无 handler 入队克隆）。`magic == 0` 永不匹配（subscribe 拒绝 0）；引用计数按「已订阅且有
@@ -172,8 +180,12 @@ typedef enum {
 ### 2.4 内存映射 + shm（第 3 步 ✅ 功能等价）
 
 - `vmm_map_memory(proc, phys, size, flags)` / `vmm_unmap_memory`：页对齐、`CAP_MAP_MEM` 检查、
-  逐页 `arch_map_4kb`、失败回滚。纯内核 API（ELF 装载 / shm 使用）；`SYSCALL_VMM` ring-3 gate 已移除。
-- `vmm_alloc_pages` / `vmm_free_pages` / `vmm_map_fixed`（ELF 装载用）/ `vmm_va_to_pa`：同上，内核内部使用。
+  逐页 `arch_map_4kb`、失败回滚。纯内核 API（shm 使用）；`SYSCALL_VMM` ring-3 gate 已移除。
+- `vmm_alloc_pages` / `vmm_free_pages` / `vmm_va_to_pa`：内核内部使用（分配用户页/栈）。
+- `vmm_map_fixed(proc, pa, vaddr, size, flags, own_phys)` / `vmm_unmap_fixed(proc, vaddr, size)`
+  （2026-09 起带 own_phys）：调用者指定 VA 的映射。`own_phys=1`（ELF loader）页归映射所有，销毁地址空间
+  或 `vmm_unmap_fixed` 时还 PMM；`own_phys=0`（MMIO）纯别名、永不还 PMM。`kernel/mmio.c`（`SYSCALL_MMIO`）
+  对 ring3 暴露 fixed + own_phys=0 子集。
 - `shm_share(pid, va, size, out)` / `shm_unshare`：portal 的数据通道。
 
 ### 2.5 用户态 server（第 5 步 ✅ 以实际方案落地）
@@ -187,7 +199,12 @@ typedef enum {
 | 资源授予 | `user_driver_start` 按 device 资源授予 | `init.c` 按 server 手写 grant 函数 |
 | 驱动注册 | `platform_driver_register` | server 在 namespace 注册 name → {portal_id, mailbox_tid, mail_magic} |
 
-- ✅ `terminal_server`：console portal 打印（注册 "console"；直写 `0xB8000` + 端口 `0x3D4/0x3D5` 移光标）+ 按键回显线程（ns 解析 kb magic 后订阅，uspinlock 保护 VGA 状态）。**兼作 graphics server**：解析 `ESC 'G'` 控制帧（`server_msgs.h` 的 `gfx_ctrl`）——`SET_MODE` 用 VGA 寄存器组切 mode 0x13/0x03，`BLIT` 把客户端 shm 的帧缓冲 memcpy 到 `0xA0000`；图形模式下文本打印与按键回显暂停。
+- ✅ `terminal_server`：console portal 打印（注册 "console"）+ 按键回显线程（ns 解析 kb magic 后订阅，uspinlock 保护 VGA 状态）。
+  **VGA 窗口经 `SYSCALL_MMIO` 映射到自选高 VA**：文本 `0xB8000`→`0xE0000000`、mode-13 fb `0xA0000`→`0xE0010000`
+  （init.c 授 `CAP_MAP_MEM` {0xB8000,0x1000}+{0xA0000,0x10000}）；低地址直写已不可用（低 16MB supervisor），
+  映射失败则指针 NULL、绘制路径 no-op。**兼作 graphics server**：解析 `ESC 'G'` 控制帧（`server_msgs.h` 的
+  `gfx_ctrl`）——`SET_MODE` 用 VGA 寄存器组切 mode 0x13/0x03，`BLIT` 把客户端帧缓冲拷到 gfx 高 VA 别名；
+  图形模式下文本打印与按键回显暂停。
 - ✅ `kb_server`：IRQ1 → mailbox → 排空 8042 → 广播 `MSG_KEY_EVENT`（`key_event{scancode,ascii,pressed}`）；可打印键兼写 COM1。
 - ✅ `rtc_server`：portal 服务注册 "rtc"（CMOS `{0x70,2}` + PIT `{0x40,4}` 经 `SYSCALL_IO`）——`RTC_CMD_GET_TIME` 读 BCD 时间、`RTC_CMD_SLEEP_MS` 用 latch PIT ch0 计数自旋（内核从不重编程 PIT，计数 ~0.838µs）。userlib `user_rtc_time/user_rtc_sleep_ms`；demo `timer_delay_ms` 走 SLEEP_MS RPC，失败 fallback yield 循环（server 未注册时 demo 进程自己已无 PIT/CMOS 端口能力）。
 - ⚠️ kb 未处理 E0 扩展码（方向键留给 demo 需要时再加）。
@@ -202,8 +219,11 @@ typedef enum {
 
 ### 2.7 已知问题与坑（GOTCHA）
 
-1. **低 16MB 内核区仍 user-accessible**：`arch_paging_init` 对前 16MB 身份映射用 `PTE_USER`，
-   `copy_*_user` 无法区分用户指针与指向低端内核区的指针。需地址空间重映射根治（见 P3）。
+1. ~~低 16MB 内核区 user-accessible~~（2026-09 已修）：前 16MB 恒等映射已改 `PTE_KERNEL`，ring3 无法再读写
+   内核 text/堆/页表；`copy_*_user` 的页表 walk 因此自动拒绝内核页（原「无下界」问题随之关闭）。VGA 访问由
+   `SYSCALL_MMIO` 高 VA 映射承担（见 §2.8）。
+   **残留（独立于此修复，2026-09 已基本消除）**：主线程栈可能落 16MB~kernel_end 段；`split_4mb_pde` 已修
+   （兄弟 PTE 保留 supervisor、仅目标页 user），栈只暴露自身 4KB，不再连带 pmm 位图（可选后续：用户栈高区化）。
 2. **第一个任务之前禁止 `int $100`**：`irq.S` 的 `RESTORE_REGS_KEEP_EAX` 会解引用 `curr_task_ctx`（NULL）
    → 栈损坏 → 重启循环。早期 boot 的 LOG 必须走 `klog_write` 直写。
 3. **mailbox 广播通配符两侧必须一致**：`MAIL_ANY_TID`（`include/ipc/mailbox.h`）必须等于
@@ -222,6 +242,59 @@ typedef enum {
    （`pmm_alloc_page` 会清零）都可能把手出的页落在模块区 → 模块内容被清零，装载时 elf 校验失败
    （症状：`user elf: validation failed`，`xp` 看模块物理内存全 0；首个 ~1MB 的 process_test.elf
    触发）。已在 `arch_paging_init` 里用新增的 `pmm_mark_used()` 保留全部模块区间。
+9. **菜单页/字体回归（2026-09 修复）**：terminal_server 曾在 `_start` 调用 `font_save()` 把 VGA
+   窗口临时改到 plane 2 读字体——但用户 ELF 与内核 `init_thread` 并发运行（加载即 `proc_unblock`），
+   该窗口期内核 kterm 写 0xB8000 被重定向进 VRAM，**冲坏字体**，选择页整屏乱码（空白行渲染成实心块）。
+   修复：启动时不再快照字体；`draw_menu` 改为 `ESC[2J`+全部行拼成**一次 portal 调用**原子渲染
+   （每行一次 RPC 会被并发输出打散），terminal `term_print` 支持行内 `ESC[2J/ESC[H`。
+10. **QEMU monitor `xp` 读 0xB8000 不可靠**：一旦有代码碰过 VGA GC/SEQ 寄存器，`xp` 读文本缓冲会
+    返回缺字/行重叠/NUL 带等假象（看起来像缓冲损坏）。真实缓冲要用**内核侧读回打到 COM1** 验证
+    （曾因此误判菜单被写坏数小时）；截屏（实际渲染输出）可靠。
+
+### 2.8 地址空间访问范围审计（2026-09 · 更新于低 16MB 隔离后）
+
+> 现状快照：**低 16MB 恒等映射 = `PTE_KERNEL`（2026-09 已隔离）**。内核镜像/堆/页表池/位图全部只对 ring0
+> 可见；ring3 能访问的只有 per-process `PTE_USER` 映射。用户高区：共享 user-heap `[0xC0000000,0xC1000000)`，
+> 用户 ELF 链接基址 `0xC1000000`（`user/user.ld`），mmio 固定 VA `0xE0000000/0xE0010000`，
+> `USER_SPACE_TOP = 0xF0000000`。
+
+**Ring0（内核）访问的地址范围**（低地址恒等映射；用户 CR3 下仍以 supervisor 访问）
+
+| 范围 | 内容 | 说明 |
+|------|------|------|
+| `0x00100000 ~ 0x00115420` | 内核 text/rodata/data | 1MB 起，恒等 |
+| `0x00115420 ~ 0x01115420` | 内核堆池 16MB（kmalloc）| `heap.c` 静态 `krn_heap`，supervisor-only |
+| `0x01122000 ~ 0x01922000` | 页表/页目录池 8MB | supervisor-only |
+| `0x01922000 ~ 0x01942000` | PMM 位图 128KB | supervisor-only |
+| `0x01942000`（`__kernel_end`）之后 | GRUB 模块区 | supervisor-only，`pmm_mark_used` 保留 |
+| `0x00000000 ~ 64MB` | 全部物理（恒等）| ring0 直接可达 |
+| `0x000B8000` / `0x000A0000` | VGA 文本 / mode-13 fb | supervisor（ring3 经 mmio 高 VA 别名访问）|
+
+**Ring3（用户）访问的地址范围**
+
+| 范围 | 内容 | 谁 |
+|------|------|------|
+| `0xC1000000 ~ +size` | ELF 代码/数据（per-process `PTE_USER`）| 所有 user server/demo |
+| `0xC1000000+size` 以上 | 附加线程栈（`vmm_alloc_pages`，per-process）| 各进程子线程 |
+| `0xC0000000 ~ 0xC1000000` | **共享 user-heap** 16MB（所有进程同一物理页；`SYSCALL_HEAP` malloc、mail 对象）| 所有进程 |
+| `0xE0000000` / `0xE0010000` | VGA 文本 / mode-13 fb 的 MMIO 高 VA 别名（`SYSCALL_MMIO` + `CAP_MAP_MEM`）| terminal_server |
+| ~`0x0194xxxx` 起低物理页 | **主线程用户栈**（`vmm_alloc_pages` 空树回退 `va=pa`，per-process `PTE_USER`）| 每进程主线程 |
+| `0x00000000 ~ 0x00FFFFFF` | **不可达**（supervisor）| —— |
+| 端口 `0x3C0-0x3DF`/`0x3F8`/`0x60-0x64`/`0x70-0x71`+`0x40-0x43` | io syscall（`CAP_ACCESS_IO`）| terminal/kb/log/rtc |
+
+**要点**：
+- mail 对象在共享 user-heap（ring3 可读写 payload），`mailmeta`/`mailbox`/全部内核簿记在 supervisor 内核堆；
+  ring3 已无任何「指向内核对象的指针」可解引用（syscall 句柄全为整数 / tid / `mb==NULL`）。
+- 原「对方案①（P3）最要紧的三条 ring3 低地址访问路径」已全部解除：VGA 走 mmio 高 VA；mailbox 视图已迁
+  用户堆（mail/meta 拆分）；主线程栈问题见下「剩余」。
+
+**剩余（低 16MB 隔离之外，独立存在）**：
+1. **（已基本消除）主线程栈落低物理页**：栈若落在 16MB~kernel_end 某 4MB 段，过去 `split_4mb_pde` 会把
+   整段切成 PTE_USER；2026-09 已修 split（兄弟 PTE 保留 supervisor、仅目标页 user），所以栈只会把自己那
+   4KB 变 user，不再连带暴露 pmm 位图 / 内核 .bss。可选后续：把用户栈/动态分配挪到高区，纯属卫生。
+2. **共享 user-heap 无进程隔离**：`[0xC0000000,0xC1000000)` 所有进程共享同一物理页（mail 传递依赖它），
+   ring3 进程间可互读/互写堆对象——若做 per-process 隔离需改 mailbox 数据通路。
+3. （已不需要）低 1MB 保留 VGA 用户窗口 / mailbox 内核堆视图——已由 mmio 高 VA + mail/meta 拆分替代。
 
 ---
 
@@ -269,20 +342,25 @@ typedef enum {
 | 子项 | 内容 | 位置 |
 |------|------|------|
 | 1. ✅ RTC server（已落地） | `rtc_server`：`CAP_ACCESS_IO(0x70-0x71)` + PIT `{0x40,4}`，portal 服务注册 "rtc"（GET_TIME / SLEEP_MS，同 log/terminal 模式） | `user/server/clock/` |
-| 2. 清理死代码 | 删除或归档 `include/kernel/driver.h`、`include/kernel/device.h`；`user/demo/` 在新版跑通后替换 | — |
+| 2. ✅ 清理死代码（已落地） | `include/kernel/driver.h` / `device.h` 已删（2026-09）；`user/demo/` 旧源文件在新版跑通后替换 | — |
 | 3. 用户态驱动 API | 若 demo 需要 `gfx_*` / `kb_poll` / `timer_*`，在 `user/server/server_msgs.h` 旁建一份用户侧 API 头，替代已删的 `drivers/*.h` | `user/` |
 
-### P3 — 地址空间根治（第 0 步遗留）
+### P3 — 地址空间隔离（第 0 步遗留 · 主体已落地 2026-09）
 
-**问题**：前 16MB 身份映射带 `PTE_USER` → `copy_*_user` 无法区分用户指针与低端内核指针。
+**已完成（2026-09）**：
+1. 低 16MB 恒等映射改 `PTE_KERNEL`（`arch/i386/paging.c`）——ring3 不再能读写内核 text/堆/页表；
+   `copy_*_user` 页表 walk 自动拒绝内核地址（原「无下界」问题关闭）。
+2. 三个前置阻塞逐项解除：mail/mailmeta 拆分（mail 迁共享 user-heap、内核 inflight 注册表反查）；
+   `SYSCALL_MMIO` 高 VA 映射承担 VGA（fixed + `own_phys=0`，`vmm_map_fixed` 加 own_phys 参数并新增
+   `vmm_unmap_fixed`）；mailbox gate 拒 ring3 非空 `mb`。
 
-**方向**：
-1. 内核页表与用户页表分离：用户进程的页目录**不映射**低 16MB（或只映射必要部分）。
-2. 内核映射改为只对内核可见（去掉 `PTE_USER`）。
-3. 相应调整 `proc_load_from_elf` 的装载路径（现在靠低端身份映射 + `memcpy` 规避）。
+**剩余工作**：
 
-> 这是**结构性改动**，牵一发动全身（syscall 的 kernel heap 低端映射、module 装载、portal 的 shm 共享都依赖低端映射）。
-> 建议放在 P0/P1 全部跑通、功能冻结后再动。
+| 子项 | 内容 | 位置 |
+|------|------|------|
+| 1.（已基本消除）用户栈高区化（可选）| `split_4mb_pde` 已修：只放开目标 PTE、兄弟保持 supervisor（2026-09）→ 主线程栈落在内核带也只暴露自身 4KB。若要做干净仍可把用户栈/动态分配改到高区（线程创建挪到 `elf_load` 之后 / user vcb 空树给高区起始 VA） | `kernel/mm/vmm.c`、`arch/i386/task.c`、`arch/i386/paging.c` |
+| 2. per-process user heap（可选）| `[0xC0000000,0xC1000000)` 现为所有进程共享同一物理页（mail 传递依赖）；若需进程间堆隔离，需改 mailbox 数据通路 | `kernel/mm/heap.c`、`kernel/ipc/mailbox.c` |
+| 3.（已不需要）低 1MB VGA 用户窗口 / mailbox 内核堆视图 | 已由 mmio 高 VA + mail/meta 拆分替代 | — |
 
 ---
 
@@ -293,7 +371,7 @@ typedef enum {
 | P0（除游戏 consumer 已完成） | 游戏 consumer（随 P1 demo） | 半天 | ⭐⭐ | `user/demo/*` |
 | P1 | 游戏 demo 上共享帧缓冲（graphics/timer/命名服务已完成） | 2-4 天 | ⭐⭐⭐ | `user/demo/*`、`user/server/display/` |
 | P2 | 清理（RTC + log server 已接线） | ~半天 | ⭐⭐ | `user/server/`、`makefile` |
-| P3 | 地址空间重映射 | 2-3 天 | ⭐⭐⭐⭐ | `arch/i386/paging.c`、`kernel/mm/vmm.c`、`kernel/syscall.c` |
+| P3（主体已落地） | 剩余（可选）：用户栈高区化 | ~0.5 天 | ⭐⭐ | `kernel/mm/vmm.c`、`arch/i386/task.c` |
 | **总计** | | **2-3 周** | | |
 
 ---
@@ -317,9 +395,14 @@ typedef enum {
 - ✅ 2026-09：修复 mailbox 广播 —— `MAIL_ANY_TID`/`USER_MAIL_ANY_TID` 不一致导致按键广播被当点对点丢弃
 - ✅ 2026-09：rtc_server.elf —— 用户态 RTC/sleep portal 服务（"rtc"）；demo `timer_delay_ms` 走 SLEEP_MS RPC，demo 进程的 PIT/PPI/CMOS 端口能力已收回
 - ✅ 2026-09：terminal_server 图形模式 —— `ESC 'G'` 控制帧切 mode 0x13 + BLIT；process_test 菜单 `[0]` 弹跳方块 demo（250 帧 @20ms，rtc sleep 驱动帧率，结束回文本）；另修复 **PMM 未保留 GRUB 模块区** 导致 ~1MB 模块被启动期分配清零、elf 校验失败的问题（`pmm_mark_used`）
+- ✅ 2026-09：mailbox mail/mailmeta 拆分 —— mail 迁共享 user-heap（ring3 不再持有内核簿记指针）、内核 inflight 注册表按 payload 反查、gate 拒 ring3 非空 `mb`
+- ✅ 2026-09：`SYSCALL_HEAP`（共享 user-heap malloc/free）+ `SYSCALL_MMIO`（`kernel/mmio.c`）—— terminal VGA 经 mmio 映射到高 VA（0xE0000000/0xE0010000），低地址回退移除
+- ✅ 2026-09：低 16MB 改 `PTE_KERNEL` —— ring3 不再可达内核 text/堆/页表（P3 主体落地，`copy_*_user` 语义干净）
+- ✅ 2026-09：清理死代码 —— 删除 `include/kernel/driver.h` / `device.h`（platform_bus 残留）
+- P3 剩余（可选）：用户主线程栈高区化（`split_4mb_pde` 已修，见 §3 P3）
 - P0 后：键盘事件能广播、游戏能收到（游戏 consumer 随 P1 demo）
 - P1 后：airplane/snake 作为独立进程在共享帧缓冲上运行
 - P2 后：死代码清理完毕（RTC 已可查时间，LOG 已走用户态 log server）
-- P3 后：用户地址空间与内核低端隔离，`copy_*_user` 语义干净
+- ✅ 2026-09（P3 主体）：用户地址空间与内核低端隔离（低 16MB = `PTE_KERNEL`），`copy_*_user` 语义干净；剩余：用户栈高区化
 
 **永远不要一次性改完所有东西再测试。**
