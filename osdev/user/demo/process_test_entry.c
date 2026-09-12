@@ -19,6 +19,9 @@ extern void process_api_test_main(void);
 extern void rbtree_test_main(void);
 extern void sched_mix_test_main(void);
 
+/* IPC benchmark, linked in from user/ipc_bench.c (menu option 9). */
+extern void ipc_bench_main(void);
+
 /* Set by a test suite just before it exits; the menu polls it. */
 volatile int test_finished_flag = 0;
 
@@ -78,7 +81,7 @@ static void draw_menu(void)
         "  [6] Run All Test Suites",
         "  [7] SHM Test Suite                    (not yet ported)",
         "  [8] SHM Stress Test                   (not yet ported)",
-        "  [9] Portal RPC Test Suite             (not yet ported)",
+        "  [9] IPC Ping-Pong Benchmark (ipc_bench)",
         "",
         "  Press 0, 1, 2, 3, 4, 5, 6, 7, 8 or 9 to select",
     };
@@ -236,7 +239,9 @@ void _start(void)
             note_not_ported("SHM Stress Test");
             break;
         case 9:
-            note_not_ported("Portal RPC Test Suite");
+            /* Runs in this (menu) thread and returns when done — the
+             * ipc_bench code is linked in, not a separate boot ELF. */
+            ipc_bench_main();
             break;
         default:
             break;

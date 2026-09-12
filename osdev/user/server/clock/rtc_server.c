@@ -3,28 +3,30 @@
  * ELF).
  *
  * A namespace portal service, registered under "rtc" (like log/terminal).
- * It owns two port ranges granted by init.c's grant_rtc_caps():
+ * It owns the CMOS RTC ports granted by init.c's grant_rtc_caps():
  *   - CMOS RTC   {0x70, 2}: BCD time/date reads (RTC_CMD_GET_TIME)
- *   - PIT ch 0   {0x40, 4}: latched free-running counter for precise
- *                 busy-loops (RTC_CMD_SLEEP_MS)
  *
- * The PIT is never reprogrammed by the kernel (scheduler IRQ0 runs at the
- * BIOS default, divisor 65536 ≈ 18.2 Hz), so the channel-0 counter
- * free-runs at 1193180 Hz and can be latched (command 0x00 via port 0x43)
- * for atomic 16-bit samples.  One count ≈ 0.838 µs → 1 ms ≈ 1193 counts.
- * Sampling wraps are accumulated in a u32, so arbitrarily long sleeps
- * work (unlike a single modulo-65536 window).
+ * SLEEP_MS is timed with the TSC: it is invariant and keeps counting
+ * while this thread is preempted, so a deadline loop is exact at any
+ * PIT frequency.  The TSC rate is calibrated against the RTC's 1 Hz
+ * seconds register — a divisor-independent reference, because by the
+ * time this server starts the FIRST boot process (pit_ramp.elf) has
+ * already raised PIT channel 0 to the final IRQ0 rate, so the old
+ * "count the PIT while it is at divisor 65536" method would no longer
+ * be exact (its u16 delta math only holds for a 65536-count period).
+ *
+ * The PIT itself is programmed ONLY by pit_ramp.elf at boot; this
+ * server never touches it.
  */
 #include "userlib.h"            /* portal/namespace ABI                 */
 #include "kernel/io.h"          /* ioread8/iowrite8 (user_service.c)    */
 #include "server/server_msgs.h" /* rtc_request / rtc_time / RTC_CMD_*   */
 #include <stddef.h>             /* size_t                               */
 
-#define CMOS_ADDR  0x70
-#define CMOS_DATA  0x71
-#define PIT_CH0    0x40
-#define PIT_CMD    0x43
-#define PIT_HZ     1193180UL
+#define CMOS_ADDR   0x70
+#define CMOS_DATA   0x71
+#define CMOS_SEC    0x00
+#define CMOS_STATB  0x0B
 
 static u8 cmos_read(u8 reg)
 {
@@ -37,15 +39,13 @@ static u8 bcd_to_bin(u8 v)
     return (u8)((v & 0x0F) + (v >> 4) * 10);
 }
 
-/* Atomic 16-bit sample of the free-running channel-0 counter. */
-static u16 pit_latch(void)
+/* Current seconds value, normalised (status-B bit 2 selects BCD/binary;
+ * the calibration only needs a value that changes once per second). */
+static u8 cmos_seconds(void)
 {
-    u8 lo, hi;
+    u8 s = cmos_read(CMOS_SEC) & 0x7F;
 
-    iowrite8(PIT_CMD, 0x00);        /* latch command: ch 0, latched read */
-    lo = ioread8(PIT_CH0);
-    hi = ioread8(PIT_CH0);
-    return (u16)(((u16)hi << 8) | lo);
+    return (cmos_read(CMOS_STATB) & 0x04) ? s : bcd_to_bin(s);
 }
 
 static void rtc_get_time(rtc_time* t)
@@ -88,21 +88,70 @@ static void rtc_get_time(rtc_time* t)
     t->second = sec;
 }
 
-/* Busy-spin on the latched PIT counter.  The counter decrements at
- * PIT_HZ; consecutive samples are far closer than one 65536 wrap (each
- * ioread8 is a syscall trap of microsecond scale), so the u32
- * accumulation handles sleeps longer than the ~55 ms wrap period. */
+/* ---- sleep: TSC deadline, calibrated against the RTC ------------- */
+
+static u64 rdtsc(void)
+{
+    u32 lo, hi;
+
+    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((u64)hi << 32) | lo;
+}
+
+static u64 g_tsc_hz = 0;            /* 0 = not calibrated yet */
+
+/* Calibrate the TSC against one full RTC second: wait for two
+ * consecutive seconds-register edges and measure the TSC span between
+ * them.  Divisor-independent (the RTC's 1 Hz is the wall clock), so it
+ * stays valid after pit_ramp.elf has raised the PIT rate.  The waits
+ * are bounded; on failure g_tsc_hz stays 0 and rtc_sleep degrades to a
+ * coarse yield loop. */
+#define CMOS_EDGE_GUARD   2000000
+
+static void tsc_calibrate(void)
+{
+    u8 sec, next;
+    u64 t0, t1;
+    u32 guard;
+
+    sec = cmos_seconds();
+    guard = 0;
+    while ((next = cmos_seconds()) == sec) {
+        if (++guard > CMOS_EDGE_GUARD)
+            return;                 /* RTC not ticking? give up */
+    }
+    t0 = rdtsc();
+
+    sec = next;
+    guard = 0;
+    while ((next = cmos_seconds()) == sec) {
+        if (++guard > CMOS_EDGE_GUARD)
+            return;
+    }
+    t1 = rdtsc();
+
+    if (t1 > t0)
+        g_tsc_hz = t1 - t0;         /* TSC ticks per RTC second */
+}
+
+/* SLEEP_MS — TSC deadline loop (exact at any PIT divisor and across
+ * preemption). */
 static void rtc_sleep(u32 ms)
 {
-    u32 need = ms * (PIT_HZ / 1000);
-    u32 elapsed = 0;
-    u16 last = pit_latch();
+    u64 target;
 
-    while (elapsed < need) {
-        u16 now = pit_latch();
-        elapsed += (u16)(last - now);   /* counter decrements */
-        last = now;
+    if (!g_tsc_hz) {
+        /* Calibration unavailable (RTC stopped?): coarse fallback so a
+         * client still returns rather than hanging. */
+        for (u32 i = 0; i < ms; i++)
+            for (u32 j = 0; j < 3000; j++)
+                user_yield();
+        return;
     }
+
+    target = rdtsc() + (g_tsc_hz / 1000) * ms;
+    while (rdtsc() < target)
+        __asm__ __volatile__("pause" ::: "memory");
 }
 
 void _start(void)
@@ -115,6 +164,11 @@ void _start(void)
         for (;;)
             user_yield();
     }
+
+    /* One-time TSC calibration against the RTC's 1 Hz seconds register
+     * (~1 s; the PIT rate was already settled by pit_ramp.elf, the
+     * first boot process, before this ELF was even loaded). */
+    tsc_calibrate();
 
     /* Publish under "rtc" so clients can resolve the portal id. */
     while (ns_register(NS_NAME_RTC, (u32)(uptr)cfg.out, 0, 0) != 0)

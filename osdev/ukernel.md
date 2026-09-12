@@ -253,10 +253,51 @@ typedef enum {
 10. **QEMU monitor `xp` 读 0xB8000 不可靠**：一旦有代码碰过 VGA GC/SEQ 寄存器，`xp` 读文本缓冲会
     返回缺字/行重叠/NUL 带等假象（看起来像缓冲损坏）。真实缓冲要用**内核侧读回打到 COM1** 验证
     （曾因此误判菜单被写坏数小时）；截屏（实际渲染输出）可靠。
-11. **thread_api_test（菜单 1）在 ipc_bench 也加载时 #GP（预先存在，2026-09 定位，与 LISTEN_BLOCK 无关）**：
-    thread_api_test 的线程 create/block/unblock/exit 风暴 + ipc_bench 结尾 `for(;;) user_yield()` 空闲线程
-    触发潜在调度竞态（某线程内核栈保存帧被毁，`iret` #GP）。把全部 LISTEN_BLOCK 改动还原后仍复现；
-    **在 `init.c` 里禁用 ipc_bench 加载即消失**。根因未深挖。教训：在这套代码上做二分/崩溃测试，先禁 ipc_bench。
+11. **【已修复 2026-09】syscall gate 判 ring-3 恒假 → kbuf 拷贝路径从未生效 → 尾阻塞后 #PF（菜单 9/ipc_bench 必崩）**：
+    `kernel/syscall.c` 的 `syscall_dispatch` 原本用 `arch_running_ring3()` 判断“调用者是 ring3 吗”，
+    但该辅助函数读的是**当前 CS**——在 gate 内部恒为 CPL0，判断**永远为假**：kbuf 拷贝路径是**死代码**，
+    所有 ring3 handler 一直在**直接解引用调用者原始指针**。一旦 handler 尾阻塞
+    （`MAILBOX_CTRL_LISTEN_BLOCK`：`thread_block()` 内部已把 CR3 切到下一个线程/进程），handler 的
+    C 尾部继续执行（`mailbox_exec` 的 `return config->ret`、`syscall_dispatch` 的
+    `copy_to_user/kfree(kbuf)`），并在**错误 CR3** 下访问调用者栈上的 config（用户栈可能落在
+    0x19xxxxx 内核带，仅本进程 CR3 可见）→ **#PF**（CR2 = config+偏移，如 `0x01981F94`）。
+    复现（修复前 100%）：`process_test` 菜单 **9**（ipc_bench，源码现已并入 process_test.elf）第一次运行即崩。
+    **修复**（本次已落地）：
+    - `gate_caller_ring3()` 改读**保存帧的 CS**（`curr_task_ctx->regs->cs & 3`，`arch_task.h`）→ kbuf 路径真正生效；
+    - 小配置的 kbuf 改为 kernel `.bss` 静态缓冲 `syscall_kbuf[512]`：低端内存在**任何 CR3** 下都映射，
+      而新 kmalloc 的堆页在“进程创建时克隆过内核 PDE”的旧页目录里可能不存在；
+    - handler 前后若 `arch_get_cr3()` 变化（发生了尾阻塞），**跳过 `copy_to_user` 与 `kfree`**
+      （不得在下一个线程的 CR3 下触碰调用者地址 / 堆缓冲）。
+    验证：修复后菜单 9 完整跑通（mailbox ~1.3 ms/往返、portal ~105 µs、“portal ~13x faster”）。
+12. **【待 debug · OPEN】线程风暴 + 键盘活动 → `thread_create` 内 `pmm_alloc_pages` 清零页时写 #PF**：
+    现象：`process_test` 菜单 **1**（thread_api_test 的线程 create/block/unblock/exit 风暴）叠加键盘输入
+    （人机节奏或连打）时，内核在 `proc_syscall_isr → proc_syscall_exec → thread_create_ex_internal →
+    arch_task_context_init → vmm_alloc_pages → pmm_alloc_pages` 的 **`memset`（清零新分配页）** 处写 fault：
+    - CR2 ≈ `0x01983000`（kernel band：16MB~kernel_end 一带的低物理页）；
+    - Error code = `0x2`（**写**、non-present、kernel-mode）；
+    - 含义：**当前 CR3 缺少这段内核映射**——正在“分配/清零内核页”的代码，运行在一个看不到该内核带的
+      地址空间里（对比第 11 条：修复前是访问调用者指针；这里是访问内核自身内存）。
+    目前线索：
+    - `arch_paging_init` 在 boot 已把 0~64MB 恒等映射为 4MB 页（PSE），`arch_clone_kernel_pde` 在进程创建时
+      克隆**全部** PDE——理论上每个用户 PD 都应覆盖内核带；
+    - 高度可疑：**进程页目录的生命周期**——`vmm_destroy`/`arch_destroy_address_space` 释放“非共享 PDE 指向的
+      页表”后是否留下**悬垂 PDE**；以及 `split_4mb_pde` 拆出的 per-PD 页表在被释放/复用后，仍有线程运行在
+      旧 CR3（延迟切换）并访问内核带 → 叶表已失效/被清零 → #PF。
+    复现方法（headless，已脚本化；另有历史同族 #GP：`arch_syscall_entry` iret 保存帧被毁，疑似同一类生命周期问题）：
+    ```sh
+    make all
+    qemu-system-i386 -cdrom output/myos.iso -serial file:serial.log -display none -no-reboot \
+        -monitor unix:/tmp/mon,server,nowait
+    python3 tools/gp_repro.py     # 连 monitor、boot 后周期 sendkey 1；也可自写 python 发键
+    ```
+    `serial.log` 抓 `KERNEL EXCEPTION … CR2 … EIP`；用
+    `i686-elf-addr2line -e output/myos.bin -f -p -C <EIP>` 解析符号。
+    下一步建议：
+    1) exception dump 里**加打印 CR3**（`arch_get_cr3()`）+ 当前 `thread_run` 的 pid/tid，确认“谁在什么 CR3 下”出错；
+    2) `vmm_destroy`/`arch_destroy_address_space` 加断言：被销毁的 PD 是否仍等于当前 CR3；释放非共享页表时
+       同时把对应 PDE 清 0；
+    3) 复核 `split_4mb_pde` 的页表归属：拆出的 PT 是否可能被销毁后复用，而仍有活跃线程访问这段 4MB 内核带。
+    （与第 11 条不是同一处；菜单 9 / ipc_bench 在修复后已稳定，本项只影响“线程风暴 + 键盘”场景。）
 
 ### 2.8 地址空间访问范围审计（2026-09 · 更新于低 16MB 隔离后）
 

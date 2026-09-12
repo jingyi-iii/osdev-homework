@@ -12,11 +12,13 @@
  *                server's GET_TIME (user_rtc_time) — the client blocks
  *                until the server replies.
  *
- * The TSC is calibrated against user_rtc_sleep_ms() (PIT-counter delay
- * served by the rtc server), so results are reported in microseconds.
+ * The TSC is calibrated against user_rtc_sleep_ms() (a TSC-deadline
+ * delay served by the rtc server), so results are reported in
+ * microseconds.
  *
- * Needs only CAP_IPC (mailbox + portal gates).  Loaded as the last GRUB
- * module so namespace / console / log / rtc servers are already up.
+ * Runs as a MENU ITEM of process_test.elf (option 9): the PIT has long
+ * been ramped by pit_ramp.elf (the first boot process) and all servers
+ * are up, so no boot-order gating is needed here.
  */
 #include "userlib.h"
 
@@ -104,19 +106,27 @@ static int bench_get_tid(void)
     return cfg.tid;
 }
 
+static int g_echo_tid = -1;             /* created on first use, reused */
+
 static u64 bench_mailbox(int n, int mytid)
 {
     user_proc_ctrl tc = {0};
 
-    /* Spawn the echo thread (born TS_PENDING, then unblock). */
-    tc.cmd   = U_THREAD_CTRL_CREATE;
-    tc.priv  = 1;                        /* TASK_PRIV_USER */
-    tc.entry = (void*)(uptr)echo_thread;
-    user_syscall(SYSCALL_PROC_THREAD, &tc, sizeof(tc));
-    if (tc.tid <= 0)
-        return 0;
-    tc.cmd = U_THREAD_CTRL_UNBLOCK;      /* tc.tid filled by CREATE */
-    user_syscall(SYSCALL_PROC_THREAD, &tc, sizeof(tc));
+    /* Spawn the echo thread ONCE (born TS_PENDING, then unblock).  As a
+     * menu item this function can run repeatedly, so the thread is
+     * cached instead of leaking one per invocation; it parks in
+     * user_mail_listen() between rounds. */
+    if (g_echo_tid < 0) {
+        tc.cmd   = U_THREAD_CTRL_CREATE;
+        tc.priv  = 1;                    /* TASK_PRIV_USER */
+        tc.entry = (void*)(uptr)echo_thread;
+        user_syscall(SYSCALL_PROC_THREAD, &tc, sizeof(tc));
+        if (tc.tid <= 0)
+            return 0;
+        g_echo_tid = tc.tid;
+        tc.cmd = U_THREAD_CTRL_UNBLOCK;  /* tc.tid filled by CREATE */
+        user_syscall(SYSCALL_PROC_THREAD, &tc, sizeof(tc));
+    }
 
     /* One mail object is reused for every round: ownership moves
      * sender -> queue -> echo -> queue -> back to us, ref_count stays 1,
@@ -132,7 +142,7 @@ static u64 bench_mailbox(int n, int mytid)
 
     u64 sum = 0;
     for (int i = 0; i < n; i++) {
-        mm->receiver_tid = tc.tid;       /* echo thread */
+        mm->receiver_tid = g_echo_tid;   /* echo thread */
         u64 t0 = bench_rdtsc();
         user_mail_send(m);
         void* r = user_mail_listen();    /* blocks until echo replies */
@@ -166,8 +176,13 @@ static u64 bench_portal(int n)
     return sum;
 }
 
-/* ---- TSC calibration: cycles per second via a known PIT sleep ------ */
+/* ---- TSC calibration: cycles per second via a known rtc delay ------ */
 
+/* Calibrate the TSC rate against two rtc SLEEP_MS calls (the first one
+ * settles, the second is timed).  The rtc server is single-threaded, so
+ * this must not run while another client is mid-sleep — as a menu item
+ * it is only triggered when the system is idle, and nothing else long-
+ * sleeps once pit_ramp.elf has finished. */
 static u64 calibrate_hz(void)
 {
     user_rtc_sleep_ms(50);                 /* settle */
@@ -180,7 +195,9 @@ static u64 calibrate_hz(void)
     return (t1 - t0) * 20;                 /* 50 ms -> per second */
 }
 
-void _start(void)
+/* Menu entry (process_test option 9).  Runs in the caller's thread and
+ * RETURNS to the menu — it must not thread_exit the caller. */
+void ipc_bench_main(void)
 {
     u64 hz;
 
@@ -192,8 +209,7 @@ void _start(void)
     hz = calibrate_hz();
     if (hz == 0) {
         user_log_str("[ipc-bench] calibration failed (rtc server not up?)\n");
-        for (;;)
-            user_yield();
+        return;
     }
 
     buf_reset();
@@ -228,6 +244,4 @@ void _start(void)
     }
 
     user_log_str("[ipc-bench] done\n");
-
-    user_thread_exit(user_thread_get_tid());
 }

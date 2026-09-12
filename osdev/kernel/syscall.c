@@ -1,10 +1,34 @@
 #include "kernel/syscall.h"
 #include "kernel/errno.h"
+#include "kernel/log.h"
+#include "kernel/uapi.h"
 #include "lib/string.h"
 #include "lib/module.h"
 #include "sync/spinlock.h"
 #include "arch_irq.h"
 #include "arch_mem.h"
+#include "paging.h"          /* arch_get_cr3 */
+#include "arch_task.h"       /* arch_task_context / regs */
+
+/* Current thread's saved context (arch/i386/task.c). */
+extern volatile arch_task_context* curr_task_ctx;
+
+/*
+ * True when the current syscall gate was entered FROM RING 3.  The live
+ * arch_running_ring3() reads the current CS — inside the gate that is
+ * always CPL0, so it cannot be used here.  The SAVED frame's CS is
+ * authoritative: for a ring-3 caller the gate pushed the user CS onto
+ * the per-thread frame; for a ring-0 caller (kernel thread, nested gate
+ * call) it is the kernel CS.
+ */
+static int gate_caller_ring3(void)
+{
+    arch_task_context* ctx = (arch_task_context*)curr_task_ctx;
+
+    if (!ctx || !ctx->regs)
+        return 0;
+    return (ctx->regs->cs & 3) == 3;
+}
 
 static LIST_HEAD(syscall_header);
 static spinlock syscall_lock = { .state = LOCK_UNLOCKED };
@@ -69,6 +93,21 @@ int syscall_unregister(i32 handle)
     return E_NOTFOUND;
 }
 
+/*
+ * Kernel copy of a ring-3 syscall config.  It MUST live in the low
+ * identity map (kernel .bss, below 16MB): a tail-blocking handler
+ * (MAILBOX_CTRL_LISTEN_BLOCK) may keep executing its C tail AFTER
+ * thread_block() has already switched CR3 to the next thread — and
+ * per-process page directories only clone the kernel PDEs that existed
+ * when the process was created (arch_clone_kernel_pde), so a freshly
+ * kmalloc'd heap page (>= ~25MB) may be absent from that other CR3 and
+ * fault on access.  The .bss buffer is mapped under every CR3.  Syscall
+ * dispatch is serialized (the gate refuses re-entry), so one shared
+ * buffer is enough.
+ */
+#define SYSCALL_KBUF_MAX  512
+static u8 syscall_kbuf[SYSCALL_KBUF_MAX];
+
 int syscall_dispatch(u32 handle, void* arg, size_t size)
 {
     int ret = E_NOTFOUND;
@@ -108,25 +147,42 @@ int syscall_dispatch(u32 handle, void* arg, size_t size)
      * never sees garbage beyond what the caller provided and no stale
      * heap bytes can leak back to user space.
      */
-    if (arch_running_ring3()) {
+    if (gate_caller_ring3()) {
         size_t n = (size < max_param_size) ? size : max_param_size;
         size_t buf_size = max_param_size ? max_param_size : 1;
-        void* kbuf = kmalloc(buf_size);
+        int kmalloc_buf = (buf_size > SYSCALL_KBUF_MAX);
+        void* kbuf = kmalloc_buf ? kmalloc(buf_size) : (void*)syscall_kbuf;
+
         if (!kbuf)
             return E_NOMEM;
         memset(kbuf, 0, buf_size);
 
         if (copy_from_user(kbuf, arg, n) != 0) {
-            kfree(kbuf);
+            if (kmalloc_buf)
+                kfree(kbuf);
             return E_FAULT;
         }
 
         /* The handler runs on the kernel copy of the caller's config, so
-         * it never dereferences caller memory directly. */
+         * it never dereferences caller memory directly.  Record CR3: a
+         * tail-blocking handler switches address space inside
+         * thread_block(), and from then on BOTH the caller's user
+         * addresses (arg) and a kmalloc'd buffer are off limits — the
+         * woken thread resumes in user mode after the syscall instead. */
+        u32 cr3_before = arch_get_cr3();
+
         ret = fn(kbuf);
-        if (copy_to_user(arg, kbuf, n) != 0 && ret == 0)
-            ret = E_FAULT;
-        kfree(kbuf);
+
+        if (arch_get_cr3() == cr3_before) {
+            if (copy_to_user(arg, kbuf, n) != 0 && ret == 0)
+                ret = E_FAULT;
+            if (kmalloc_buf)
+                kfree(kbuf);
+        }
+        /* else: tail-blocked.  Deliver nothing back and leak the kmalloc
+         * fallback buffer (never happens for the registered configs,
+         * all < SYSCALL_KBUF_MAX) — touching either would fault under
+         * the next thread's CR3. */
     } else {
         ret = fn(arg);
     }

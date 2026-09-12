@@ -13,6 +13,23 @@
  * server gets exactly the resources its code touches through the io /
  * irq / ipc syscall gates.
  */
+
+/* pit_ramp.elf — FIRST boot process: calibrates the TSC and steps PIT
+ * channel 0 up to the highest stable IRQ0 rate (write-test per step),
+ * logging straight to COM1 because no server exists yet.  It exits when
+ * done; init_thread waits for it before loading anything else.  It
+ * talks to no service, so port I/O only — no CAP_IPC. */
+static void grant_pit_ramp_caps(pcb* proc)
+{
+    if (!proc)
+        return;
+
+    cap_io_port pit  = { 0x40, 4 };    /* PIT ch0: latch + reprogram   */
+    cap_io_port com1 = { 0x3F8, 8 };   /* COM1: write-test log         */
+    cap_grant(proc, CAP_ACCESS_IO, &pit);
+    cap_grant(proc, CAP_ACCESS_IO, &com1);
+}
+
 /* namespace_server.elf — user namespace service at the fixed
  * PORTAL_ID_NAMESPACE portal (the bootstrap name -> id registry).  Only
  * the portal gate is used, so CAP_IPC is enough. */
@@ -111,43 +128,19 @@ static void grant_log_caps(pcb* proc)
 }
 
 /* rtc_server.elf — user-mode RTC / sleep server.  Registers "rtc" in the
- * namespace and serves GET_TIME (CMOS 0x70-0x71) + SLEEP_MS (latched PIT
- * channel-0 counter, ports 0x40-0x43) over its dynamic portal.  Needs
- * CAP_ACCESS_IO for both port ranges + CAP_IPC for the portal gate. */
+ * namespace and serves GET_TIME (CMOS 0x70-0x71) + SLEEP_MS (TSC
+ * deadline loop; the TSC is calibrated against the RTC's 1 Hz seconds)
+ * over its dynamic portal.  Needs CAP_ACCESS_IO for the CMOS ports +
+ * CAP_IPC for the portal gate — the PIT no longer belongs to it (only
+ * pit_ramp.elf programs it). */
 static void grant_rtc_caps(pcb* proc)
 {
     if (!proc)
         return;
 
     cap_io_port cmos = { 0x70, 2 };    /* CMOS RTC 0x70-0x71  */
-    cap_io_port pit  = { 0x40, 4 };    /* PIT 0x40-0x43       */
     int ipc_ok = 1;
     cap_grant(proc, CAP_ACCESS_IO, &cmos);
-    cap_grant(proc, CAP_ACCESS_IO, &pit);
-    cap_grant(proc, CAP_IPC, &ipc_ok);
-}
-
-/* hello.elf — first user ELF demo.  It prints to the console and logs to
- * COM1 through the namespace-resolved console/log portals; both are portal
- * RPCs behind the CAP_IPC gate (portal_call shm-shares the buffer). */
-static void grant_hello_caps(pcb* proc)
-{
-    if (!proc)
-        return;
-
-    int ipc_ok = 1;
-    cap_grant(proc, CAP_IPC, &ipc_ok);
-}
-
-/* ipc_bench.elf — IPC ping-pong latency benchmark.  Uses the mailbox gate
- * (directed mail between its own threads) and portal RPCs to the rtc/log
- * servers; CAP_IPC covers both gates, no port I/O needed. */
-static void grant_bench_caps(pcb* proc)
-{
-    if (!proc)
-        return;
-
-    int ipc_ok = 1;
     cap_grant(proc, CAP_IPC, &ipc_ok);
 }
 
@@ -227,6 +220,24 @@ void init_thread(void)
     kterm_switch_to_text_mode();
     kterm_clear();
 
+    /* FIRST user process: raise the PIT to its final IRQ0 rate and
+     * exit.  Wait here (hlt-poll) so every later ELF starts with the
+     * settled tick rate — no client-side "ramp done?" probing. */
+    kterm_write("[launcher] starting pit_ramp.elf\n");
+    {
+        i32 pit_pid = load_user_elf_by_name("pit_ramp.elf", grant_pit_ramp_caps);
+
+        if (pit_pid > 0) {
+            int spins = 0;
+
+            while (get_process_by_pid(pit_pid) && spins++ < 20000)
+                __asm__ __volatile__("hlt");
+
+            if (spins >= 20000)
+                LOG("pit_ramp: wait timed out");
+        }
+    }
+
     kterm_write("[launcher] starting namespace_server.elf\n");
     load_user_elf_by_name("namespace_server.elf", grant_ns_caps);
 
@@ -251,18 +262,18 @@ void init_thread(void)
     kterm_write("[launcher] running portal_test.elf\n");
     load_user_elf_by_name("portal_test.elf", grant_demo_caps);
 
-    /* hello.elf — first user ELF demo: console portal + log portal. */
-    kterm_write("[launcher] running hello.elf\n");
-    load_user_elf_by_name("hello.elf", grant_hello_caps);
+    /* hello.elf — REMOVED from the boot set: its 2000 ms boot sleep
+     * monopolised the single-threaded rtc server.  To bring it back,
+     * rebuild user/hello.c as a GRUB module and add the launcher call
+     * here (its old CAP_IPC-only grant). */
 
     /* process_test.elf — keyboard-driven demo test menu (runs the ported
      * demo suites as threads; needs CAP_IPC for the console portal). */
     kterm_write("[launcher] running process_test.elf\n");
     load_user_elf_by_name("process_test.elf", grant_demo_caps);
 
-    /* ipc_bench.elf — IPC ping-pong latency benchmark (logs to COM1). */
-    kterm_write("[launcher] running ipc_bench.elf\n");
-    load_user_elf_by_name("ipc_bench.elf", grant_bench_caps);
+    /* ipc_bench is no longer a boot ELF: it is linked into
+     * process_test.elf and triggered from its menu (option 9). */
 
     proc_exit(proc_get_pid());
 }

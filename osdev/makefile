@@ -44,9 +44,11 @@ RTC_ELF  := $(OUT_DIR)rtc_server.elf
 HELLO_SRCS := user/hello.c user/userlib.c
 HELLO_ELF  := $(OUT_DIR)hello.elf
 
-# ipc_bench.elf — IPC ping-pong latency benchmark (TSC timing; CAP_IPC only).
-IPCBENCH_SRCS := user/ipc_bench.c user/userlib.c
-IPCBENCH_ELF  := $(OUT_DIR)ipc_bench.elf
+# pit_ramp.elf — FIRST boot process: calibrates the TSC, steps PIT ch0 up
+# to the highest stable IRQ0 rate (write-test per step, logged to COM1)
+# and exits; kernel/init.c waits for it before loading the other ELFs.
+PIT_RAMP_SRCS := user/pit_ramp.c user/userlib.c user/server/user_service.c
+PIT_RAMP_ELF  := $(OUT_DIR)pit_ramp.elf
 
 # process_test.elf — keyboard-driven text-mode test menu.  The ported demo
 # suites run as threads of this process; kernel/lib/{rbtree,string,spinlock}
@@ -59,6 +61,7 @@ PROCESS_TEST_SRCS := user/demo/process_test_entry.c \
 	user/demo/sched_mix_test.c \
 	user/demo/rbtree_test.c \
 	user/demo/demo_kmalloc.c \
+	user/ipc_bench.c \
 	kernel/lib/rbtree.c \
 	kernel/lib/string.c \
 	kernel/sync/spinlock.c \
@@ -96,16 +99,15 @@ MEMORY_MAP := $(OUT_DIR)memory_map
 # The user ELFs are shipped as separate GRUB multiboot modules (see
 # config/grub.cfg), NOT embedded into the kernel image.  The ISO must
 # depend on them and copy them next to the kernel binary.
-$(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) $(NS_ELF) $(PORTAL_ELF) $(TERMINAL_ELF) $(KB_ELF) $(LOG_ELF) $(RTC_ELF) $(HELLO_ELF) $(PROCESS_TEST_ELF) $(IPCBENCH_ELF) | $(OUT_DIR) $(GRUB_DIR)
+$(TARGET_ISO): $(TARGET_BIN) $(GRUBFILE) $(PIT_RAMP_ELF) $(NS_ELF) $(PORTAL_ELF) $(TERMINAL_ELF) $(KB_ELF) $(LOG_ELF) $(RTC_ELF) $(PROCESS_TEST_ELF) | $(OUT_DIR) $(GRUB_DIR)
 	cp $(TARGET_BIN) $(OUT_DIR)iso/boot/myos.bin
+	cp $(PIT_RAMP_ELF) $(OUT_DIR)iso/boot/
 	cp $(NS_ELF) $(OUT_DIR)iso/boot/
 	cp $(PORTAL_ELF) $(OUT_DIR)iso/boot/
 	cp $(TERMINAL_ELF) $(OUT_DIR)iso/boot/
 	cp $(KB_ELF) $(OUT_DIR)iso/boot/
 	cp $(LOG_ELF) $(OUT_DIR)iso/boot/
 	cp $(RTC_ELF) $(OUT_DIR)iso/boot/
-	cp $(HELLO_ELF) $(OUT_DIR)iso/boot/
-	cp $(IPCBENCH_ELF) $(OUT_DIR)iso/boot/
 	cp $(PROCESS_TEST_ELF) $(OUT_DIR)iso/boot/
 	cp $(GRUBFILE) $(GRUB_DIR)
 	grub-mkrescue -o $(TARGET_ISO) $(OUT_DIR)iso
@@ -158,8 +160,8 @@ $(RTC_ELF): $(RTC_SRCS) $(USER_LD) | $(OUT_DIR)
 $(HELLO_ELF): $(HELLO_SRCS) $(USER_LD) | $(OUT_DIR)
 	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(HELLO_SRCS) -o $@ -lgcc
 
-$(IPCBENCH_ELF): $(IPCBENCH_SRCS) $(USER_LD) | $(OUT_DIR)
-	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(IPCBENCH_SRCS) -o $@ -lgcc
+$(PIT_RAMP_ELF): $(PIT_RAMP_SRCS) $(USER_LD) | $(OUT_DIR)
+	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(PIT_RAMP_SRCS) -o $@ -lgcc
 
 $(PROCESS_TEST_ELF): $(PROCESS_TEST_SRCS) $(USER_LD) | $(OUT_DIR)
 	$(CC) $(USER_CFLAGS) -T $(USER_LD) $(PROCESS_TEST_SRCS) -o $@ -lgcc

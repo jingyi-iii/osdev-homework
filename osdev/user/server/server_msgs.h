@@ -37,7 +37,7 @@ typedef struct rtc_time {
 
 enum {
     RTC_CMD_GET_TIME = 1,   /* read CMOS RTC, fills .time               */
-    RTC_CMD_SLEEP_MS = 2,   /* busy-delay .sleep_ms via the PIT counter */
+    RTC_CMD_SLEEP_MS = 2,   /* timed delay of .sleep_ms (TSC deadline)  */
 };
 
 typedef struct rtc_request {
