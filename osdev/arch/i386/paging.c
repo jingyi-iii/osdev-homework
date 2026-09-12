@@ -6,7 +6,8 @@
  *      arrays (page-aligned, part of the kernel image).
  *   2. Identity-maps the first N megabytes so the kernel can keep
  *      running after paging is enabled.
- *   3. Also maps the kernel at KERNEL_BASE_VADDR (higher-half).
+ *   3. Reserves the high user area ([0xC0000000,0xC1000000) user heap,
+ *      0xC1000000+ user ELF) — mapped per-process on demand, NOT here.
  *   4. Initialises the PMM with the remaining free physical memory.
  *   5. Calls arch_set_kernel_pdir() to register the master PD.
  *
@@ -14,62 +15,124 @@
  * arch_paging_init() exactly once before any process creation.
  */
 
-#include "mm/paging.h"
+#include "paging.h"
 #include "mm/pmm.h"
 #include "lib/string.h"
 #include "sync/spinlock.h"
-#include "drivers/log_driver.h"
+#include "multiboot.h"   /* reserve GRUB module images in the PMM */
+#include "kernel/log.h"
 
 /* ------------------------------------------------------------------ */
 /* Extern: linker-defined PMM bitmap section                          */
 /* ------------------------------------------------------------------ */
-extern uint8_t __pmm_bitmap_start[];   /* defined in linker.ld */
+extern u8 __pmm_bitmap_start[];   /* defined in linker.ld */
 
-static pde_t pdes[1024] __attribute__((aligned(PAGE_SIZE)));
+static pde pdes[1024] __attribute__((aligned(PAGE_SIZE)));
 static spinlock* paging_lock;
 
 /* The kernel's master page directory (physical address).
  * All user processes clone kernel-space entries from here. */
-static uint32_t kernel_pdir_phys = 0;
+static u32 kernel_pdir_phys = 0;
 
-static inline pde_t* pdir_of(uint32_t pdir_phys)
+/* ------------------------------------------------------------------ */
+/* Paging-structures pool                                              */
+/*                                                                     */
+/* Page directories AND page tables are accessed through their         */
+/* identity VA (pdir_of / ptbl_of_pde).  To guarantee they can never   */
+/* numerically collide with a user VA (also identity-mapped), both are */
+/* carved from a fixed linker-reserved region (linker.ld .page_tables) */
+/* that the PMM never hands out — the free pool starts after           */
+/* __page_table_end.                                                   */
+/* ------------------------------------------------------------------ */
+extern u32 __page_table_base[];
+extern u32 __page_table_end[];
+
+#define VMM_PDE_ALLOC_BASE  ((u32)__page_table_base)
+#define VMM_PDE_ALLOC_SIZE  (8u * 1024 * 1024)
+#define VMM_PDE_ALLOC_END   ((u32)__page_table_end)
+
+/* one 4 KB slot per page table / directory; 8 MB pool => 2048 slots */
+#define PAGING_POOL_SLOTS (VMM_PDE_ALLOC_SIZE / PAGE_SIZE)
+
+static spinlock* paging_pool_lock = 0;
+/* one bit per slot: 1 = in use */
+static u32 paging_pool_used[(PAGING_POOL_SLOTS + 31) / 32];
+
+void* arch_paging_pool_alloc(void)
 {
-    return (pde_t*)pdir_phys;
+    if (!paging_pool_lock)
+        return 0;
+
+    spinlock_lock(paging_pool_lock);
+    for (size_t i = 0; i < PAGING_POOL_SLOTS; i++) {
+        if (!(paging_pool_used[i / 32] & (1u << (i % 32)))) {
+            paging_pool_used[i / 32] |= (1u << (i % 32));
+            u32 pa = VMM_PDE_ALLOC_BASE + i * PAGE_SIZE;
+            memset((void*)pa, 0, PAGE_SIZE);
+            spinlock_unlock(paging_pool_lock);
+            return (void*)pa;
+        }
+    }
+    spinlock_unlock(paging_pool_lock);
+
+    LOG("arch_paging_pool_alloc: paging-structures pool exhausted");
+    return 0;
 }
 
-static inline pte_t* ptbl_of(uint32_t ptbl_phys)
+void arch_paging_pool_free(u32 pa)
 {
-    return (pte_t*)ptbl_phys;
+    if (!paging_pool_lock)
+        return;
+
+    /* ignore addresses outside the pool (e.g. 4 MB chunk PDEs) */
+    if (pa < VMM_PDE_ALLOC_BASE || pa >= VMM_PDE_ALLOC_END)
+        return;
+
+    size_t i = (pa - VMM_PDE_ALLOC_BASE) / PAGE_SIZE;
+
+    spinlock_lock(paging_pool_lock);
+    paging_pool_used[i / 32] &= ~(1u << (i % 32));
+    spinlock_unlock(paging_pool_lock);
 }
 
-static inline pte_t* ptbl_of_pde(pde_t* pde)
+static inline pde* pdir_of(u32 pdir_phys)
 {
-    return (pte_t*)(pde->paddr << 12);
+    return (pde*)pdir_phys;
+}
+
+static inline pte* ptbl_of(u32 ptbl_phys)
+{
+    return (pte*)ptbl_phys;
+}
+
+static inline pte* ptbl_of_pde(pde* pde)
+{
+    return (pte*)(pde->paddr << 12);
 }
 
 /* Invalidate a single TLB entry */
-static inline void tlb_invlpg(uint32_t vaddr)
+void arch_tlb_invlpg(u32 vaddr)
 {
     __asm__ __volatile__("invlpg (%0)" : : "r"(vaddr) : "memory");
 }
 
-void arch_map_4mb(void* cr3, void* va, void* pa, uint32_t flags)
+void arch_map_4mb(void* cr3, void* va, void* pa, u32 flags)
 {
-    pde_t* pdes = (pde_t*)cr3;
+    pde* pdes = (pde*)cr3;
     size_t pde_index = PD_INDEX(va);
 
     if (pde_index >= 1024) {
-        KLOG("arch_map_4mb: virtual address out of range");
+        LOG("arch_map_4mb: virtual address out of range");
         return;
     }
 
     if (!pdes) {
-        KLOG("arch_map_4mb: invalid cr3");
+        LOG("arch_map_4mb: invalid cr3");
         return;
     }
 
     if (!IS_4MB_ALIGN(va) || !IS_4MB_ALIGN(pa)) {
-        KLOG("arch_map_4mb: addresses must be 4MB-aligned");
+        LOG("arch_map_4mb: addresses must be 4MB-aligned");
         return;
     }
 
@@ -82,24 +145,24 @@ void arch_map_4mb(void* cr3, void* va, void* pa, uint32_t flags)
     pdes[pde_index].pwt         = (flags & PTE_PWT)      ? 1 : 0;
     pdes[pde_index].pcd         = (flags & PTE_PCD)      ? 1 : 0;
     pdes[pde_index].global      = (flags & PTE_GLOBAL)   ? 1 : 0;
-    pdes[pde_index].paddr       = ((uint32_t)pa) >> 12;
+    pdes[pde_index].paddr       = ((u32)pa) >> 12;
     spinlock_unlock(paging_lock);
 
-    tlb_invlpg((uint32_t)va);
+    arch_tlb_invlpg((u32)va);
 }
 
 void arch_unmap_4mb(void* cr3, void* va)
 {
-    pde_t* pdes = (pde_t*)cr3;
+    pde* pdes = (pde*)cr3;
     size_t pde_index = PD_INDEX(va);
 
     if (pde_index >= 1024) {
-        KLOG("arch_unmap_4mb: virtual address out of range");
+        LOG("arch_unmap_4mb: virtual address out of range");
         return;
     }
 
     if (!pdes) {
-        KLOG("arch_map_4mb: invalid cr3");
+        LOG("arch_map_4mb: invalid cr3");
         return;
     }
 
@@ -107,7 +170,7 @@ void arch_unmap_4mb(void* cr3, void* va)
     pdes[pde_index].raw = 0;
     spinlock_unlock(paging_lock);
 
-    tlb_invlpg((uint32_t)va);
+    arch_tlb_invlpg((u32)va);
 }
 
 /*
@@ -120,63 +183,77 @@ void arch_unmap_4mb(void* cr3, void* va)
  * Caller MUST hold paging_lock.
  * Returns 0 on success, negative on failure.
  */
-static inline int split_4mb_pde(uint32_t pde_index, uint32_t user_accessible)
+static inline int split_4mb_pde(pde* p, u32 user_accessible)
 {
-    pde_t* pde = &pdes[pde_index];
-    pte_t* ptl = 0;
+    pte* ptl = 0;
 
-    if (!pde->present || !pde->page_size) {
-        KLOG("split_4mb_pde: PDE at index %u is not a 4MB page", pde_index);
+    if (!p) {
+        LOG("split_4mb_pde: invalid pde");
         return -1;
     }
 
-    ptl = (pte_t*)pmm_alloc_page();
+    if (!p->present || !p->page_size) {
+        LOG("split_4mb_pde: PDE is not a 4MB page");
+        return -1;
+    }
+
+    ptl = (pte*)arch_paging_pool_alloc();
     if (!ptl) {
-        KLOG("split_4mb_pde: failed to allocate page table for PDE at index %u", pde_index);
+        LOG("split_4mb_pde: failed to allocate page table");
         return E_NOMEM;
     }
 
-    if (user_accessible && pde->user == 0)
-        pde->user = 1;
+    /*
+     * x86: a PDE with U/S=0 makes every page in its table supervisor-only,
+     * so to host a USER page in a region previously covered by a kernel
+     * 4MB page, the PDE itself must become user (U/S=1).  That only opens
+     * the TABLE to ring-3 — each page's permission still comes from its
+     * own PTE's U/S bit.  Preserve the ORIGINAL page permission in the
+     * sibling PTEs (kernel pages stay supervisor); arch_map_4kb() then
+     * sets just the one target PTE to the requested flags.
+     */
+    int orig_user = p->user;
+    if (user_accessible && p->user == 0)
+        p->user = 1;
 
     for (size_t i = 0; i < 1024; i++) {
         ptl[i].raw         = 0;
-        ptl[i].present     = pde->present;
-        ptl[i].rw          = pde->rw;
-        ptl[i].user        = pde->user;
-        ptl[i].pwt         = pde->pwt;
-        ptl[i].pcd         = pde->pcd;
-        ptl[i].global      = pde->global;
-        ptl[i].paddr       = pde->paddr + i;
+        ptl[i].present     = p->present;
+        ptl[i].rw          = p->rw;
+        ptl[i].user        = orig_user;
+        ptl[i].pwt         = p->pwt;
+        ptl[i].pcd         = p->pcd;
+        ptl[i].global      = p->global;
+        ptl[i].paddr       = p->paddr + i;
     }
 
     {
-        pde_t new_pde;
-        new_pde.raw = pde->raw;
+        pde new_pde;
+        new_pde.raw = p->raw;
         new_pde.present = 1;
         new_pde.rw = 1;         /* writable PTEs take effect */
         new_pde.page_size = 0;  /* 4KB page table */
-        new_pde.paddr = (uint32_t)ptl >> 12;
-        pde->raw = new_pde.raw;
+        new_pde.paddr = (u32)ptl >> 12;
+        p->raw = new_pde.raw;
     }
 
     return 0;
 }
 
-void arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
+int arch_map_4kb(void* cr3, void* va, void* pa, u32 flags)
 {
-    pde_t* pdes = (pde_t*)cr3;
+    pde* pdes = (pde*)cr3;
     size_t pde_index = PD_INDEX(va);
     size_t pte_index = PT_INDEX(va);
 
     if (pde_index >= 1024 || pte_index >= 1024) {
-        KLOG("arch_map_4kb: virtual address out of range");
-        return;
+        LOG("arch_map_4kb: virtual address out of range");
+        return E_INVAL;
     }
 
     if (!pdes) {
-        KLOG("arch_map_4kb: invalid cr3");
-        return;
+        LOG("arch_map_4kb: invalid cr3");
+        return E_INVAL;
     }
 
     spinlock_lock(paging_lock);
@@ -187,19 +264,19 @@ void arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
      * 4KB mapping alongside the existing identity map.
      */
     if (pdes[pde_index].present && pdes[pde_index].page_size) {
-        if (split_4mb_pde(pde_index, flags & PTE_USER) != 0) {
-            KLOG("arch_map_4kb: failed to split 4MB PDE at index %u", pde_index);
+        if (split_4mb_pde(&pdes[pde_index], flags & PTE_USER) != 0) {
+            LOG("arch_map_4kb: failed to split 4MB PDE at index %u", pde_index);
             spinlock_unlock(paging_lock);
-            return;
+            return E_NOMEM;
         }
     }
 
     if (!pdes[pde_index].present) {
-        uint32_t pt_pa = pmm_alloc_page();
+        u32 pt_pa = (u32)arch_paging_pool_alloc();
         if (!pt_pa) {
-            KLOG("arch_map_4kb: failed to allocate page table for vaddr 0x%x", va);
+            LOG("arch_map_4kb: failed to allocate page table for vaddr 0x%x", va);
             spinlock_unlock(paging_lock);
-            return;
+            return E_NOMEM;
         }
 
         pdes[pde_index].raw     = 0;
@@ -211,30 +288,31 @@ void arch_map_4kb(void* cr3, void* va, void* pa, uint32_t flags)
         memset((void*)pt_pa, 0, PAGE_SIZE);
     }
 
-    pte_t* ptbl = ptbl_of_pde(&pdes[pde_index]);
+    pte* ptbl = ptbl_of_pde(&pdes[pde_index]);
     ptbl[pte_index].raw         = 0;
     ptbl[pte_index].present     = (flags & PTE_PRESENT) ? 1 : 0;
     ptbl[pte_index].rw          = (flags & PTE_RW)      ? 1 : 0;
     ptbl[pte_index].user        = (flags & PTE_USER)    ? 1 : 0;
-    ptbl[pte_index].paddr       = ((uint32_t)pa) >> 12;
+    ptbl[pte_index].paddr       = ((u32)pa) >> 12;
     spinlock_unlock(paging_lock);
 
-    tlb_invlpg((uint32_t)va);
+    arch_tlb_invlpg((u32)va);
+    return 0;
 }
 
 void arch_unmap_4kb(void* cr3, void* va)
 {
-    pde_t* pdes = (pde_t*)cr3;
+    pde* pdes = (pde*)cr3;
     size_t pde_index = PD_INDEX(va);
     size_t pte_index = PT_INDEX(va);
 
     if (pde_index >= 1024 || pte_index >= 1024) {
-        KLOG("arch_unmap_4kb: virtual address out of range");
+        LOG("arch_unmap_4kb: virtual address out of range");
         return;
     }
 
     if (!pdes) {
-        KLOG("arch_map_4kb: invalid cr3");
+        LOG("arch_map_4kb: invalid cr3");
         return;
     }
 
@@ -244,7 +322,7 @@ void arch_unmap_4kb(void* cr3, void* va)
         return;
     }
 
-    pte_t* ptbl = ptbl_of_pde(&pdes[pde_index]);
+    pte* ptbl = ptbl_of_pde(&pdes[pde_index]);
     if (!ptbl[pte_index].present) {
         spinlock_unlock(paging_lock);
         return;
@@ -254,39 +332,39 @@ void arch_unmap_4kb(void* cr3, void* va)
     ptbl[pte_index].raw = 0;
     spinlock_unlock(paging_lock);
 
-    tlb_invlpg((uint32_t)va);
+    arch_tlb_invlpg((u32)va);
 }
 
-void arch_map_4mb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t flags)
+void arch_map_4mb_range(void* cr3, u32 start_pa, u32 end_pa, u32 flags)
 {
     if (!cr3) {
-        KLOG("arch_map_4mb_range: invalid cr3");
+        LOG("arch_map_4mb_range: invalid cr3");
         return;
     }
 
     if (!IS_4MB_ALIGN(start_pa) || !IS_4MB_ALIGN(end_pa)) {
-        KLOG("arch_map_4mb_range: addresses must be 4MB-aligned");
+        LOG("arch_map_4mb_range: addresses must be 4MB-aligned");
         return;
     }
 
-    for (uint32_t pa = start_pa; pa < end_pa; pa += 0x400000) {
+    for (u32 pa = start_pa; pa < end_pa; pa += 0x400000) {
         arch_map_4mb(cr3, (void*)pa, (void*)pa, flags);
     }
 }
 
-void arch_map_4kb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t flags)
+void arch_map_4kb_range(void* cr3, u32 start_pa, u32 end_pa, u32 flags)
 {
     if (!cr3) {
-        KLOG("arch_map_4mb_range: invalid cr3");
+        LOG("arch_map_4kb_range: invalid cr3");
         return;
     }
 
     if (!IS_4KB_ALIGN(start_pa) || !IS_4KB_ALIGN(end_pa)) {
-        KLOG("arch_map_4kb_range: addresses must be 4KB-aligned");
+        LOG("arch_map_4kb_range: addresses must be 4KB-aligned");
         return;
     }
 
-    for (uint32_t pa = start_pa; pa < end_pa; pa += PAGE_SIZE) {
+    for (u32 pa = start_pa; pa < end_pa; pa += PAGE_SIZE) {
         arch_map_4kb(cr3, (void*)pa, (void*)pa, flags);
     }
 }
@@ -294,35 +372,47 @@ void arch_map_4kb_range(void* cr3, uint32_t start_pa, uint32_t end_pa, uint32_t 
 /* ------------------------------------------------------------------ */
 /* Public entry point                                                  */
 /* ------------------------------------------------------------------ */
-void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
+void arch_paging_init(u32 total_memory, u32 reserved_end)
 {
-    uint32_t total_4mb_chunks;
-    uint32_t hi_pd_idx;
-    uint32_t i;
-    (void)reserved_end;  /* currently unused — reserved_end is derived inside */
+    (void)reserved_end;  /* currently unused — the paging pool sits below
+                          * the PMM bitmap, so pmm_init() keeps it reserved */
 
     paging_lock = spinlock_alloc();
     if (!paging_lock) {
-        KLOG("arch_paging_init: failed to allocate paging spinlock");
+        LOG("arch_paging_init: failed to allocate paging spinlock");
         return;
     }
 
-    KLOG("arch_paging_init: total_memory=%u MB, bitmap=0x%x",
-         total_memory >> 20, (uint32_t)__pmm_bitmap_start);
+    paging_pool_lock = spinlock_alloc();
+    if (!paging_pool_lock) {
+        LOG("arch_paging_init: failed to allocate paging pool spinlock");
+        return;
+    }
+
+    LOG("arch_paging_init: total_memory=%u MB, bitmap=0x%x",
+         total_memory >> 20, (u32)__pmm_bitmap_start);
 
     /* Step 1: Build the initial page directory.
-     * Use PTE_USER_PAGE so that user-mode (ring-3) threads can
-     * execute kernel code and access kernel data within the same
-     * address space.  This is acceptable for a hobby / testing OS. */
+     * The first 16MB are identity-mapped SUPERVISOR (PTE_KERNEL): kernel
+     * image/heap/page tables live here and ring-3 must not touch them.
+     * User processes clone these PDEs into their own directories, so
+     * kernel code keeps running under a user CR3; ring-3 reaches memory
+     * only through per-process PTE_USER mappings (ELF, user heap, MMIO
+     * windows mapped via the mmio syscall / vmm_map_fixed). */
     memset(pdes, 0, sizeof(pdes));
-    arch_map_4mb_range((void*)pdes, 0x0, 0x1000000, PTE_USER_PAGE);  /* identity map first 16MB */
-    arch_map_4mb((void*)pdes, (void*)0xC0000000, (void*)0x0, PTE_USER_PAGE);
+    arch_map_4mb_range((void*)pdes, 0x0, 0x1000000, PTE_KERNEL);  /* identity map first 16MB */
 
-    for (uint32_t addr = 0x1000000; addr < total_memory; addr += 0x400000) {
-        if (addr == 0xC0000000)
-            continue;  /* skip the higher-half slot */
+    /* The high user area [0xC0000000, 0xC1000000) is RESERVED as the
+     * user-heap range and 0xC1000000+ as the user-ELF range (see
+     * paging.h / user/user.ld).  NOTHING is mapped here at this point:
+     *   - ELF segments get per-process PTE_USER mappings via vmm_map_fixed();
+     *   - the user heap is backed with real pmm pages AFTER pmm_init()
+     *     below (an arch_map_4mb_range over 0xC0000000..0xC1000000 would
+     *     map VA 3GB -> PA 3GB, where no physical RAM exists — wrong).
+     * The old 0xC0000000 higher-half alias of physical 0 is gone. */
+
+    for (u32 addr = 0x1000000; addr < total_memory; addr += 0x400000)
         arch_map_4mb((void*)pdes, (void*)addr, (void*)addr, PTE_KERNEL);
-    }
 
     /* Step 2: Set PSE (Page Size Extension) in CR4 */
     __asm__ __volatile__(
@@ -331,30 +421,76 @@ void arch_paging_init(uint32_t total_memory, uint32_t reserved_end)
         "mov    %%eax,          %%cr4\n\t"
         : : : "eax", "memory"
     );
-    KLOG("Paging: PSE enabled (4MB pages)");
+    LOG("Paging: PSE enabled (4MB pages)");
 
     /* Step 3: Enable paging */
-    arch_load_cr3((uint32_t)pdes);
+    arch_load_cr3((u32)pdes);
     arch_enable_paging();
-    KLOG("Paging: enabled (CR0.PG=1), CR3=0x%x", (uint32_t)pdes);
+    LOG("Paging: enabled (CR0.PG=1), CR3=0x%x", (u32)pdes);
 
     /* Step 4: Register the kernel master PD */
-    kernel_pdir_phys = (uint32_t)pdes;
+    kernel_pdir_phys = (u32)pdes;
 
-    /* Step 5: Initialise the physical memory manager */
+    /* Step 5: Initialise the physical memory manager.  The paging pool
+     * sits below the PMM bitmap, so pmm_init() keeps it reserved and
+     * user VAs (identity-mapped) can never collide with its PAs. */
     pmm_init(total_memory, __pmm_bitmap_start);
-    KLOG("Paging: bootstrap complete, %u pages free", pmm_get_free_page_count());
+    LOG("Paging: paging-structures pool 0x%x-0x%x (%u slots)",
+         VMM_PDE_ALLOC_BASE, VMM_PDE_ALLOC_END, PAGING_POOL_SLOTS);
+
+    /* Reserve the GRUB multiboot module images.  GRUB loads them right
+     * after the kernel image (~20 MB+, above the PMM bitmap), so pmm_init()
+     * would otherwise treat them as free pages and hand them out (zeroing
+     * them) to the first boot allocations — a large module (e.g. the ~1 MB
+     * process_test.elf) then reads back as zeros at load time.  Keep them
+     * reserved until proc_load_from_elf() copies each one into a process. */
+    {
+        int n = mboot_module_count();
+        for (int i = 0; i < n; i++) {
+            u8* s = 0;
+            u8* e = 0;
+            if (mboot_module_get(i, &s, &e) == 0 && e > s)
+                pmm_mark_used((u32)(uptr)s, (u32)(uptr)(e - s));
+        }
+    }
+
+    /* Map the reserved user-heap region [USER_HEAP_BASE, USER_HEAP_END)
+     * (see paging.h) as shared PTE_USER pages in the MASTER page
+     * directory.  Every user process clones these PDEs, so pointers
+     * returned by the user-heap syscall (SYSCALL_HEAP, kernel/mm/heap.c)
+     * are valid in any process.  No demand paging yet: back all 16 MB
+     * up front.  Must run AFTER pmm_init() (pages come from the PMM). */
+    {
+        const u32 hp_base   = USER_HEAP_BASE;
+        const u32 hp_npages = (USER_HEAP_END - USER_HEAP_BASE) >> 12;
+        u32 hp_pa = pmm_alloc_pages(hp_npages);
+
+        if (!hp_pa) {
+            LOG("user heap: no contiguous physical memory for %u pages",
+                hp_npages);
+        } else {
+            for (u32 i = 0; i < hp_npages; i++)
+                arch_map_4kb((void*)pdes,
+                             (void*)(hp_base + i * PAGE_SIZE),
+                             (void*)(hp_pa + i * PAGE_SIZE),
+                             PTE_USER_PAGE);
+            LOG("user heap: 0x%x-0x%x PTE_USER (phys 0x%x)",
+                hp_base, USER_HEAP_END, hp_pa);
+        }
+    }
+
+    LOG("Paging: bootstrap complete, %u pages free", pmm_get_free_page_count());
 }
 
-void arch_load_cr3(uint32_t pdir_phys)
+void arch_load_cr3(u32 pdir_phys)
 {
     /* Writing CR3 flushes the TLB for all non-global entries */
     __asm__ __volatile__("mov %0, %%cr3" : : "r"(pdir_phys) : "memory");
 }
 
-uint32_t arch_get_cr3(void)
+u32 arch_get_cr3(void)
 {
-    uint32_t cr3 = 0;
+    u32 cr3 = 0;
     __asm__ __volatile__("mov %%cr3, %0" : "=r"(cr3));
     return cr3;
 }
@@ -376,54 +512,53 @@ void arch_enable_paging(void)
     );
 }
 
-uint32_t arch_clone_kernel_pde(uint32_t pde_pa, int user_accessible)
+u32 arch_clone_kernel_pde(u32 pde_pa, int user_accessible)
 {
     if (!pde_pa) {
-        KLOG("VMM: failed to allocate page for PDE clone");
+        LOG("VMM: failed to allocate page for PDE clone");
         return 0;
     }
 
-    pde_t* new_pde = (pde_t*)pde_pa;
-    pde_t* kern_pde = (pde_t*)kernel_pdir_phys;
+    pde* new_pde = (pde*)pde_pa;
+    pde* kern_pde = (pde*)kernel_pdir_phys;
 
-    /* Clone all PDEs from the kernel master PD */
-    if (user_accessible) {
-        for (uint32_t i = 0; i < 768; i++)
-            new_pde[i].raw = 0;
-        for (uint32_t i = 768; i < 1024; i++)
-            new_pde[i].raw = kern_pde[i].raw;
-    } else {
-        for (uint32_t i = 0; i < 1024; i++)
-            new_pde[i].raw = kern_pde[i].raw;
-    }
+    /*
+     * Clone ALL PDEs from the kernel master PD, including the low
+     * identity map.  The kernel is linked at 1MB (identity mapped); a
+     * user process MUST share the kernel's low identity map (supervisor,
+     * PTE_KERNEL) so kernel code keeps running under the user CR3 during
+     * syscalls/IRQs.  Ring-3 itself can no longer dereference anything
+     * below 16MB — user code/data/MMIO live in per-process PTE_USER
+     * mappings above (ELF / user heap / mmio windows).
+     */
+    (void)user_accessible;
+    for (u32 i = 0; i < 1024; i++)
+        new_pde[i].raw = kern_pde[i].raw;
+
     return pde_pa;
 }
 
-void arch_destroy_address_space(uint32_t pdir_phys)
+void arch_destroy_address_space(u32 pdir_phys)
 {
     if (!pdir_phys || pdir_phys == kernel_pdir_phys) {
-        KLOG("VMM: cannot destroy kernel address space");
+        LOG("VMM: cannot destroy kernel address space");
         return;
     }
 
-    pde_t* pdes = pdir_of(pdir_phys);
-    pde_t* kern_pdes = pdir_of(kernel_pdir_phys);
+    pde* pdes = pdir_of(pdir_phys);
+    pde* kern_pdes = pdir_of(kernel_pdir_phys);
 
-    /* only release user pages */
-    for (uint32_t i = 0; i < 768; i++) {
+    /* Only release user page tables below USER_SPACE_TOP.  The reserved
+     * kernel high-half (>= KERNEL_BASE_VADDR) is not part of any user
+     * directory; user mappings (ELF at 0xC1000000+, future user heap at
+     * 0xC0000000) live in PDE indices below USER_SPACE_TOP >> 22. */
+    for (u32 i = 0; i < (USER_SPACE_TOP >> 22); i++) {
         if (!pdes[i].present)
             continue;
         if (pdes[i].paddr == kern_pdes[i].paddr)
             continue;  /* skip kernel-shared page tables */
 
-        pte_t* ptbl = ptbl_of_pde(&pdes[i]);
-        for (uint32_t j = 0; j < 1024; j++) {
-            if (ptbl[j].present) {
-                pmm_free_page(ptbl[j].paddr << 12);
-                ptbl[j].raw = 0;
-            }
-        }
-        pmm_free_page(pdes[i].paddr << 12);
+        arch_paging_pool_free(pdes[i].paddr << 12);
         pdes[i].raw = 0;
     }
 }

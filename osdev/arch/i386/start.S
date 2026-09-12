@@ -1,5 +1,4 @@
 .global         arch_start
-.global         stack_top
 
 .section        .bss
 .skip           16384

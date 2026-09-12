@@ -458,7 +458,7 @@ int vsnprintf(char *str, size_t size, const char *format, va_list ap) {
 
                 case 'p': {
                     void *ptr = va_arg(ap, void*);
-                    unsigned int num = (unsigned int)(uintptr_t)ptr;
+                    unsigned int num = (unsigned int)(uptr)ptr;
                     char buffer[32];
                     int len = utox(num, buffer, 0);
                     
@@ -514,9 +514,12 @@ int vsnprintf(char *str, size_t size, const char *format, va_list ap) {
             }
             format++;
         } else {
-            *current++ = *format++;
-            written++;
-            remaining--;
+            if (remaining > 0) {
+                *current++ = *format;
+                written++;
+                remaining--;
+            }
+            format++;
         }
     }
 
@@ -544,7 +547,7 @@ void memcpy(void *dest, const void *src, size_t size)
     size_t i = 0;
 
     for (i = 0; i < size; i++)
-        *((uint8_t *)dest + i) = *((const uint8_t *)src + i);
+        *((u8 *)dest + i) = *((const u8 *)src + i);
 }
 
 void memset(void* dest, int chr, size_t size)

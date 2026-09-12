@@ -1,12 +1,46 @@
 #include "arch_irq.h"
 #include "kernel/irq.h"
+#include "kernel/syscall.h"
+#include "kernel/uapi.h"
 #include "lib/string.h"
-#include "drivers/log_driver.h"
+#include "lib/module.h"
+#include "kernel/log.h"
 #include "mm/heap.h"
+#include "kernel/capability.h"
+#include "kernel/process.h"
+#include "ipc/mailbox.h"
+#include <stdint.h>
+
+/* Syscall handle allocated by syscall_register() in irq_syscall_init(). */
+static i32 irq_scall_handle = -1;
 
 static irqline* irqlines[IDT_ENTRIES] = {0};
 
-static int irqline_alloc(uint32_t major, irqline **out)
+/*
+ * Set by irqline_handler() when a threaded irq was woken in this ISR.
+ * arch/i386/irq.S checks it on gate exit:
+ *   - 1: defer PIC unmask to the handler thread (irq_handle_thread calls
+ *        irq_unmask after the handler) and kick the scheduler.
+ *   - 0: normal synchronous irq — unmask here as before.
+ */
+volatile int irq_defer_unmask = 0;
+
+static inline int irq_run_direct(void)
+{
+    /*
+     * The int $100 gate may only be entered when the exit path has a task
+     * context to restore to: arch_syscall_entry's restore loads ESP from
+     * *curr_task_ctx UNCONDITIONALLY.  Before the scheduler is up
+     * (thread_get_tid() == -1, e.g. proc_env_init's boot-time timer irq),
+     * curr_task_ctx is NULL and the gate exit would read the IVT at
+     * address 0 (0xF000FF53) and triple-fault.  Run irq_exec directly
+     * instead in that case — same as a ring-0 call inside a gate.
+     */
+    return !arch_running_ring3() && (arch_in_gate() || thread_get_tid() < 0);
+}
+
+
+static int irqline_alloc(u32 major, irqline **out)
 {
     if (!out)
         return E_INVAL;
@@ -107,7 +141,7 @@ static int irqline_remove_all(struct irqline* line)
         return E_INVAL;
 
     spinlock_lock(line->sp_lock);
-    list_for_each(node, &line->irqs) {
+    list_for_each_safe(node, next, &line->irqs) {
         list_del(node);
     }
     spinlock_unlock(line->sp_lock);
@@ -115,7 +149,7 @@ static int irqline_remove_all(struct irqline* line)
     return 0;
 }
 
-static int irqline_init(irqline** out_line, uint32_t major)
+static int irqline_init(irqline** out_line, u32 major)
 {
     if (!out_line || major >= IDT_ENTRIES)
         return E_INVAL;
@@ -138,9 +172,9 @@ static void irqline_release(irqline* line)
  * Find the first free (unused) minor number on the given irqline.
  * Returns IRQ_ANY_MINOR if none is available.
  */
-static uint32_t irqline_find_free_minor(struct irqline* line)
+static u32 irqline_find_free_minor(struct irqline* line)
 {
-    for (uint32_t candidate = 0; candidate < UINT32_MAX; candidate++) {
+    for (u32 candidate = 0; candidate < UINT32_MAX; candidate++) {
         int used = 0;
         list_for_each(each, &line->irqs) {
             irq* p = list_entry(each, irq, node);
@@ -155,32 +189,79 @@ static uint32_t irqline_find_free_minor(struct irqline* line)
     return IRQ_ANY_MINOR;
 }
 
-void irqline_handler(uint32_t major, uint32_t minor, void* context)
+static void dispatch_user_mode_irq(irq* p)
 {
+    /* dispatch by mailbox: deliver to the thread that
+        * registered the IRQ (cached owner tcb, no schedule_lock) */
+    tcb* t = (tcb*)p->owner;
+    if (!t || !t->mailbox)
+        return;
+
+    mail* m = alloc_mail();
+    if (!m)
+        return;
+
+    m->magic = MAIL_MAGIC_IRQ;   /* shared ABI: user/userlib.c user_irq_wait */
+    m->receiver_tid = p->tid;
+
+    send_mail(t->mailbox, m);
+}
+
+static void irq_handle_thread(void)
+{
+    irq* this = thread_get_param();
+    if (!this)
+        return;
+
+    for ( ;; ) {
+        semaphore_wait(this->sem->id);
+
+        /* Consume the pending flag before running the handler.  If a new
+         * interrupt arrives while the handler is running, the ISR will set
+         * pending again and the next wait_queue_wake_all() will immediately
+         * re-wake us after we go back to sleep. */
+        int was_pending = __sync_lock_test_and_set(&this->pending, 0);
+        if (!was_pending)
+            continue;
+
+        if (this->handler)
+            this->handler(this->context);
+
+        irq_unmask(this);
+    }
+}
+
+void irqline_handler(u32 major, u32 minor, void* context)
+{
+    /* Syscalls no longer flow through this path: int $100 goes straight to
+     * syscall_dispatch() (see irq.S / kernel/syscall.c).  This handler now
+     * only serves real hardware IRQ lines. */
     (void)minor;
+
+    irq_defer_unmask = 0;
 
     if (!irqlines[major])
         return;
 
     list_for_each(each, &irqlines[major]->irqs) {
         irq* p = list_entry(each, irq, node);
-        if (p->enabled) {
-            if (p->major != 100) {
-                /* Normal IRQ: pass handler's own context (usually NULL) */
-                p->handler(p->context);
-            } else {
-                /* Syscall (major 100): dispatch by minor, pass real data */
-                if (p->minor == minor) {
-                    if (minor != 0)
-                        KLOG("syscall: minor %d triggled", minor);
-                    p->handler(context);
-                }
-            }
+        if (!p->enabled)
+            continue;
+
+        if (p->is_user_irq) {
+            dispatch_user_mode_irq(p);
+        } else if (p->is_threaded) {
+            p->context = context;
+            p->pending = 1;
+            irq_defer_unmask = 1;
+            semaphore_signal(p->sem->id);
+        } else {
+            p->handler(p->context);
         }
     }
 }
 
-static int irq_alloc(uint32_t major, uint32_t minor, const char *name,
+static int irq_alloc(u32 major, u32 minor, int is_user_irq, int tid, const char *name,
     void *context, irq_handler_fn handler, irq **out)
 {
     if (!out)
@@ -196,11 +277,20 @@ static int irq_alloc(uint32_t major, uint32_t minor, const char *name,
     p->minor = minor;
     p->handler = handler;
     p->enabled = 0;
+    p->is_user_irq = is_user_irq;
+    p->is_threaded = 0;
+    p->pending = 0;
+    p->tid = tid;
+    p->owner = 0;
     p->sp_lock = spinlock_alloc();
-    if (!p->sp_lock)
+    if (!p->sp_lock) {
+        *out = 0;
+        kfree(p);
         return E_LIMIT;
+    }
 
     list_init(&p->node);
+    list_init(&p->thread_node);
 
     *out = p;
     return 0;
@@ -216,11 +306,36 @@ static int irq_free(irq *p)
     return 0;
 }
 
-int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
-                    irq_handler_fn cb, void* cb_param)
+/*
+ * Core implementation of irq_request().
+ *
+ * is_user_irq tells the interrupt dispatcher how the handler must be
+ * delivered:
+ *   - 0 : kernel-mode irq   (handler runs with the kernel's own context)
+ *   - 1 : user-mode irq     (handler delivered through the user flow)
+ *
+ * The value is decided by the kernel (from the caller's privilege), never
+ * taken blindly from the caller, so a user process cannot spoof a kernel irq.
+ */
+static int irq_request_internal(irq **out, const char* name, u32 major,
+                                u32 minor, irq_handler_fn cb, void* cb_param,
+                                int is_user_irq, int tid)
 {
     if (!out || major >= IDT_ENTRIES)
         return E_INVAL;
+
+    /* Transition phase: only enforce capability checks on untrusted user
+     * processes.
+     * - proc == NULL (early boot, scheduler not up)  -> trusted, allow
+     * - proc->priv == PROC_PRIV_KERNEL (kernel driver) -> trusted, allow
+     * - user process -> must hold CAP_OWN_IRQ for this IRQ line */
+    pcb* proc = get_current_process();
+    if (proc && proc->priv != PROC_PRIV_KERNEL) {
+        if (cap_check(proc, CAP_OWN_IRQ, &major) != 0) {
+            LOG("no irq permission for pid %d", proc->pid);
+            return E_PERM;
+        }
+    }
 
     int ret = 0;
     int minor_existed = 0;
@@ -228,25 +343,29 @@ int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
     if (minor == IRQ_ANY_MINOR) {
         if (!irqlines[major]) {
             if (irqline_init(&irqlines[major], major) != 0)
-                return E_IRQ_NOTAVAIL;
+                return E_INTERNAL;
         }
         if (!irqlines[major])
             return E_INTERNAL;
 
         minor = irqline_find_free_minor(irqlines[major]);
         if (minor == IRQ_ANY_MINOR) {
-            KLOG("%s: no free minor on major %d", __FUNCTION__, major);
+            LOG("%s: no free minor on major %d", __FUNCTION__, major);
             return E_IRQ_NOTAVAIL;
         }
     }
 
-    ret = irq_alloc(major, minor, name, cb_param, cb, out);
+    ret = irq_alloc(major, minor, is_user_irq, tid, name, cb_param, cb, out);
     if (ret != 0 || *out == 0)
         return ret;
 
+
     if (!irqlines[major]) {
-        if (irqline_init(&irqlines[major], major) && irqlines[major])
+        if (irqline_init(&irqlines[major], major) != 0) {
+            irq_release(*out);
+            *out = 0;
             return E_INTERNAL;
+        }
     }
     if (irqlines[major]) {
         list_for_each(each, &irqlines[major]->irqs) {
@@ -258,10 +377,21 @@ int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
         }
 
         if (minor_existed) {
-            KLOG("%s: initialization failed - minor %d already exists", __FUNCTION__, minor);
+            LOG("%s: initialization failed - minor %d already exists", __FUNCTION__, minor);
             irq_release(*out);
             *out = 0;
             return E_IRQ_INUSE;
+        }
+
+        /* User IRQ: cache the registering thread's tcb so irqline_handler()
+        * (ISR context, interrupts disabled) can deliver the mail without
+        * taking schedule_lock via thread_get_by_tid(). */
+        if (is_user_irq) {
+            tcb* t = thread_get_by_tid(tid);
+            if (t) {
+                (*out)->owner = (void*)t;
+                list_add(&(*out)->thread_node, &t->irqs);
+            }
         }
 
         irqline_add_irq(irqlines[major], *out);
@@ -270,21 +400,84 @@ int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
     return 0;
 }
 
-void irq_release(irq *p)
+int irq_request_threaded_internal(irq **out, const char* name, u32 major, u32 minor,
+                    irq_handler_fn cb, void* cb_param)
+{
+    int ret = irq_request_internal(out, name, major, minor, cb, cb_param, 0, 0);
+    if (ret || !out || !*out)
+        return ret;
+
+    (*out)->is_threaded = 1;
+
+    /* Allocate the semaphore BEFORE spawning the handler thread: the
+     * thread immediately blocks on this->sem->id, so a NULL sem here
+     * would crash it.  The irq is still disabled at this point, so no
+     * ISR can deliver a signal to it until irq_unmask(). */
+    (*out)->sem = semaphore_create(0);
+    if (!(*out)->sem) {
+        irq_release(*out);
+        *out = 0;
+        return E_NOMEM;
+    }
+
+    (*out)->kernel_irq_tid = thread_create(TASK_PRIV_KERNEL,
+                                           irq_handle_thread, *out);
+    if ((*out)->kernel_irq_tid < 0) {
+        int err = (*out)->kernel_irq_tid;
+        irq_release(*out);
+        *out = 0;
+        return err;
+    }
+
+    /* Threads are born TS_PENDING now; start the handler thread.  It
+     * immediately blocks on this->sem, so this is safe even though the
+     * IRQ is still masked. */
+    thread_unblock((*out)->kernel_irq_tid);
+
+    return 0;
+}
+
+void irq_release_internal(irq *p)
 {
     if (!p)
         return;
 
+    if (p->major >= IDT_ENTRIES)
+        return;
+
+    /* A threaded irq owns a kernel handler thread that loops forever on
+     * p->sem and p->handler.  Delete that thread first so it can never
+     * touch the irq struct after we free it. */
+    if (p->is_threaded && p->kernel_irq_tid >= 0) {
+        int tid = p->kernel_irq_tid;
+        p->kernel_irq_tid = -1;
+        thread_exit(tid);
+    }
+
     if (irqlines[p->major]) {
         irqline_remove_irq(irqlines[p->major], p);
+        irqline_mask(irqlines[p->major]);
     }
+
+    if (p->owner) {
+        tcb* t = (tcb*)p->owner;
+        spinlock_lock(t->sp_lock);
+        list_del(&p->thread_node);
+        spinlock_unlock(t->sp_lock);
+    }
+
+    if (p->sem) {
+        semaphore_destroy(p->sem);
+        p->sem = 0;
+    }
+
     /* irq_free() releases the spinlock and kfrees the struct */
     irq_free(p);
 }
 
-int irq_mask(struct irq* p)
+int irq_mask_internal(struct irq* p)
 {
-    if (!p)
+    if (!p || p->major >= IDT_ENTRIES)
         return E_INVAL;
 
     spinlock_lock(p->sp_lock);
@@ -297,9 +490,9 @@ int irq_mask(struct irq* p)
     return 0;
 }
 
-int irq_unmask(struct irq* p)
+int irq_unmask_internal(struct irq* p)
 {
-    if (!p)
+    if (!p || p->major >= IDT_ENTRIES)
         return E_INVAL;
 
     spinlock_lock(p->sp_lock);
@@ -311,3 +504,197 @@ int irq_unmask(struct irq* p)
 
     return 0;
 }
+
+/*
+ * ============================================================================
+ * IRQ syscall layer (RING3)
+ *
+ * irq_request / irq_release / irq_mask / irq_unmask are routed through this
+ * gate (int $100) whenever the caller runs in user mode (CPL3).  The
+ * handler runs in kernel context, so the capability checks inside the
+ * kernel implementations still apply to the calling process.
+ * ============================================================================
+ */
+static int irq_exec(irq_ctrl_config* cfg)
+{
+    if (!cfg)
+        return -E_INVAL;
+
+    switch (cfg->cmd) {
+    case IRQ_SYSCALL_REQUEST:
+        /* The kernel decides the delivery mode from the caller's privilege —
+         * never from the untrusted config.  User processes get a user irq
+         * (tid is derived here in kernel context: ring-3 ELFs cannot know
+         * their own tid, and the gate runs in the caller's thread).  Kernel
+         * callers — including boot-time setup such as the scheduler timer
+         * in process.c, which may have no current process at all — keep a
+         * synchronous kernel irq: is_user_irq = 0, tid unused. */
+        {
+            pcb* proc = get_current_process();
+            cfg->is_user_irq = (proc && proc->priv != PROC_PRIV_KERNEL) ? 1 : 0;
+            cfg->tid = cfg->is_user_irq ? thread_get_tid() : 0;
+        }
+        cfg->ret = irq_request_internal(&cfg->handle, cfg->name, cfg->major,
+                                        cfg->minor, cfg->handler, cfg->param,
+                                        cfg->is_user_irq, cfg->tid);
+        break;
+    case IRQ_SYSCALL_REQUEST_THREADED:
+        cfg->ret = irq_request_threaded_internal(&cfg->handle, cfg->name, cfg->major,
+                                                 cfg->minor, cfg->handler, cfg->param);
+        break;
+    case IRQ_SYSCALL_RELEASE:
+        irq_release_internal(cfg->handle);
+        cfg->ret = 0;
+        break;
+    case IRQ_SYSCALL_MASK:
+        cfg->ret = irq_mask_internal(cfg->handle);
+        break;
+    case IRQ_SYSCALL_UNMASK:
+        cfg->ret = irq_unmask_internal(cfg->handle);
+        break;
+    default:
+        cfg->ret = -E_INVAL;
+        break;
+    }
+
+    return cfg->ret;
+}
+
+static int irq_syscall_isr(void* context)
+{
+    irq_ctrl_config* cfg = (irq_ctrl_config*)context;
+    if (!cfg)
+        return E_INVAL;
+
+    /*
+     * CAP_OWN_IRQ gate: only commands that acquire a new IRQ line are
+     * gated, because only they carry the target line in cfg->major.
+     * RELEASE / MASK / UNMASK operate on a handle the caller already owns
+     * and leave cfg->major at 0 — checking it would wrongly reject every
+     * valid unmask/mask (e.g. kb_server holds IRQ 1, not 0).  Kernel
+     * callers (PROC_PRIV_KERNEL, or no current process yet) are trusted
+     * and skip the gate.
+     */
+    if (cfg->cmd == IRQ_SYSCALL_REQUEST ||
+        cfg->cmd == IRQ_SYSCALL_REQUEST_THREADED) {
+        pcb* proc = get_current_process();
+        if (proc && proc->priv != PROC_PRIV_KERNEL) {
+            if (cap_check(proc, CAP_OWN_IRQ, &cfg->major) != 0) {
+                LOG("no irq permission for pid %d", proc->pid);
+                /* Wrappers read cfg->ret, not the gate's return value. */
+                cfg->ret = E_PERM;
+                return cfg->ret;
+            }
+        }
+    }
+
+    return irq_exec(cfg);
+}
+
+void irq_syscall_init(void)
+{
+    irq_scall_handle = syscall_register(SYSCALL_IRQ,
+        irq_syscall_isr, sizeof(irq_ctrl_config));
+}
+
+void irq_syscall_exit(void)
+{
+    syscall_unregister(irq_scall_handle);
+}
+
+int irq_request(irq **out, const char* name, u32 major, u32 minor,
+                    irq_handler_fn cb, void* cb_param)
+{
+    irq_ctrl_config data = {0};
+    data.cmd         = IRQ_SYSCALL_REQUEST;
+    data.name        = name;
+    data.major       = major;
+    data.minor       = minor;
+    data.handler     = cb;
+    data.param       = cb_param;
+    /* is_user_irq / tid are kernel-filled (irq_exec derives them from the
+     * caller's privilege); ring-3 code must not supply or call for them. */
+
+    if (irq_run_direct())
+        irq_exec(&data);
+    else
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
+
+    if (out)
+        *out = data.handle;
+
+    return data.ret;
+}
+
+int irq_request_threaded(irq **out, const char* name, u32 major, u32 minor,
+                    irq_handler_fn cb, void* cb_param)
+{
+    irq_ctrl_config data = {0};
+    data.cmd         = IRQ_SYSCALL_REQUEST_THREADED;
+    data.name        = name;
+    data.major       = major;
+    data.minor       = minor;
+    data.handler     = cb;
+    data.param       = cb_param;
+
+    if (irq_run_direct())
+        irq_exec(&data);
+    else
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
+
+    if (out)
+        *out = data.handle;
+
+    return data.ret;
+}
+
+void irq_release(irq *p)
+{
+    if (!p)
+        return;
+
+    irq_ctrl_config data = {0};
+    data.cmd    = IRQ_SYSCALL_RELEASE;
+    data.handle = p;
+
+    if (irq_run_direct())
+        irq_exec(&data);
+    else
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
+}
+
+int irq_mask(struct irq* p)
+{
+    if (!p)
+        return E_INVAL;
+
+    irq_ctrl_config data = {0};
+    data.cmd    = IRQ_SYSCALL_MASK;
+    data.handle = p;
+
+    if (irq_run_direct())
+        irq_exec(&data);
+    else
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
+
+    return data.ret;
+}
+
+int irq_unmask(struct irq* p)
+{
+    if (!p)
+        return E_INVAL;
+
+    irq_ctrl_config data = {0};
+    data.cmd    = IRQ_SYSCALL_UNMASK;
+    data.handle = p;
+    if (irq_run_direct())
+        irq_exec(&data);
+    else
+        arch_syscall(irq_scall_handle, &data, sizeof(data));
+
+    return data.ret;
+}
+
+module_init(irq_syscall_init);
+module_exit(irq_syscall_exit);

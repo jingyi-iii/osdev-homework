@@ -6,54 +6,54 @@
 #include "mm/vmm.h"
 
 typedef struct regs {
-    uint32_t gs;
-    uint32_t fs;
-    uint32_t es;
-    uint32_t ds;
-    uint32_t edi;
-    uint32_t esi;
-    uint32_t ebp;
-    uint32_t kesp;
-    uint32_t ebx;
-    uint32_t edx;
-    uint32_t ecx;
-    uint32_t eax;
-    uint32_t eip;
-    uint32_t cs;
-    uint32_t eflags;
-    uint32_t esp;
-    uint32_t ss;
-} __attribute__((packed)) regs_t;
+    u32 gs;
+    u32 fs;
+    u32 es;
+    u32 ds;
+    u32 edi;
+    u32 esi;
+    u32 ebp;
+    u32 kesp;
+    u32 ebx;
+    u32 edx;
+    u32 ecx;
+    u32 eax;
+    u32 eip;
+    u32 cs;
+    u32 eflags;
+    u32 esp;
+    u32 ss;
+} __attribute__((packed)) regs;
 
 typedef struct tss {
-    uint32_t backlink;
-    uint32_t esp0;
-    uint32_t ss0;
-    uint32_t esp1;
-    uint32_t ss1;
-    uint32_t esp2;
-    uint32_t ss2;
-    uint32_t cr3;
-    uint32_t eip;
-    uint32_t flags;
-    uint32_t eax;
-    uint32_t ecx;
-    uint32_t edx;
-    uint32_t ebx;
-    uint32_t esp;
-    uint32_t ebp;
-    uint32_t esi;
-    uint32_t edi;
-    uint32_t es;
-    uint32_t cs;
-    uint32_t ss;
-    uint32_t ds;
-    uint32_t fs;
-    uint32_t gs;
-    uint32_t ldt;
-    uint16_t trap;
-    uint16_t iobase;
-} __attribute__((packed)) tss_t;
+    u32 backlink;
+    u32 esp0;
+    u32 ss0;
+    u32 esp1;
+    u32 ss1;
+    u32 esp2;
+    u32 ss2;
+    u32 cr3;
+    u32 eip;
+    u32 flags;
+    u32 eax;
+    u32 ecx;
+    u32 edx;
+    u32 ebx;
+    u32 esp;
+    u32 ebp;
+    u32 esi;
+    u32 edi;
+    u32 es;
+    u32 cs;
+    u32 ss;
+    u32 ds;
+    u32 fs;
+    u32 gs;
+    u32 ldt;
+    u16 trap;
+    u16 iobase;
+} __attribute__((packed)) tss;
 
 typedef void (*task_entry_t)(void);
 
@@ -63,10 +63,10 @@ typedef enum task_priv {
 } task_priv;
 
 typedef struct arch_task_context {
-    regs_t*         regs;
-    uint32_t        ldts[4];    // 64 bits for each ldt entry
+    regs*         regs;
+    u32        ldts[4];    // 64 bits for each ldt entry
     void*           stack;
-    uint8_t         ring;
+    u8         ring;
 } arch_task_context;
 
 int tss_init(void);

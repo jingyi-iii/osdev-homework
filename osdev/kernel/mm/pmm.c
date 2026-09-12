@@ -1,7 +1,7 @@
 #include "mm/pmm.h"
-#include "mm/paging.h"
+#include "paging.h"
 #include "lib/string.h"
-#include "drivers/log_driver.h"
+#include "kernel/log.h"
 #include "sync/spinlock.h"
 
 /*
@@ -11,6 +11,9 @@
  *   0x00000000 - 0x000FFFFF   Reserved (BIOS, IVT, BDA, EBDA, etc.)
  *   0x00100000 - 0x001?????   Kernel image (code + rodata + data + bss)
  *   0x00?????? - 0x00??????   Bootstrap page structures (PD + PT0)
+ *   0x00?????? - 0x00??????   Paging-structures pool (page directories
+ *                             + page tables; linker-reserved, never
+ *                             handed out — see linker.ld .page_tables)
  *   0x00?????? - 0x00??????   Bitmap (this allocator's metadata)
  *   0x00?????? - 0x03FFFFFF   Free pages
  */
@@ -18,48 +21,48 @@
 #define DIV_ROUND_UP(n, d)  (((n) + (d) - 1) / (d))
 
 /* One bit per 4KB page: 1 = used, 0 = free */
-static const uint32_t   block_size      = 4096;  /* 4KB pages */
-static uint8_t*         bitmap_4k       = 0;
-static uint32_t         total_blocks    = 0;
-static uint32_t         free_blocks     = 0;
+static const u32        block_size      = 4096;  /* 4KB pages */
+static u8*              bitmap_4k       = 0;
+static u32              total_blocks    = 0;
+static u32              free_blocks     = 0;
 static spinlock*        pmm_lock        = 0;
 static int              pmm_initialized = 0;
 
-static inline void bitmap_set(uint32_t block)
+static inline void bitmap_set(u32 block)
 {
     /*
      * 8 blocks per byte, so divide by 8 to get the byte index,
      * and use modulo 8 to get the bit index within that byte.
      */
-    bitmap_4k[block / 8] |= (uint8_t)(1U << (block % 8));
+    bitmap_4k[block / 8] |= (u8)(1U << (block % 8));
 }
 
-static inline void bitmap_clear(uint32_t block)
+static inline void bitmap_clear(u32 block)
 {
-    bitmap_4k[block / 8] &= (uint8_t)(~(1U << (block % 8)));
+    bitmap_4k[block / 8] &= (u8)(~(1U << (block % 8)));
 }
 
-static inline int bitmap_test(uint32_t block)
+static inline int bitmap_test(u32 block)
 {
     return (bitmap_4k[block / 8] >> (block % 8)) & 1;
 }
 
-void pmm_init(uint32_t total_memory, uint8_t* bitmap_pa)
+void pmm_init(u32 total_memory, u8* bitmap_pa)
 {
-    uint32_t reserve_blocks = 0;
-    uint32_t first_bitmap_block = 0;
+    u32 reserve_blocks = 0;
+    u32 first_bitmap_block = 0;
 
     if (pmm_initialized)
         return;
 
     if (!bitmap_pa) {
-        KLOG("pmm_init: bitmap_pa is NULL");
+        LOG("pmm_init: bitmap_pa is NULL");
         return;
     }
 
     pmm_lock = spinlock_alloc();
     if (!pmm_lock) {
-        KLOG("pmm_init: failed to allocate PMM spinlock");
+        LOG("pmm_init: failed to allocate PMM spinlock");
         return;
     }
 
@@ -73,16 +76,21 @@ void pmm_init(uint32_t total_memory, uint8_t* bitmap_pa)
      * bitmap itself) stays protected.
      */
     total_blocks = total_memory / block_size;
-    bitmap_4k = (uint8_t*)PAGE_ALIGN(bitmap_pa);
+    bitmap_4k = (u8*)PAGE_ALIGN(bitmap_pa);
 
     /* Mark all blocks as used */
     memset(bitmap_4k, 0xFF, DIV_ROUND_UP(total_blocks, 8));
 
     /* First free block = block after the end of the bitmap */
-    first_bitmap_block = (uint32_t)bitmap_4k / block_size;
+    first_bitmap_block = (u32)bitmap_4k / block_size;
     reserve_blocks = first_bitmap_block
                    + DIV_ROUND_UP(DIV_ROUND_UP(total_blocks, 8), block_size);
 
+    /*
+     * Everything below the bitmap is reserved: BIOS, kernel image, the
+     * linker-reserved paging-structures pool (linker.ld .page_tables)
+     * and the bitmap itself.  Only pages after the bitmap are freed.
+     */
     free_blocks = 0;
     for (size_t i = reserve_blocks; i < total_blocks; i++) {
         bitmap_clear(i);
@@ -92,11 +100,41 @@ void pmm_init(uint32_t total_memory, uint8_t* bitmap_pa)
     pmm_initialized = 1;
     spinlock_unlock(pmm_lock);
 
-    KLOG("PMM: total %u pages (%u MB), %u pages free, bitmap at 0x%x",
-         total_blocks, total_memory >> 20, free_blocks, (uint32_t)bitmap_4k);
+    LOG("PMM: total %u pages (%u MB), %u pages free, bitmap at 0x%x",
+         total_blocks, total_memory >> 20, free_blocks, (u32)bitmap_4k);
 }
 
-uint32_t pmm_alloc_page(void)
+/*
+ * pmm_mark_used - Reserve a physical range so the allocator never hands
+ * it out (used at boot for the GRUB multiboot module images: GRUB loads
+ * them right after the kernel image — well ABOVE the PMM bitmap — so
+ * pmm_init() would otherwise treat them as free pages and hand them out
+ * to the first boot allocations, zeroing the module contents before they
+ * are copied into a process).
+ */
+void pmm_mark_used(u32 paddr, u32 size)
+{
+    u32 block;
+    u32 end_block;
+
+    if (!pmm_initialized || paddr == 0 || size == 0)
+        return;
+
+    spinlock_lock(pmm_lock);
+    block = paddr / block_size;
+    end_block = (paddr + size + block_size - 1) / block_size;
+    if (end_block > total_blocks)
+        end_block = total_blocks;
+    for (; block < end_block; block++) {
+        if (!bitmap_test(block)) {
+            bitmap_set(block);
+            free_blocks--;
+        }
+    }
+    spinlock_unlock(pmm_lock);
+}
+
+u32 pmm_alloc_page(void)
 {
     if (!pmm_initialized)
         return 0;
@@ -115,13 +153,13 @@ uint32_t pmm_alloc_page(void)
     }
     spinlock_unlock(pmm_lock);
 
-    KLOG("PMM: out of memory!");
+    LOG("PMM: out of memory!");
     return 0;
 }
 
-void pmm_free_page(uint32_t paddr)
+void pmm_free_page(u32 paddr)
 {
-    uint32_t block = paddr / block_size;
+    u32 block = paddr / block_size;
     if (!pmm_initialized || block >= total_blocks)
         return;
 
@@ -133,9 +171,9 @@ void pmm_free_page(uint32_t paddr)
     spinlock_unlock(pmm_lock);
 }
 
-uint32_t pmm_get_free_page_count(void)
+u32 pmm_get_free_page_count(void)
 {
-    uint32_t blocks = 0;
+    u32 blocks = 0;
 
     if (!pmm_initialized)
         return 0;
@@ -147,15 +185,15 @@ uint32_t pmm_get_free_page_count(void)
     return blocks;
 }
 
-uint32_t pmm_alloc_pages(uint32_t num_pages)
+u32 pmm_alloc_pages(u32 num_pages)
 {
     if (!pmm_initialized || num_pages == 0)
         return 0;
 
     spinlock_lock(pmm_lock);
 
-    uint32_t start_block = 0;
-    uint32_t found_blocks = 0;
+    u32 start_block = 0;
+    u32 found_blocks = 0;
 
     for (size_t i = 0; i < total_blocks; i++) {
         if (!bitmap_test(i)) {
@@ -178,16 +216,16 @@ uint32_t pmm_alloc_pages(uint32_t num_pages)
     }
 
     spinlock_unlock(pmm_lock);
-    KLOG("PMM: out of memory for %u pages!", num_pages);
+    LOG("PMM: out of memory for %u pages!", num_pages);
     return 0;
 }
 
-void pmm_free_pages(uint32_t paddr, uint32_t num_pages)
+void pmm_free_pages(u32 paddr, u32 num_pages)
 {
     if (!pmm_initialized || num_pages == 0)
         return;
 
-    uint32_t start_block = paddr / block_size;
+    u32 start_block = paddr / block_size;
 
     spinlock_lock(pmm_lock);
     for (size_t i = start_block; i < start_block + num_pages; i++) {

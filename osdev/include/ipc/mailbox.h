@@ -1,0 +1,104 @@
+#ifndef MAILBOX_H
+#define MAILBOX_H
+
+#include <stddef.h>
+#include "lib/types.h"
+#include "lib/list.h"
+#include "sync/spinlock.h"
+#include "sync/wait_queue.h"
+#include "kernel/process.h"
+
+#define MAIL_ANY_TID            (-0xcd)   /* receiver_tid wildcard = broadcast
+                                           * MUST equal USER_MAIL_ANY_TID
+                                           * (user/userlib.h) */
+#define MAX_SUBSCRIPTION_COUNT  (16)
+
+struct mailmeta;
+typedef struct mail {
+    u32 magic;
+    int sender_tid;          /* informational: sender's thread (reply-to)  */
+    int receiver_tid;        /* routing: target thread, or MAIL_ANY_TID for
+                              * broadcast to subscribers of m->magic        */
+    char data[256];
+    size_t data_size;
+} mail;
+
+typedef struct mailmeta {
+    size_t unique_id;
+    int ref_count;
+    mail* payload;
+    spinlock* sp_lock;
+    list_node this_node;    // attach to mailbox->mails list
+    list_node query_node;
+} mailmeta;
+
+/*
+ * Mail handler callback. Handlers run synchronously in ISR context during
+ * mailbox delivery. Handlers MUST NOT call mailbox_release_mail() —
+ * send_mail() releases the reference after all handlers return.
+ */
+typedef void (*mail_handler)(mail* m);
+
+typedef struct mailhandler {
+    mail_handler handler;
+    list_node this_node;
+} mailhandler;
+
+typedef struct mailbox {
+    int owner_pid;
+    int owner_tid;
+    u32 subscriptions[MAX_SUBSCRIPTION_COUNT];
+    spinlock* sp_lock;
+    list_node mails;
+    list_node handlers;
+    /* Threads parked in MAILBOX_CTRL_LISTEN_BLOCK.  waiters.sp_lock SHARES
+     * mb->sp_lock (set in alloc_mailbox, NOT wait_queue_init) so the
+     * empty-check + enqueue in LISTEN_BLOCK and a sender's queue + wake
+     * are atomic under ONE lock — no lost wakeup. */
+    wait_queue waiters;
+} mailbox;
+
+enum mailbox_ctrl_cmd {
+    MAILBOX_CTRL_SEND = 0,
+    MAILBOX_CTRL_LISTEN,
+    MAILBOX_CTRL_REGISTER_HANDLER,
+    MAILBOX_CTRL_UNREGISTER_HANDLER,
+    MAILBOX_CTRL_ALLOC_MAIL,
+    MAILBOX_CTRL_RELEASE_MAIL,
+    MAILBOX_CTRL_ALLOC,
+    MAILBOX_CTRL_RELEASE,
+    MAILBOX_CTRL_SUBSCRIBE_MAIL,
+    MAILBOX_CTRL_UNSUBSCRIBE_MAIL,
+    MAILBOX_CTRL_LISTEN_BLOCK,  /* = 10: tail-block until a mail is queued */
+};
+
+typedef struct mailbox_ctrl_config {
+    u8          cmd;
+    mail*       m;          /* in: mail to send / out: received mail from listen / alloc_mail */
+    mailbox*    mb;         /* in: target mailbox / out: allocated mailbox */
+    mail_handler handler;   /* in: handler function */
+    int         pid;        /* in: owner pid for mailbox_alloc */
+    int         tid;        /* in: owner tid for mailbox_alloc */
+    u32         magic;      /* in: magic for subscription */
+    int         ret;        /* out: return value */
+} mailbox_ctrl_config;
+
+/* for irq used only */
+mail*       alloc_mail                  (void);
+int         send                        (mail* m);
+int         send_mail                   (mailbox* mb, mail* m);
+
+void        mailbox_syscall_init        (void);
+void        mailbox_syscall_exit        (void);
+mail*       mailbox_alloc_mail          (void);
+void        mailbox_release_mail        (mail* m);
+mailbox*    mailbox_alloc               (int owner_pid, int owner_tid);
+void        mailbox_release             (mailbox* mb);
+int         mailbox_send                (mail* m);
+mail*       mailbox_listen              (mailbox* mb);
+int         mailbox_register_handler    (mailbox* mb, mail_handler handler);
+int         mailbox_unregister_handler  (mailbox* mb, mail_handler handler);
+int         mailbox_subscribe_mail      (mailbox* mb, u32 magic);
+int         mailbox_unsubscribe_mail    (mailbox* mb, u32 magic);
+
+#endif

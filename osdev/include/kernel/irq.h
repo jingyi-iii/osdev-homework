@@ -1,38 +1,83 @@
 #ifndef __IRQDEV_H__
 #define __IRQDEV_H__
 
-#include <stdint.h>
+#include "lib/types.h"
 #include <stddef.h>
 #include "lib/list.h"
 #include "sync/spinlock.h"
 #include "kernel/errno.h"
+#include "sync/semaphore.h"
 
-#define IRQ_ANY_MINOR  UINT32_MAX
+#define IRQ_ANY_MINOR  0xFFFFFFFFu
 
 typedef void (*irq_handler_fn)(void* context);
 
 typedef struct irq {
     const char *name;
     void *context;
-    uint32_t major;
-    uint32_t minor;
+    u32 major;
+    u32 minor;
     int enabled;
+    int is_user_irq;
+    int is_threaded;    /* 1: handler runs in a dedicated kernel thread */
+    volatile int pending;   /* threaded irq: set by ISR, cleared by handler thread */
+    int tid;
+    void* owner;        /* registering thread's tcb (user IRQ only) */
     spinlock* sp_lock;
     list_node node;
+    list_node thread_node;  /* bind with tcb->irqs */
     irq_handler_fn handler;
+
+    int kernel_irq_tid;
+    semaphore* sem;
 } irq;
 
 typedef struct irqline {
-    uint32_t major;
+    u32 major;
     int enabled;
     spinlock* sp_lock;
     list_node irqs;
 } irqline;
 
-int irq_request(irq **out, const char* name, uint32_t major, uint32_t minor,
+int irq_request(irq **out, const char* name, u32 major, u32 minor,
+                    irq_handler_fn cb, void* cb_param);
+int irq_request_threaded(irq **out, const char* name, u32 major, u32 minor,
                     irq_handler_fn cb, void* cb_param);
 void irq_release(irq *p);
 int irq_mask(struct irq* p);
 int irq_unmask(struct irq* p);
+
+/*
+ * IRQ syscall gate for RING3 access.
+ * The four functions above transparently route through this gate when the
+ * caller runs in user mode (CPL3).  The handle is allocated by
+ * syscall_register() (kernel/syscall.c) — callers never pick a number.
+ */
+
+/* IRQ syscall commands */
+typedef enum {
+    IRQ_SYSCALL_REQUEST = 0,
+    IRQ_SYSCALL_RELEASE = 1,
+    IRQ_SYSCALL_MASK    = 2,
+    IRQ_SYSCALL_UNMASK  = 3,
+    IRQ_SYSCALL_REQUEST_THREADED,
+} irq_syscall_cmd;
+
+/* Data structure carried through the IRQ syscall gate */
+typedef struct irq_ctrl_config {
+    u8              cmd;       /* irq_syscall_cmd                            */
+    irq*            handle;    /* out (request) / in (release, mask, unmask) */
+    const char*     name;      /* request: irq name                          */
+    u32             major;     /* request: IRQ major                         */
+    u32             minor;     /* request: IRQ minor                         */
+    irq_handler_fn  handler;   /* request: callback                          */
+    void*           param;     /* request: callback param                    */
+    int             is_user_irq;  /* request: is user mode irq               */
+    int             tid;
+    int             ret;       /* out: return code                           */
+} irq_ctrl_config;
+
+void irq_syscall_init(void);
+void irq_syscall_exit(void);
 
 #endif
