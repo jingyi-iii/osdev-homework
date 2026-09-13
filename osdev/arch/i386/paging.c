@@ -328,6 +328,26 @@ void arch_unmap_4kb(void* cr3, void* va)
         return;
     }
 
+    /*
+     * VAs below USER_HEAP_BASE live in the low identity band, which is
+     * mapped in EVERY address space and used by the kernel itself (pmm
+     * page zeroing, syscall buffers, ...).  A user VA inside this band
+     * aliases the identity map of the same-numbered physical page, so
+     * clearing its PTE would delete that identity mapping — a later
+     * kernel access through the physical address (e.g. pmm_alloc_pages
+     * memset) would then fault under this CR3 (ukernel.md #12).  No such
+     * mapping should exist (anon/user VAs are anchored above
+     * USER_HEAP_BASE); restore the supervisor identity PTE defensively
+     * instead of clearing it.
+     */
+    if ((u32)va < USER_HEAP_BASE) {
+        LOG("arch_unmap_4kb: kernel-band VA 0x%x kept as supervisor identity", (u32)va);
+        ptbl[pte_index].raw = ((u32)va & PAGE_MASK) | PTE_PRESENT | PTE_RW;
+        spinlock_unlock(paging_lock);
+        arch_tlb_invlpg((u32)va);
+        return;
+    }
+
     // pmm_free_page(ptbl[pte_index].paddr << 12);
     ptbl[pte_index].raw = 0;
     spinlock_unlock(paging_lock);
@@ -432,8 +452,8 @@ void arch_paging_init(u32 total_memory, u32 reserved_end)
     kernel_pdir_phys = (u32)pdes;
 
     /* Step 5: Initialise the physical memory manager.  The paging pool
-     * sits below the PMM bitmap, so pmm_init() keeps it reserved and
-     * user VAs (identity-mapped) can never collide with its PAs. */
+     * sits below the PMM bitmap, so pmm_init() keeps it reserved and can
+     * never hand its pages out. */
     pmm_init(total_memory, __pmm_bitmap_start);
     LOG("Paging: paging-structures pool 0x%x-0x%x (%u slots)",
          VMM_PDE_ALLOC_BASE, VMM_PDE_ALLOC_END, PAGING_POOL_SLOTS);

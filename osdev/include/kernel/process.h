@@ -77,6 +77,20 @@ typedef struct tcb {
     wait_queue*         waiting_on;
 } tcb;
 
+/*
+ * Pending thread / address-space switch (lazy CR3): the scheduler records
+ * the target here; the gate exit commits it via arch_task_context_switch()
+ * (process.c) right before the register restore + iret.
+ *   - vcb:            next process's page directory; 0 = same process
+ *                     (the current CR3 is already correct).
+ *   - curr_task_ctx:  next thread's context (curr_task_ctx / TSS.esp0 /
+ *                     LDT re-point).
+ */
+typedef struct {
+    vmm_control_block* vcb;
+    arch_task_context* curr_task_ctx;
+} thread_context_switch_info;
+
 i32     thread_create       (task_priv priv, task_entry_t entry, void* param);
 void    thread_exit         (i32 tid);
 void    thread_yield        (void);
@@ -100,9 +114,8 @@ int     proc_get_pid        (void);
 pcb*    get_current_process (void);
 pcb*    get_process_by_pid  (i32 pid);
 
-/* Scheduler entry for ISR gate exit (arch/i386/irq.S) */
+/* Scheduler tick entry (PIT IRQ0 -> schedule_isr), see kernel/process.c */
 int     schedule_if_needed  (void);
-void    schedule_from_isr   (void);
 
 /* Exported for mailbox broadcast — must be held when iterating thread_head */
 extern list_node thread_head;

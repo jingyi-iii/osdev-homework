@@ -6,7 +6,6 @@
 #include "lib/list.h"
 #include "sync/spinlock.h"
 #include "kernel/errno.h"
-#include "sync/semaphore.h"
 
 #define IRQ_ANY_MINOR  0xFFFFFFFFu
 
@@ -19,17 +18,12 @@ typedef struct irq {
     u32 minor;
     int enabled;
     int is_user_irq;
-    int is_threaded;    /* 1: handler runs in a dedicated kernel thread */
-    volatile int pending;   /* threaded irq: set by ISR, cleared by handler thread */
     int tid;
     void* owner;        /* registering thread's tcb (user IRQ only) */
     spinlock* sp_lock;
     list_node node;
     list_node thread_node;  /* bind with tcb->irqs */
     irq_handler_fn handler;
-
-    int kernel_irq_tid;
-    semaphore* sem;
 } irq;
 
 typedef struct irqline {
@@ -40,8 +34,6 @@ typedef struct irqline {
 } irqline;
 
 int irq_request(irq **out, const char* name, u32 major, u32 minor,
-                    irq_handler_fn cb, void* cb_param);
-int irq_request_threaded(irq **out, const char* name, u32 major, u32 minor,
                     irq_handler_fn cb, void* cb_param);
 void irq_release(irq *p);
 int irq_mask(struct irq* p);
@@ -60,7 +52,6 @@ typedef enum {
     IRQ_SYSCALL_RELEASE = 1,
     IRQ_SYSCALL_MASK    = 2,
     IRQ_SYSCALL_UNMASK  = 3,
-    IRQ_SYSCALL_REQUEST_THREADED,
 } irq_syscall_cmd;
 
 /* Data structure carried through the IRQ syscall gate */

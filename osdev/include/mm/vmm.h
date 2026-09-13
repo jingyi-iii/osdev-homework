@@ -72,6 +72,10 @@ int vmm_unmap_fixed(pcb* proc, void* vaddr, size_t size);
 int vmm_lookup_region(pcb* proc, u32 va, u32* out_pa, u32* out_pa_size,
                       void** out_start_va);
 u32 vmm_va_to_pa(pcb* proc, u32 va);
+/* Same VA->PA translation against a raw vcb — used by
+ * arch_task_context_init() where only the vcb is at hand (boot thread
+ * creation writes the initial stack frame via the physical alias). */
+u32 vmm_vcb_va_to_pa(vmm_control_block* vcb, u32 va);
 
 /*
  * VMM is a KERNEL-INTERNAL service — there is deliberately NO ring-3

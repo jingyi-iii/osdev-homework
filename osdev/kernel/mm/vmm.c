@@ -1,6 +1,7 @@
 #include "mm/vmm.h"
 #include "mm/pmm.h"
 #include "mm/heap.h"
+#include "paging.h"          /* USER_ANON_BASE, USER_HEAP_BASE */
 #include "kernel/process.h"
 #include "kernel/capability.h"
 #include "kernel/irq.h"
@@ -195,9 +196,14 @@ void* vmm_alloc_pages(vmm_control_block* vcb, u32 page_cnt, u32 flags)
         }
     }
 
-    /* tree is empty — fall back to identity mapping */
+    /* tree is empty — anchor the first region at USER_ANON_BASE.
+     * NEVER fall back to va = pa: low physical pages live in the kernel's
+     * identity band, where a user mapping aliases the identity map — and
+     * freeing the region (thread stack exit) would delete the identity
+     * PTE of that physical page, so a later pmm_alloc_pages() zeroing of
+     * the page faults under this CR3 (ukernel.md #12). */
     if (vcb->tree->root == vcb->tree->nil)
-        va = pa;
+        va = USER_ANON_BASE;
 
     region->start_va = (void*)va;
     region->size     = PAGE_SIZE * page_cnt;
@@ -620,20 +626,28 @@ int vmm_unmap_fixed(pcb* proc, void* vaddr, size_t size)
     return 0;
 }
 
-u32 vmm_va_to_pa(pcb* proc, u32 va)
+u32 vmm_vcb_va_to_pa(vmm_control_block* vcb, u32 va)
 {
     u32 pa = 0;
-    if (!proc || !proc->vcb.tree)
+    if (!vcb || !vcb->tree)
         return 0;
 
-    spinlock_lock(proc->vcb.lock);
-    rbnode* node = rbtree_search(proc->vcb.tree, (void*)va, vmm_rbtree_key_cmp);
+    spinlock_lock(vcb->lock);
+    rbnode* node = rbtree_search(vcb->tree, (void*)va, vmm_rbtree_key_cmp);
     if (node) {
         vmm_region* region = rb_entry(node, vmm_region, node);
         pa = region->pa + ((u32)va - (u32)region->start_va);
     }
-    spinlock_unlock(proc->vcb.lock);
+    spinlock_unlock(vcb->lock);
 
     return pa;
+}
+
+u32 vmm_va_to_pa(pcb* proc, u32 va)
+{
+    if (!proc)
+        return 0;
+
+    return vmm_vcb_va_to_pa(&proc->vcb, va);
 }
 

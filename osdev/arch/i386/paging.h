@@ -79,8 +79,10 @@ typedef union pte {
  *   the high user area starts at 0xC0000000:
  *     0xC0000000 - 0xC1000000  : USER HEAP (16MB, reserved for the
  *                                user-heap allocator / mailbox views)
- *     0xC1000000 - ...         : USER ELF images (code/data/bss), stacks
- *                                are mapped above each ELF image
+ *     0xC1000000 - 0xD0000000  : USER ELF images (code/data/bss)
+ *     0xD0000000 - 0xE0000000  : per-process anon mappings (thread stacks +
+ *                                vmm_alloc_pages() regions, USER_ANON_BASE)
+ *     0xE0000000 -             : MMIO high-VA aliases (mmio syscall)
  *   The top 256MB (0xF0000000 - 0xFFFFFFFF) is reserved for a future
  *   higher-half kernel mapping — currently unused, the kernel's code
  *   and data stay in the low identity map at 1MB.
@@ -89,6 +91,17 @@ typedef union pte {
 #define USER_HEAP_SIZE      0x01000000            /* 16 MB */
 #define USER_HEAP_END       (USER_HEAP_BASE + USER_HEAP_SIZE)  /* 0xC1000000 */
 #define USER_ELF_BASE       0xC1000000
+
+/*
+ * Anchor for per-process anon VAs: thread stacks and other
+ * vmm_alloc_pages() regions start here and grow upward.  It MUST stay
+ * OUT of the low identity band [0, total_mem): a user VA whose value
+ * aliases a physical page number ALSO aliases the kernel's identity
+ * mapping of that page, so unmapping it (thread stack exit) deletes the
+ * identity PTE — a later pmm_alloc_pages() zeroing of that physical
+ * page then faults under this CR3 (ukernel.md #12).
+ */
+#define USER_ANON_BASE      0xD0000000
 
 #define KERNEL_BASE_VADDR   0xF0000000            /* reserved kernel high-half */
 #define USER_SPACE_TOP      KERNEL_BASE_VADDR

@@ -458,9 +458,10 @@ static int mailbox_exec(mailbox_ctrl_config* config)
     case MAILBOX_CTRL_LISTEN_BLOCK:
         /*
          * Tail-blocking variant of LISTEN — the kernel's ONE supported
-         * "block inside a syscall" shape.  This kernel defers context
-         * switches to the gate exit (arch_task_restore_context only
-         * re-points curr_task_ctx), so a thread parked here NEVER resumes
+         * "block inside a syscall" shape.  Context switches are deferred
+         * to the gate exit (request_switch_context() only records the
+         * target; arch_task_context_switch() commits it right before the
+         * register restore + iret), so a thread parked here NEVER resumes
          * in the middle of this gate: it resumes in user mode right after
          * the syscall.  Therefore this call does NOT hand back the mail; it
          * only guarantees one is queued — the caller must follow up with a
@@ -481,15 +482,13 @@ static int mailbox_exec(mailbox_ctrl_config* config)
             break;
         }
 
-        /* Set the result BEFORE the block and cache everything we still
-         * need into locals.  The tail-block defers the real context switch
-         * to the gate exit, but thread_block() already switched address
-         * space (CR3) to the next thread — which may be in ANOTHER process.
-         * From that point on the syscall config buffer (a kmalloc'd kbuf,
-         * not readable under another process's CR3) is OFF LIMITS: do NOT
-         * re-read config->mb / config->ret after wait_queue_sleep_locked().
-         * Only the cached mailbox (< 16MB identity, shared) and the static
-         * spinlock array are safe to touch afterwards. */
+        /* Set the result and cache everything still needed into locals
+         * BEFORE the block.  With the lazy CR3 design nothing has switched
+         * yet (the switch is only *requested* by thread_block() and is
+         * committed at the gate exit), and the syscall config lives in the
+         * static .bss kbuf anyway — but this tail deliberately touches
+         * only these locals plus static memory, so it stays correct no
+         * matter when the switch is committed. */
         config->ret = 0;
         {
             mailbox* mb = config->mb;
@@ -498,11 +497,11 @@ static int mailbox_exec(mailbox_ctrl_config* config)
             if (list_empty(&mb->mails)) {
                 /* No mail: park.  sleep_locked expects the caller to already
                  * hold wq->sp_lock (== mb->sp_lock) with IF=0; it enqueues
-                 * us, unlocks, thread_block()s (deferred switch), re-locks.
-                 * After it returns we may be running under another process's
-                 * CR3 — release the lock with the CACHED sp only, then exit
-                 * the gate (the thread resumes in user mode after the
-                 * syscall once woken; it never comes back into this case). */
+                 * us, unlocks, thread_block()s (the switch is only
+                 * *requested* there — the gate exit commits it), re-locks.
+                 * Release the lock with the CACHED sp only, then exit the
+                 * gate: the thread resumes in user mode after the syscall
+                 * once woken, and never comes back into this case. */
                 wait_queue_sleep_locked(&mb->waiters);
             }
             spinlock_unlock_irqrestore(sp, eflags);

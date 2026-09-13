@@ -177,7 +177,9 @@ typedef enum {
 - 用户态：`user_irq_request(major, minor)` → `SYSCALL_IRQ` → 内核记录 `irq->owner`（注册线程 tcb）+ `tid`。
 - ISR：`dispatch_user_mode_irq()` 构造 `MAIL_MAGIC_IRQ` mail，`send_mail`（定向，不走订阅过滤）到 `t->mailbox`，非阻塞。
 - `irqline` 没有路线图设想的 `owner_mailbox/owner_process` 字段——实际用 `irq->owner`（tcb 缓存）达成同一目的。
-- 内核线程化 IRQ（`irq_request_threaded` + semaphore）和同步 IRQ 保留在 `irqline_handler` 的分支里。
+- 内核同步 IRQ（`irq_request`）保留在 `irqline_handler` 的分支里；内核线程化 IRQ（`irq_request_threaded`
+  + 信号量 + `irq_defer_unmask`）2026-09 已整块删除——树内无调用者，且其 ring3 路由允许内核线程以
+  CPL0 执行调用方提供的回调指针（见下"已删除"记录）。
 - **IRQ0（PIT 调度时钟）留在内核**，正确。
 
 ### 2.4 内存映射 + shm（第 3 步 ✅ 功能等价）
@@ -214,7 +216,7 @@ typedef enum {
 
 ### 2.6 内核侧（调度 / VMM / 异常 / 日志）
 
-- 调度：单核，PIT IRQ0 tick，`schedule_from_isr`；进程/线程用全局链表 + wait queue。
+- 调度：单核，PIT IRQ0 tick（`schedule_isr` → `schedule_if_needed`）；进程/线程用全局链表 + wait queue。
 - 日志：`arch/i386/klog.c`（ring-0 直写 COM1）+ `arch/i386/kterm.c`（VGA 文本启动横幅）。
   用户态 LOG：namespace "log" → log_server2.elf（ring-3 服务写 COM1）；客户端用
   `userlib` 的 `user_log_str/user_log_write`（2026-09 接线，hello.elf 验证通过）。
@@ -266,45 +268,50 @@ typedef enum {
     - `gate_caller_ring3()` 改读**保存帧的 CS**（`curr_task_ctx->regs->cs & 3`，`arch_task.h`）→ kbuf 路径真正生效；
     - 小配置的 kbuf 改为 kernel `.bss` 静态缓冲 `syscall_kbuf[512]`：低端内存在**任何 CR3** 下都映射，
       而新 kmalloc 的堆页在“进程创建时克隆过内核 PDE”的旧页目录里可能不存在；
-    - handler 前后若 `arch_get_cr3()` 变化（发生了尾阻塞），**跳过 `copy_to_user` 与 `kfree`**
-      （不得在下一个线程的 CR3 下触碰调用者地址 / 堆缓冲）。
+    - handler 前后**若调用者被切走则跳过 `copy_to_user` 与 `kfree`**：原始判据是 `arch_get_cr3()`
+      是否变化；**lazy CR3（2026-09-13）后改为 `thread_get_tid()` 前后比较**（切换在 `thread_block()`
+      时就登记，地址空间要到门出口才真正换，CR3 比较保留作兜底）——不得在调用者已被切走/正在退出时
+      触碰其地址空间或堆缓冲。
     验证：修复后菜单 9 完整跑通（mailbox ~1.3 ms/往返、portal ~105 µs、“portal ~13x faster”）。
-12. **【待 debug · OPEN】线程风暴 + 键盘活动 → `thread_create` 内 `pmm_alloc_pages` 清零页时写 #PF**：
-    现象：`process_test` 菜单 **1**（thread_api_test 的线程 create/block/unblock/exit 风暴）叠加键盘输入
-    （人机节奏或连打）时，内核在 `proc_syscall_isr → proc_syscall_exec → thread_create_ex_internal →
-    arch_task_context_init → vmm_alloc_pages → pmm_alloc_pages` 的 **`memset`（清零新分配页）** 处写 fault：
-    - CR2 ≈ `0x01983000`（kernel band：16MB~kernel_end 一带的低物理页）；
-    - Error code = `0x2`（**写**、non-present、kernel-mode）；
-    - 含义：**当前 CR3 缺少这段内核映射**——正在“分配/清零内核页”的代码，运行在一个看不到该内核带的
-      地址空间里（对比第 11 条：修复前是访问调用者指针；这里是访问内核自身内存）。
-    目前线索：
-    - `arch_paging_init` 在 boot 已把 0~64MB 恒等映射为 4MB 页（PSE），`arch_clone_kernel_pde` 在进程创建时
-      克隆**全部** PDE——理论上每个用户 PD 都应覆盖内核带；
-    - 高度可疑：**进程页目录的生命周期**——`vmm_destroy`/`arch_destroy_address_space` 释放“非共享 PDE 指向的
-      页表”后是否留下**悬垂 PDE**；以及 `split_4mb_pde` 拆出的 per-PD 页表在被释放/复用后，仍有线程运行在
-      旧 CR3（延迟切换）并访问内核带 → 叶表已失效/被清零 → #PF。
-    复现方法（headless，已脚本化；另有历史同族 #GP：`arch_syscall_entry` iret 保存帧被毁，疑似同一类生命周期问题）：
-    ```sh
-    make all
-    qemu-system-i386 -cdrom output/myos.iso -serial file:serial.log -display none -no-reboot \
-        -monitor unix:/tmp/mon,server,nowait
-    python3 tools/gp_repro.py     # 连 monitor、boot 后周期 sendkey 1；也可自写 python 发键
-    ```
-    `serial.log` 抓 `KERNEL EXCEPTION … CR2 … EIP`；用
-    `i686-elf-addr2line -e output/myos.bin -f -p -C <EIP>` 解析符号。
-    下一步建议：
-    1) exception dump 里**加打印 CR3**（`arch_get_cr3()`）+ 当前 `thread_run` 的 pid/tid，确认“谁在什么 CR3 下”出错；
-    2) `vmm_destroy`/`arch_destroy_address_space` 加断言：被销毁的 PD 是否仍等于当前 CR3；释放非共享页表时
-       同时把对应 PDE 清 0；
-    3) 复核 `split_4mb_pde` 的页表归属：拆出的 PT 是否可能被销毁后复用，而仍有活跃线程访问这段 4MB 内核带。
-    （与第 11 条不是同一处；菜单 9 / ipc_bench 在修复后已稳定，本项只影响“线程风暴 + 键盘”场景。）
+    > **补记（2026-09-13，lazy CR3）**：上下文切换不再在 `thread_block()` 内立即换 CR3。调度器经
+    > `request_switch_context()` 仅记录 {vcb, next ctx}，由门出口的 `arch_task_context_switch()`
+    > 统一提交（syscall 出口需 push/pop 保护 EAX 返回值；`proc_exit_internal` 自退在销毁 vcb 前显式
+    > 提交）。因此 handler 的 C 尾部始终运行在**调用者自己的 CR3** 上，上文“尾阻塞后 config 在别的
+    > CR3 下不可访问”的推理对当前内核已不成立；kbuf 用 `.bss`、尾部只用缓存局部量等做法保留为跨
+    > 设计/跨时序都成立的保守选择。
+12. **【已修复 2026-09-13】线程风暴 + 键盘活动 → `thread_create` 内 `pmm_alloc_pages` 清零页时写 #PF**：
+    现象（修复前 3/3 复现，≤90s）：`process_test` 菜单 **1**（thread_api_test 的线程 create/block/unblock/exit
+    风暴）叠加键盘输入时，内核在 `thread_create_ex_internal → arch_task_context_init → vmm_alloc_pages →
+    pmm_alloc_pages` 的 **`memset`（清零新分配页）** 处写 fault（CR2 ≈ `0x01983000`，Error = `0x2`
+    写/non-present/kernel-mode）。
+    **根因（QEMU monitor 现场取证：dump 出错 CR3 的 PDE/PTE）**：
+    - `vmm_alloc_pages` 空树回退 `va = pa` 把**用户线程栈放进了内核恒等带**（首分配≈PMM 首个空闲页，
+      后续 gap 顺延仍在 `0x19xxxxx`）；gap 分配下 VA 也常与 PA 恰同值；
+    - **内核带里 VA 的 PTE 同时就是恒等映射**：线程退出 `vmm_free_pages` → `arch_unmap_4kb` 清掉该 PTE，
+      等价于在本进程 PD 里**删除了该物理页的恒等映射**（现场：PT idx384/385 活栈 user PTE、idx386/387
+      被清 0、idx388+ 为拆分时铺的 supervisor 恒等项）；
+    - 该物理页被 `pmm_alloc_pages` 回收再分发，其**清零 memset 走恒等地址**（`memset(pa)`）——当前 CR3
+      （调用者自己的 PD）里该恒等 PTE 已被删 → **non-present 写 #PF**。概率性 = PMM 回收顺序 ×
+      线程风暴/键盘时序的耦合。
+    **修复（本次已落地）**：
+    - `arch/i386/paging.h` 新增 `USER_ANON_BASE = 0xD0000000`（user ELF 之上、mmio 之下）；
+      `vmm_alloc_pages` 空树回退由 `va=pa` 改锚定此基址——**用户 VA 永不进入内核恒等带**；
+    - `arch_unmap_4kb` 防御：`va < USER_HEAP_BASE` 时不清理、**恢复为 supervisor 恒等 PTE**
+      （内核带的 PTE 就是恒等映射，任何清理都是打洞）；
+    - 回归修复：栈移到高 VA 后，`arch_task_context_init` 写初始 regs 帧不能再走 VA——boot 时内核线程
+      创建 ELF 进程首线程，**当前 CR3 不是新进程的 PD**；改走**物理别名**写入（与 `elf_load` 拷贝段内容
+      同一规则），新增 `vmm_vcb_va_to_pa()`。
+    **验证**：风暴+键盘 90s ×3 轮全绿（修复前 ≤90s 必崩）；12 线程启动、菜单渲染、portal 测试 PASS、
+    选项 1（风暴）与选项 9（ipc-bench：mailbox 58µs / portal 103µs）完整跑通；复现脚本
+    `tools/gp_repro.py`。
+    （历史同族 #GP：`arch_syscall_entry` iret 保存帧被毁——疑似同一“恒等带被洞穿”族类，修复后可再复测。）
 
 ### 2.8 地址空间访问范围审计（2026-09 · 更新于低 16MB 隔离后）
 
 > 现状快照：**低 16MB 恒等映射 = `PTE_KERNEL`（2026-09 已隔离）**。内核镜像/堆/页表池/位图全部只对 ring0
 > 可见；ring3 能访问的只有 per-process `PTE_USER` 映射。用户高区：共享 user-heap `[0xC0000000,0xC1000000)`，
-> 用户 ELF 链接基址 `0xC1000000`（`user/user.ld`），mmio 固定 VA `0xE0000000/0xE0010000`，
-> `USER_SPACE_TOP = 0xF0000000`。
+> 用户 ELF 链接基址 `0xC1000000`（`user/user.ld`），线程栈锚点 `USER_ANON_BASE = 0xD0000000`，
+> mmio 固定 VA `0xE0000000/0xE0010000`，`USER_SPACE_TOP = 0xF0000000`。
 
 **Ring0（内核）访问的地址范围**（低地址恒等映射；用户 CR3 下仍以 supervisor 访问）
 
@@ -323,14 +330,16 @@ typedef enum {
 | 范围 | 内容 | 谁 |
 |------|------|------|
 | `0xC1000000 ~ +size` | ELF 代码/数据（per-process `PTE_USER`）| 所有 user server/demo |
-| `0xC1000000+size` 以上 | 附加线程栈（`vmm_alloc_pages`，per-process）| 各进程子线程 |
+| `0xD0000000 ~ 0xE0000000` | **线程栈**（`vmm_alloc_pages`，`USER_ANON_BASE` 起向上，含主线程）| 各进程 |
 | `0xC0000000 ~ 0xC1000000` | **共享 user-heap** 16MB（所有进程同一物理页；`SYSCALL_HEAP` malloc、mail 对象）| 所有进程 |
 | `0xE0000000` / `0xE0010000` | VGA 文本 / mode-13 fb 的 MMIO 高 VA 别名（`SYSCALL_MMIO` + `CAP_MAP_MEM`）| terminal_server |
-| ~`0x0194xxxx` 起低物理页 | **主线程用户栈**（`vmm_alloc_pages` 空树回退 `va=pa`，per-process `PTE_USER`）| 每进程主线程 |
 | `0x00000000 ~ 0x00FFFFFF` | **不可达**（supervisor）| —— |
 | 端口 `0x3C0-0x3DF`/`0x3F8`/`0x60-0x64`/`0x70-0x71`+`0x40-0x43` | io syscall（`CAP_ACCESS_IO`）| terminal/kb/log/rtc |
 
 **要点**：
+- **用户 VA 永不放进内核恒等带** `[0, 64MB)`：内核靠恒等映射访问物理页（pmm 清零、syscall kbuf、
+  `elf_load` 拷贝段内容），用户映射一旦落在带内，其 unmap 会删掉同物理页的恒等 PTE（第 12 条）；
+  `arch_unmap_4kb` 对 `< USER_HEAP_BASE` 的清理请求只恢复 supervisor 恒等 PTE，绝不删除。
 - mail 对象在共享 user-heap（ring3 可读写 payload），`mailmeta`/`mailbox`/全部内核簿记在 supervisor 内核堆；
   ring3 已无任何「指向内核对象的指针」可解引用（syscall 句柄全为整数 / tid / `mb==NULL`）。
 - 原「对方案①（P3）最要紧的三条 ring3 低地址访问路径」已全部解除：VGA 走 mmio 高 VA；mailbox 视图已迁

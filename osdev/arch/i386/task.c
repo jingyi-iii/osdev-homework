@@ -73,21 +73,45 @@ int arch_task_context_init(vmm_control_block* vcb, arch_task_context* context, t
         return E_NOMEM;
     }
     context->regs = (regs*)((u8*)context->stack + 0x1000 - sizeof(regs));
-    context->regs->cs = 0x0 | 0x4 | ring;
-    context->regs->gs = 0x8 | 0x4 | ring;
-    context->regs->fs = 0x8 | 0x4 | ring;
-    context->regs->es = 0x8 | 0x4 | ring;
-    context->regs->ds = 0x8 | 0x4 | ring;
-    context->regs->ss = 0x8 | 0x4 | ring;
-    context->regs->eip = (u32)entry;
-    context->regs->esp = (u32)context->stack + 0x1000 - sizeof(regs);
+
+    /*
+     * Write the initial frame through the IDENTITY alias of the stack
+     * page — never through its virtual address: the caller may run on a
+     * DIFFERENT address space than vcb (at boot, every ELF process's
+     * first thread is created by a kernel thread, while the fresh user
+     * stack is mapped only in vcb's page directory).  Low physical
+     * memory is mapped under every CR3, so the physical alias is always
+     * writable — the same rule elf_load() follows for segment contents.
+     * context->regs itself stays the VA pointer: every later save /
+     * restore of this context runs under the thread's own CR3.
+     */
+    regs* frame = context->regs;
+    if (ring) {
+        u32 stack_pa = vmm_vcb_va_to_pa(vcb, (u32)context->stack);
+        if (!stack_pa) {
+            LOG("failed to translate task stack VA");
+            vmm_free_pages(vcb, context->stack);
+            context->stack = 0;
+            return E_NOMEM;
+        }
+        frame = (regs*)((u8*)stack_pa + 0x1000 - sizeof(regs));
+    }
+
+    frame->cs = 0x0 | 0x4 | ring;
+    frame->gs = 0x8 | 0x4 | ring;
+    frame->fs = 0x8 | 0x4 | ring;
+    frame->es = 0x8 | 0x4 | ring;
+    frame->ds = 0x8 | 0x4 | ring;
+    frame->ss = 0x8 | 0x4 | ring;
+    frame->eip = (u32)entry;
+    frame->esp = (u32)context->stack + 0x1000 - sizeof(regs);
 
     /* IOPL=0 (EFLAGS bits 12-13 clear): ring-3 threads may NO longer execute
      * privileged in/out (or cli/sti) directly.  All port I/O from user mode
      * is routed through the io syscall gate (kernel/io.c), which enforces
      * the CAP_ACCESS_IO capability.  Kernel threads (ring=0) may still run
      * in/out natively, so they do not need IOPL. */
-    context->regs->eflags = 0x0202;
+    frame->eflags = 0x0202;
     context->ring = ring;
 
     return 0;

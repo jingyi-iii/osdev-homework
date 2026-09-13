@@ -33,6 +33,7 @@ enum proc_thread_ctrl {
 static DECLARE_HEAD_NODE(proc_head);
 DECLARE_HEAD_NODE(thread_head);
 static tcb *thread_run = 0;
+static thread_context_switch_info thread_ctx_info = {0};
 spinlock* schedule_lock = 0;
 
 /*
@@ -119,18 +120,31 @@ static void tcb_detach_wait(tcb* t)
     spinlock_unlock(wq->sp_lock);
 }
 
-/*
- * switch_address_space - Load the page directory of @next if it differs
- * from the currently active one.  Must be called with schedule_lock held.
- */
-static void switch_address_space(tcb* old, tcb* next)
+
+static void request_switch_context(tcb* old, tcb* next)
 {
     if (!old || !next)
         return;
-    if (old->parent == next->parent)
-        return;  /* same process, no CR3 switch needed */
 
-    vmm_switch(&next->parent->vcb);
+    /* Cross-process: remember the next page directory.  Same process:
+     * clear it (the current CR3 is already right) so a stale vcb from an
+     * earlier request can never be paired with a newer thread. */
+    if (old->parent != next->parent)
+        thread_ctx_info.vcb = &next->parent->vcb;
+    else
+        thread_ctx_info.vcb = 0;
+
+    thread_ctx_info.curr_task_ctx = &next->context;
+}
+
+void arch_task_context_switch(void)
+{
+    if (thread_ctx_info.vcb)
+        vmm_switch(thread_ctx_info.vcb);
+    if (thread_ctx_info.curr_task_ctx)
+        arch_task_restore_context(thread_ctx_info.curr_task_ctx);
+
+    memset(&thread_ctx_info, 0, sizeof(thread_ctx_info));
 }
 
 static i32 thread_create_ex_internal(pcb* parent, task_priv priv, task_entry_t entry,
@@ -291,19 +305,7 @@ static void thread_delete_internal(i32 tid)
         tcb* old = thread_run;
         thread_run = next;
 
-        /*
-         * Switch address space if we're moving to a different process.
-         * Must be done before arch_task_restore_context so the new
-         * page tables are active when iret returns to the new context.
-         */
-        switch_address_space(old, next);
-
-        /*
-         * Switch curr_task_ctx to the next thread BEFORE freeing the old
-         * thread's stack.  This closes the window where curr_task_ctx pointed
-         * to freed memory in case a nested exception fires.
-         */
-        arch_task_restore_context(&next->context);
+        request_switch_context(old, next);
 
         /* Now safe to release the old thread's resources */
         arch_task_context_release(&old->parent->vcb, &old->context);
@@ -354,11 +356,7 @@ static void thread_block_internal(i32 tid)
             if (next) {
                 tcb* old = thread_run;
                 thread_run = next;
-
-                /* Switch address space if we're moving to a different process */
-                switch_address_space(old, next);
-
-                arch_task_restore_context(&next->context);
+                request_switch_context(old, next);
             }
         }
         break;
@@ -406,11 +404,7 @@ static void thread_yield_internal(void)
     if (next) {
         tcb* old = thread_run;
         thread_run = next;
-
-        /* Switch address space if we're moving to a different process */
-        switch_address_space(old, next);
-
-        arch_task_restore_context(&next->context);
+        request_switch_context(old, next);
     }
 
     spinlock_unlock_irqrestore(schedule_lock, eflags);
@@ -538,18 +532,24 @@ static void proc_exit_internal(i32 pid)
                  */
                 tcb* next = find_next_runnable(thread_run);
                 if (!next) {
-                    LOG("no more thread to run during proc exit, pid %d", pid);
-                    break;
+                    /*
+                     * The running thread belongs to the process being
+                     * destroyed and nothing else can run.  There is no
+                     * thread to switch to and no way to park this one:
+                     * continuing would tear the current address space
+                     * down (vmm_destroy below) and then fall off the end
+                     * of a dead thread.  Halt deterministically instead.
+                     */
+                    LOG("no more thread to run during proc exit, pid %d - halting", pid);
+                    spinlock_unlock_irqrestore(schedule_lock, eflags);
+                    for ( ;; )
+                        __asm__ __volatile__("hlt");
                 }
 
                 tcb* old = thread_run;
                 thread_run = next;
 
-                /* Switch address space if needed */
-                switch_address_space(old, next);
-
-                arch_task_restore_context(&next->context);
-
+                request_switch_context(old, next);
                 arch_task_context_release(&old->parent->vcb, &old->context);
                 tcb_detach_wait(old);
                 list_del(&old->this_node);
@@ -576,6 +576,14 @@ static void proc_exit_internal(i32 pid)
 
     spinlock_unlock_irqrestore(schedule_lock, eflags);
 
+    /*
+     * Self-exit: the switch to the next thread is still only *requested*
+     * (lazy CR3) — commit it now, BEFORE vmm_destroy() frees the page
+     * directory we are currently running on.  No-op when nothing was
+     * requested (exiting another process).
+     */
+    arch_task_context_switch();
+
     if (found) {
         cap_revoke_all(found);            /* free the process's capabilities */
         vmm_destroy(&found->vcb);
@@ -585,10 +593,10 @@ static void proc_exit_internal(i32 pid)
     }
 
     /*
-     * If we just deleted our own thread, it will never return here —
-     * arch_task_restore_context switched to the next thread.
-     * If we reach this point, we were not deleting our own thread,
-     * or we already switched away and this code is unreachable.
+     * A self-exit never returns to user mode: the switch committed above
+     * re-pointed curr_task_ctx at the next thread, and the gate exit
+     * resumes it.  Only this kernel tail (kernel-image / heap accesses)
+     * still runs while the dying address space is torn down.
      */
     (void)self_in_proc;
 }
@@ -919,31 +927,8 @@ int schedule_if_needed(void)
 
     tcb* old = thread_run;
     thread_run = next;
-    switch_address_space(old, next);
-    arch_task_restore_context(&next->context);
+    request_switch_context(old, next);
     return 0;
-}
-
-/*
- * schedule_from_isr - scheduler kick for the threaded-irq gate exit.
- * Called from arch/i386/irq.S only when irq_defer_unmask is set (a
- * threaded irq was woken).  trylock: a ring-3 thread may hold
- * schedule_lock with interrupts unmasked (IOPL=0), and blocking here
- * would deadlock against the thread this ISR just preempted.
- * arch_task_restore_context() only re-points curr_task_ctx — the actual
- * switch happens at iret in irq.S — so this function always returns and
- * the lock is released normally.
- */
-void schedule_from_isr(void)
-{
-    if (!thread_run)
-        return;
-
-    if (spinlock_trylock(schedule_lock) != 0)
-        return;
-
-    schedule_if_needed();
-    spinlock_unlock(schedule_lock);
 }
 
 /*

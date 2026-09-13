@@ -2,6 +2,7 @@
 #include "kernel/errno.h"
 #include "kernel/log.h"
 #include "kernel/uapi.h"
+#include "kernel/process.h"  /* thread_get_tid */
 #include "lib/string.h"
 #include "lib/module.h"
 #include "sync/spinlock.h"
@@ -94,16 +95,14 @@ int syscall_unregister(i32 handle)
 }
 
 /*
- * Kernel copy of a ring-3 syscall config.  It MUST live in the low
- * identity map (kernel .bss, below 16MB): a tail-blocking handler
- * (MAILBOX_CTRL_LISTEN_BLOCK) may keep executing its C tail AFTER
- * thread_block() has already switched CR3 to the next thread — and
- * per-process page directories only clone the kernel PDEs that existed
- * when the process was created (arch_clone_kernel_pde), so a freshly
- * kmalloc'd heap page (>= ~25MB) may be absent from that other CR3 and
- * fault on access.  The .bss buffer is mapped under every CR3.  Syscall
- * dispatch is serialized (the gate refuses re-entry), so one shared
- * buffer is enough.
+ * Kernel copy of a ring-3 syscall config.  It lives in the low identity
+ * map (kernel .bss, below 16MB), which is mapped under EVERY page
+ * directory, so it is reachable from whichever CR3 is active when a
+ * tail-blocking handler's C tail runs (MAILBOX_CTRL_LISTEN_BLOCK) —
+ * with the lazy CR3 design the switch commits only at the gate exit,
+ * but the .bss buffer is valid under any design/timing and never
+ * involves heap memory.  Syscall dispatch is serialized (the gate
+ * refuses re-entry), so one shared buffer is enough.
  */
 #define SYSCALL_KBUF_MAX  512
 static u8 syscall_kbuf[SYSCALL_KBUF_MAX];
@@ -164,25 +163,34 @@ int syscall_dispatch(u32 handle, void* arg, size_t size)
         }
 
         /* The handler runs on the kernel copy of the caller's config, so
-         * it never dereferences caller memory directly.  Record CR3: a
-         * tail-blocking handler switches address space inside
-         * thread_block(), and from then on BOTH the caller's user
-         * addresses (arg) and a kmalloc'd buffer are off limits — the
-         * woken thread resumes in user mode after the syscall instead. */
+         * it never dereferences caller memory directly.
+         *
+         * If fn() switched the caller away — a tail-block (LISTEN_BLOCK,
+         * portal WAIT / WAIT_REPLY) or a self-delete / self-exit that
+         * frees the caller's stack or its whole address space — the
+         * write-back is off limits.  Deliver nothing back and leave the
+         * caller's config as it initialized it: the two-phase user
+         * wrappers re-read OUT fields with follow-up non-blocking calls.
+         *
+         * thread_get_tid() flips as soon as the switch is *requested*,
+         * which is what matters here: with the lazy CR3 switch the
+         * address space (and curr_task_ctx) only change at the gate exit,
+         * long after this tail ran.  The CR3 compare stays as
+         * belt-and-braces for eager-style switches. */
+        i32 tid_before = thread_get_tid();
         u32 cr3_before = arch_get_cr3();
 
         ret = fn(kbuf);
 
-        if (arch_get_cr3() == cr3_before) {
+        if (thread_get_tid() == tid_before && arch_get_cr3() == cr3_before) {
             if (copy_to_user(arg, kbuf, n) != 0 && ret == 0)
                 ret = E_FAULT;
             if (kmalloc_buf)
                 kfree(kbuf);
         }
-        /* else: tail-blocked.  Deliver nothing back and leak the kmalloc
-         * fallback buffer (never happens for the registered configs,
-         * all < SYSCALL_KBUF_MAX) — touching either would fault under
-         * the next thread's CR3. */
+        /* else: switched away — nothing is delivered back and the kmalloc
+         * fallback buffer is leaked (never happens for the registered
+         * configs, all < SYSCALL_KBUF_MAX). */
     } else {
         ret = fn(arg);
     }
