@@ -40,33 +40,6 @@ irq_stack_top:
         popal
 .endm
 
-/*
- * Syscall-only restore: pops every register EXCEPT EAX.  pushal saves
- * EAX first, so it sits at the deepest stack slot and would be restored
- * by popal — which would clobber syscall_dispatch's return value that
- * lives in EAX.  Skipping the saved EAX slot lets iret hand the return
- * value straight back to the caller, with no magic offset writes.
- * Layout matches the C `regs` struct (arch_task.h): gs/fs/es/ds then
- * edi/esi/ebp/kesp/ebx/edx/ecx/eax then the CPU frame.
- */
-.macro RESTORE_REGS_KEEP_EAX
-        movl    curr_task_ctx,   %esi
-        movl    (%esi),         %esp
-
-        popl    %gs
-        popl    %fs
-        popl    %es
-        popl    %ds
-        popl    %edi
-        popl    %esi
-        popl    %ebp
-        addl    $4,             %esp       /* skip saved kesp */
-        popl    %ebx
-        popl    %edx
-        popl    %ecx
-        addl    $4,             %esp       /* skip saved eax — EAX keeps the return value */
-.endm
-
 
 .macro DECLARE_EXCEPTION_NOERR irq_no
 .align  256,     0x90
@@ -223,6 +196,14 @@ arch_syscall_entry:
         cmp     $0,             %esi
         jne     1f
 
+        /*
+         * Remember the context that entered the gate: proc_exit_internal()
+         * may commit a self-exit switch INSIDE the handler, after which
+         * curr_task_ctx already points at the next thread and this one
+         * will never resume — its frame must not be touched past that.
+         */
+        movl    curr_task_ctx,  %esi
+
         /* syscall dispatch: ebx = minor, ecx = arg, edx = size */
         pushl   %edx
         pushl   %ecx
@@ -231,25 +212,39 @@ arch_syscall_entry:
         addl    $12,            %esp
 
         /*
-         * EAX now holds syscall_dispatch's return value.
-         * RESTORE_REGS_KEEP_EAX restores every register except EAX, so
-         * iret returns the syscall result in EAX to the caller.  The
-         * reentrant path (jne above) keeps the original EAX untouched.
+         * Park the result in the caller's SAVED FRAME (44 = offsetof
+         * (regs, eax), arch_task.h) instead of keeping it live in EAX
+         * across the restore:
+         *   - no switch: the frame restored below is this very frame, so
+         *     iret still returns the result in EAX to the caller;
+         *   - switch (tail-block / yield / self-exit): the frame stays
+         *     parked and the result is delivered to the caller whenever
+         *     it is resumed.
+         * Keeping EAX live across a switch instead handed it to the
+         * *resumed* thread in place of its own saved EAX — corrupting a
+         * thread's register state mid-flight (the boot-time #GP race: a
+         * ring-3 check whose result came back wrong across a
+         * preempt/resume boundary).
          */
+        testl   %esi,           %esi
+        jz      1f
+        cmpl    %esi,           curr_task_ctx
+        jne     1f              /* already switched away inside dispatch */
+        movl    (%esi),         %esi
+        testl   %esi,           %esi
+        jz      1f
+        movl    %eax,           44(%esi)
+
 1:
         decl    irq_reenter_cnt
 
         /*
-         * arch_task_context_switch() is an ordinary C call: it clobbers
-         * the caller-saved registers, including EAX — but EAX carries the
-         * syscall result that RESTORE_REGS_KEEP_EAX must hand back to the
-         * caller (user_syscall() reads it as the return value).  Preserve
-         * it around the call; every other register is reloaded from the
-         * saved frame by the restore anyway.
+         * Commit any deferred switch, then restore the current context's
+         * frame IN FULL (gs/fs/es/ds + every GP register incl. EAX):
+         * without a switch that is the frame just written (EAX = the
+         * syscall result); with a switch it is the target thread's own
+         * saved frame — exactly the state it was parked in.
          */
-        pushl   %eax
         call    arch_task_context_switch
-        popl    %eax
-
-        RESTORE_REGS_KEEP_EAX
+        RESTORE_REGS_AND_SWITCH_USER_STACK
         iret

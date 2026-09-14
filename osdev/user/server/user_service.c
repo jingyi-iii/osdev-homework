@@ -25,25 +25,23 @@
 
 #include "userlib.h"              /* user_syscall(), user_proc_ctrl, U_* */
 #include "kernel/io.h"            /* io_syscall_data + io_syscall_cmd */
-#include "arch_irq.h"             /* arch_running_ring3() */
 #include "kernel/klog.h"          /* klog_init/klog_write prototypes */
 #include <stddef.h>               /* size_t */
 
 /*
  * Port I/O.  These mirror the kernel-side ioread8()/iowrite8()
- * (kernel/io.c): at CPL0 (e.g. inside a user syscall handler running at
- * ring 0) they do direct in/out; at CPL3 they pack io_syscall_data and
- * trap through the SYSCALL_IO gate, which executes the privileged
- * instruction at ring 0 and enforces CAP_ACCESS_IO port-range grants.
+ * (kernel/io.c) purely through the SYSCALL_IO gate: the kernel executes
+ * the privileged in/out at ring 0 and enforces CAP_ACCESS_IO port-range
+ * grants.
+ *
+ * (The old `!arch_running_ring3()` raw in/out shortcut is gone: it only
+ * served the removed design where user-registered syscall handlers ran
+ * a server's code at CPL0, and it turned a boot-time register-delivery
+ * race into a fatal #GP when its check came back wrong in ring 3 — see
+ * ukernel.md GOTCHA 13.)
  */
 u8 ioread8(u16 port)
 {
-    if (!arch_running_ring3()) {
-        u8 data;
-        __asm__ __volatile__("inb %1, %0" : "=a"(data) : "dN"(port));
-        return data;
-    }
-
     io_syscall_data cfg = {0};
     cfg.cmd  = IO_CTRL_IN8;
     cfg.port = port;
@@ -53,11 +51,6 @@ u8 ioread8(u16 port)
 
 void iowrite8(u16 port, u8 value)
 {
-    if (!arch_running_ring3()) {
-        __asm__ __volatile__("outb %0, %1" : : "a"(value), "dN"(port));
-        return;
-    }
-
     io_syscall_data cfg = {0};
     cfg.cmd   = IO_CTRL_OUT8;
     cfg.port  = port;

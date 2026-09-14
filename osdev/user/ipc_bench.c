@@ -238,8 +238,13 @@ void ipc_bench_main(void)
 
     if (mail_us && portal_us) {
         buf_reset();
-        buf_puts("[ipc-bench] => portal is ~"); buf_u64(mail_us / portal_us);
-        buf_puts("x faster than mailbox per round trip\n");
+        if (portal_us <= mail_us) {
+            buf_puts("[ipc-bench] => portal is ~"); buf_u64(mail_us / portal_us);
+            buf_puts("x faster than mailbox per round trip\n");
+        } else {
+            buf_puts("[ipc-bench] => mailbox is ~"); buf_u64(portal_us / mail_us);
+            buf_puts("x faster than portal per round trip\n");
+        }
         buf_send();
     }
 

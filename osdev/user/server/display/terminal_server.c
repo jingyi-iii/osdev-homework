@@ -6,9 +6,10 @@
  * registers it in the namespace under "console"; prints every payload it
  * receives straight to the VGA text buffer.  The two VGA MMIO windows
  * (text 0xB8000, mode-13 fb 0xA0000) are mapped into this process via the
- * SYSCALL_MMIO gate (granted CAP_MAP_MEM at load time); if the mapping
- * is unavailable the code falls back to the low identity-map addresses.
- * The interactive command line is gone, so there is no kb dependency.
+ * SYSCALL_MMIO gate (granted CAP_MAP_MEM at load time); if a mapping is
+ * unavailable its pointer stays NULL and the matching draw paths become
+ * no-ops.  The interactive command line is gone, so there is no kb
+ * dependency.
  *
  * VGA text cells are written with direct memory stores; the hardware
  * cursor is moved through the io syscall gate (ports 0x3D4/0x3D5, inside
@@ -300,10 +301,118 @@ static void vga_write_regs(u16 addr_port, u16 data_port,
     }
 }
 
+/* ---- 8x16 text font save/restore ------------------------------------
+ * VGA text glyphs are rendered from the 8x16 font that BIOS/GRUB load
+ * once into VRAM plane 2 (QEMU: 256 glyphs x 32 bytes, windowed at
+ * 0xA0000).  Mode 0x13 is chain4: its linear frame-buffer writes are
+ * spread byte-by-byte across all four planes, wiping that font — and a
+ * register-only switch back to 0x03 never reloads it, so after a
+ * graphics session every glyph turns to garbage.
+ *
+ * The snapshot is taken LAZILY, just before the first mode-0x13 switch:
+ * doing it at server start raced with the kernel's init_thread kterm
+ * writes (while the window is remapped, writes meant for 0xB8000 land
+ * in VRAM and corrupt the font — the reason the old boot-time snapshot
+ * was removed).  By the time a client asks for graphics, boot is over
+ * and only this server touches the VGA, serialised by g_vga_lock.
+ * -------------------------------------------------------------------- */
+#define FONT_BYTES  (256 * 32)          /* 256 glyphs x 32 bytes */
+
+static u8 saved_font[FONT_BYTES];
+static int font_saved = 0;
+
+/* Snapshot plane 2 into saved_font[].  Caller holds g_vga_lock; must run
+ * in text mode BEFORE any mode-0x13 session (no-op afterwards). */
+static void font_save(void)
+{
+    if (font_saved || !GFX13_BUF)
+        return;
+
+    iowrite8(VGA_SEQ_ADDR, 0x02);
+    iowrite8(VGA_SEQ_DATA, 0x0F);        /* map mask: all planes */
+    iowrite8(VGA_GC_ADDR, 0x05);
+    iowrite8(VGA_GC_DATA, 0x00);         /* disable odd/even */
+    iowrite8(VGA_GC_ADDR, 0x06);
+    iowrite8(VGA_GC_DATA, 0x04);         /* memory map 0xA0000 */
+    iowrite8(VGA_GC_ADDR, 0x04);
+    iowrite8(VGA_GC_DATA, 0x02);         /* read from plane 2 */
+
+    for (u32 i = 0; i < FONT_BYTES; i++)
+        saved_font[i] = GFX13_BUF[i];
+
+    /* Put the VGA back to the text-mode state this server programs
+     * (gfx_enter_text): planes 0/1 writes, odd/even on, B8000 map. */
+    iowrite8(VGA_GC_ADDR, 0x04);
+    iowrite8(VGA_GC_DATA, 0x00);
+    iowrite8(VGA_GC_ADDR, 0x05);
+    iowrite8(VGA_GC_DATA, 0x10);         /* odd/even text mode */
+    iowrite8(VGA_GC_ADDR, 0x06);
+    iowrite8(VGA_GC_DATA, 0x0E);         /* memory map 0xB8000 */
+    iowrite8(VGA_SEQ_ADDR, 0x02);
+    iowrite8(VGA_SEQ_DATA, 0x03);        /* text: planes 0/1 */
+
+    font_saved = 1;
+}
+
+/* Reload saved_font[] into plane 2.  Caller holds g_vga_lock; runs from
+ * gfx_enter_text() BEFORE the screen is blanked/repainted. */
+static void font_load(void)
+{
+    if (!font_saved || !GFX13_BUF)
+        return;
+
+    /* Video off (AC index write with the enable bit clear) during the
+     * upload. */
+    ioread8(VGA_STAT_READ);              /* reset AC index flip-flop */
+    iowrite8(VGA_AC_ADDR, 0x00);
+
+    /* Point CPU writes at plane 2 of the 0xA0000 window, write mode 0.
+     *
+     * CRITICAL: sr[4] (sequencer memory mode) MUST have the SEQ_MODE bit
+     * set (0x06) for the upload.  With the text-mode value 0x02, QEMU
+     * (and real VGA text mapping) applies an odd/even filter to CPU
+     * writes: odd window addresses would have their plane-2 mask
+     * cleared and be dropped, leaving every other scanline of each
+     * glyph corrupted. */
+    iowrite8(VGA_SEQ_ADDR, 0x02);
+    iowrite8(VGA_SEQ_DATA, 0x04);        /* map mask: plane 2 only */
+    iowrite8(VGA_SEQ_ADDR, 0x04);
+    iowrite8(VGA_SEQ_DATA, 0x06);        /* EXT_MEM | SEQ_MODE */
+    iowrite8(VGA_GC_ADDR, 0x05);
+    iowrite8(VGA_GC_DATA, 0x00);
+    iowrite8(VGA_GC_ADDR, 0x06);
+    iowrite8(VGA_GC_DATA, 0x04);
+    iowrite8(VGA_GC_ADDR, 0x04);
+    iowrite8(VGA_GC_DATA, 0x00);
+
+    for (u32 i = 0; i < FONT_BYTES; i++)
+        GFX13_BUF[i] = saved_font[i];
+
+    /* Restore the text-mode GC/seq state gfx_enter_text programmed. */
+    iowrite8(VGA_GC_ADDR, 0x04);
+    iowrite8(VGA_GC_DATA, 0x00);
+    iowrite8(VGA_GC_ADDR, 0x05);
+    iowrite8(VGA_GC_DATA, 0x10);
+    iowrite8(VGA_GC_ADDR, 0x06);
+    iowrite8(VGA_GC_DATA, 0x0E);
+    iowrite8(VGA_SEQ_ADDR, 0x04);
+    iowrite8(VGA_SEQ_DATA, 0x02);
+    iowrite8(VGA_SEQ_ADDR, 0x02);
+    iowrite8(VGA_SEQ_DATA, 0x03);
+
+    /* Video back on. */
+    ioread8(VGA_STAT_READ);
+    iowrite8(VGA_AC_ADDR, 0x20);
+}
+
 /* Switch to VGA graphics mode 0x13 (320x200, 256 colours, linear frame
  * buffer at 0xA0000).  Clears the frame buffer to colour 0. */
 static void gfx_enter_mode13(void)
 {
+    /* chain4 is about to wipe the plane-2 text font — snapshot it first
+     * (no-op after the first graphics session). */
+    font_save();
+
     static const u8 seq_13[]   = { 0x03, 0x01, 0x0F, 0x00, 0x0E };
     static const u8 crtc_13[]  = {
         0x5F, 0x4F, 0x50, 0x82, 0x54, 0x80, 0xBF, 0x1F,
@@ -416,6 +525,14 @@ static void gfx_enter_text(void)
     iowrite8(VGA_CRT_ADDR, 0x0B);
     iowrite8(VGA_CRT_DATA, 0x0F);
 
+    /* Mode 0x13 (chain4) wiped the text font out of plane 2 — put it
+     * back.  This MUST happen before term_clear_screen() below: the QEMU
+     * text renderer only redraws cells whose content changed, so any
+     * cell written while the font is still wiped would stay garbled on
+     * screen (and never be repainted).  Reload first, then blank +
+     * repaint everything with the restored glyphs. */
+    font_load();
+
     term_clear_screen();
     term_cursor_update();
 }
@@ -517,12 +634,12 @@ void _start(void)
     /* Continue on the screen where the kernel's kterm left off. */
     term_sync_cursor_from_hw();
 
-    /* NOTE: the text font is deliberately NOT snapshotted at startup.
-     * font_save() remaps the VGA memory window to plane 2 (0xA0000); at
-     * boot the user ELFs run concurrently with the kernel's init_thread
-     * still writing kterm launcher lines to 0xB8000, and those writes
-     * get redirected into VRAM during the remap window — corrupting the
-     * font and garbling every glyph on the text screen. */
+    /* NOTE: the text font is NOT snapshotted here at startup — the
+     * remap window would race the kernel's init_thread kterm writes to
+     * 0xB8000 (those land in VRAM while the window is redirected).
+     * font_save() runs lazily instead, right before the first mode-0x13
+     * switch (gfx_enter_mode13): by then boot is over and only this
+     * server touches the VGA. */
 
     for (;;) {
         cfg.cmd = U_PORTAL_CTRL_WAIT;
